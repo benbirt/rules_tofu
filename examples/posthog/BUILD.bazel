@@ -1,0 +1,21 @@
+load("@rules_tofu//tf:defs.bzl", "tf_deploy", "tf_library")
+
+package(default_visibility = ["//visibility:public"])
+
+# A provider from outside the `hashicorp/` namespace, with no sha256 pinned in
+# MODULE.bazel: the OpenTofu registry's digests are used, recorded in
+# MODULE.bazel.lock.
+tf_library(
+    name = "dashboard_lib",
+    srcs = ["main.tf"],
+    providers = ["@tf_providers_posthog_posthog//:provider"],
+)
+
+# This is a demo whose state is disposable, so it opts in to local state under
+# bazel-bin rather than declaring a remote backend.
+tf_deploy(
+    name = "dashboard",
+    allow_ephemeral_state = True,
+    vars = {"project_id": "12345"},
+    deps = [":dashboard_lib"],
+)

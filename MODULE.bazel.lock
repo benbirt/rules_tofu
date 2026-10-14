@@ -643,6 +643,15 @@
     }
   },
   "facts": {
+    "//tf/providers:extensions.bzl%tf_providers": {
+      "posthog/posthog@1.0.24": {
+        "darwin_amd64": "f6e42b058b5a2f6074490601ef370aa312714840b5fab3054f3b618bf125014b",
+        "darwin_arm64": "1bc9647121eac3694a5ab816e25397e58be2595b0fb1322aad86d4f9ba15872b",
+        "linux_amd64": "4afb3cb829dee5e97f98b51ebdb761b8cc4daf6d0a7f541f9f5a89e0ab86251d",
+        "linux_arm64": "672f48fedf6661afce7e36ff333cd9ea199af2decc5a2985e5d3b25cff8014ab",
+        "windows_amd64": "d01ed2764f869608ef856444b1bef9ae32e751a3dc4045d5f972b000f9ef5351"
+      }
+    },
     "@@rules_go+//go:extensions.bzl%go_sdk": {
       "1.23.5": {
         "aix_ppc64": [

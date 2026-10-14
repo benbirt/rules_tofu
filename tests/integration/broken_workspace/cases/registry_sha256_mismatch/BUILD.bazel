@@ -1,0 +1,12 @@
+load("@rules_tofu//tf:defs.bzl", "tf_library")
+
+# The broken_workspace MODULE.bazel pins PostHog/posthog with a wrong sha256
+# for every platform. Fetching the provider asks the OpenTofu registry for the
+# zip's location, and the registry's checksum disagrees with the pin, so the
+# fetch fails before downloading the zip, naming the registry's value.
+tf_library(
+    name = "lib",
+    srcs = ["main.tf"],
+    fmt_test = False,
+    providers = ["@tf_providers_posthog_posthog//:provider"],
+)

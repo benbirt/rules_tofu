@@ -39,13 +39,28 @@ register_toolchains("@tofu_toolchains//:all")
 tf_providers = use_extension("@rules_tofu//tf/providers:extensions.bzl", "tf_providers")
 tf_providers.provider(
     sha256 = {
-        "linux_amd64": "ef2a61e8112c3b5e70095508aadaadf077e904b62b9cfc22030337f773bba041",
-        "linux_arm64": "19685d9f4c9ddcfa476a9a428c6c612be4a1b4e8e1198fbcbb76436b735284ee",
-        "darwin_amd64": "79bf8fb8f37c308742e287694a9de081ff8502b065a390d1bcfbd241b4eca203",
-        "darwin_arm64": "c2cc728cb18ffd5c4814a10c203452c71f5ab0c46d68f9aa9183183fa60afd87",
-        "windows_amd64": "3358ee6a2b24c982b7c83fac0af6898644d1bbdabf9c4e0589e91e427641ba88",
+        "linux_amd64": "157ec2424b34ba3a2208ce39763528131d5600daffd72e8f47b08cbd7feebbd4",
+        "linux_arm64": "47eba28f2c35d71d73dd2d0c2a09c89bdcc99136a5484904b59cc9c299f1a5aa",
+        "darwin_amd64": "cad9a818e27739e0dcfb78c9170ce5e1b4619d48be7ec529618198633ec5bb63",
+        "darwin_arm64": "59894534729ed071176f794d25d1cb7aecdcffd6825fbb6100e815ba6e12ec10",
+        "windows_amd64": "13e157acaa5717e9c1fef052abc84cdf9d5ba96ca0a4b79150b09b2770f3c1e8",
     },
     source = "hashicorp/aws",
     version = "5.70.0",
 )
 use_repo(tf_providers, "tf_providers_hashicorp_aws")
+
+# A provider pinned with a deliberately wrong sha256 on every platform so the
+# registry_sha256_mismatch case fails whichever platform runs it.
+tf_providers.provider(
+    sha256 = {
+        "linux_amd64": "0000000000000000000000000000000000000000000000000000000000000000",
+        "linux_arm64": "0000000000000000000000000000000000000000000000000000000000000000",
+        "darwin_amd64": "0000000000000000000000000000000000000000000000000000000000000000",
+        "darwin_arm64": "0000000000000000000000000000000000000000000000000000000000000000",
+        "windows_amd64": "0000000000000000000000000000000000000000000000000000000000000000",
+    },
+    source = "PostHog/posthog",
+    version = "1.0.24",
+)
+use_repo(tf_providers, "tf_providers_posthog_posthog")
