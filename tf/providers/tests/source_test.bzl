@@ -10,9 +10,13 @@ load(
     "//tf/providers:source.bzl",
     "check_url_template",
     "download_location",
+    "is_provider_binary",
     "parse_source",
+    "published_platforms",
     "registry_download_url",
+    "registry_shasum",
     "repo_name",
+    "valid_cached_sha256s",
 )
 
 def _parse_source_lowercases_test_impl(ctx):
@@ -39,23 +43,7 @@ def _parse_source_rejects_malformed_test_impl(ctx):
 
 _parse_source_rejects_malformed_test = unittest.make(_parse_source_rejects_malformed_test_impl)
 
-def _hashicorp_uses_releases_test_impl(ctx):
-    env = unittest.begin(ctx)
-
-    location = download_location("hashicorp", "aws", "6.45.0", "linux", "amd64")
-
-    asserts.equals(env, None, location.error)
-    asserts.equals(env, None, location.registry_url)
-    asserts.equals(
-        env,
-        "https://releases.hashicorp.com/terraform-provider-aws/6.45.0/terraform-provider-aws_6.45.0_linux_amd64.zip",
-        location.url,
-    )
-    return unittest.end(env)
-
-_hashicorp_uses_releases_test = unittest.make(_hashicorp_uses_releases_test_impl)
-
-def _others_use_registry_test_impl(ctx):
+def _registry_by_default_test_impl(ctx):
     env = unittest.begin(ctx)
 
     location = download_location("posthog", "posthog", "1.0.24", "darwin", "arm64")
@@ -67,14 +55,23 @@ def _others_use_registry_test_impl(ctx):
         "https://registry.opentofu.org/v1/providers/posthog/posthog/1.0.24/download/darwin/arm64",
         location.registry_url,
     )
+
+    # hashicorp/ too: the registry serves OpenTofu's builds, as `tofu init` uses.
+    hashicorp = download_location("hashicorp", "aws", "6.45.0", "linux", "amd64")
+    asserts.equals(env, None, hashicorp.url)
+    asserts.equals(
+        env,
+        "https://registry.opentofu.org/v1/providers/hashicorp/aws/6.45.0/download/linux/amd64",
+        hashicorp.registry_url,
+    )
     return unittest.end(env)
 
-_others_use_registry_test = unittest.make(_others_use_registry_test_impl)
+_registry_by_default_test = unittest.make(_registry_by_default_test_impl)
 
 def _url_template_wins_test_impl(ctx):
     env = unittest.begin(ctx)
 
-    # Even for hashicorp/, so a mirror can stand in for releases.hashicorp.com.
+    # For any namespace, so a mirror can stand in for the registry.
     location = download_location(
         "hashicorp",
         "aws",
@@ -147,6 +144,93 @@ def _registry_response_without_url_test_impl(ctx):
 
 _registry_response_without_url_test = unittest.make(_registry_response_without_url_test_impl)
 
+def _published_platforms_test_impl(ctx):
+    env = unittest.begin(ctx)
+
+    response = {"versions": [
+        {"version": "1.0.23", "platforms": [{"os": "linux", "arch": "amd64"}]},
+        {"version": "1.0.24", "platforms": [
+            {"os": "windows", "arch": "amd64"},
+            {"os": "linux", "arch": "amd64"},
+            {"os": "freebsd", "arch": "amd64"},
+            {"os": "darwin", "arch": "arm64"},
+        ]},
+    ]}
+
+    # Only DEFAULT_PLATFORMS, in their order, whatever order the registry uses.
+    found = published_platforms(response, "1.0.24", "posthog/posthog")
+    asserts.equals(env, None, found.error)
+    asserts.equals(env, ["linux_amd64", "darwin_arm64", "windows_amd64"], found.platforms)
+
+    missing = published_platforms(response, "9.9.9", "posthog/posthog")
+    asserts.true(env, "no version 9.9.9" in missing.error, "got {}".format(missing.error))
+
+    none = published_platforms(
+        {"versions": [{"version": "1.0.0", "platforms": [{"os": "freebsd", "arch": "amd64"}]}]},
+        "1.0.0",
+        "x/y",
+    )
+    asserts.true(env, "freebsd_amd64" in none.error, "got {}".format(none.error))
+    return unittest.end(env)
+
+_published_platforms_test = unittest.make(_published_platforms_test_impl)
+
+def _registry_shasum_test_impl(ctx):
+    env = unittest.begin(ctx)
+
+    asserts.equals(env, _SHA, registry_shasum({"shasum": _SHA}, "x").sha256)
+    asserts.true(env, registry_shasum({}, "x").error != None)
+    asserts.true(env, registry_shasum({"shasum": "not-a-digest"}, "x").error != None)
+    return unittest.end(env)
+
+_registry_shasum_test = unittest.make(_registry_shasum_test_impl)
+
+def _cached_facts_validated_test_impl(ctx):
+    env = unittest.begin(ctx)
+
+    asserts.true(env, valid_cached_sha256s({"linux_amd64": _SHA, "darwin_arm64": _SHA}))
+
+    # Anything a different version of the extension might have written is a miss.
+    for cached in [
+        None,
+        {},
+        [_SHA],
+        {"linux_amd64": _SHA.upper()},
+        {"linux_amd64": _SHA[:-1]},
+        {"freebsd_amd64": _SHA},
+        {"linux_amd64": {"sha256": _SHA}},
+    ]:
+        asserts.false(env, valid_cached_sha256s(cached), "accepted {}".format(cached))
+    return unittest.end(env)
+
+_cached_facts_validated_test = unittest.make(_cached_facts_validated_test_impl)
+
+def _provider_binary_names_test_impl(ctx):
+    env = unittest.begin(ctx)
+
+    # OpenTofu's builds, HashiCorp-style builds, with and without `_x5`.
+    for filename, exe in [
+        ("terraform-provider-aws", ""),
+        ("terraform-provider-aws.exe", ".exe"),
+        ("terraform-provider-aws_v6.45.0", ""),
+        ("terraform-provider-aws_v6.45.0_x5", ""),
+        ("terraform-provider-aws_v6.45.0_x5.exe", ".exe"),
+    ]:
+        asserts.true(env, is_provider_binary(filename, "aws", "6.45.0", exe), "rejected {}".format(filename))
+
+    for filename, exe in [
+        ("LICENSE", ""),
+        ("CHANGELOG.md", ""),
+        ("terraform-provider-aws", ".exe"),
+        ("terraform-provider-aws_v6.44.0", ""),
+        ("terraform-provider-awscc", ""),
+        ("terraform-provider-aws.sig", ""),
+    ]:
+        asserts.false(env, is_provider_binary(filename, "aws", "6.45.0", exe), "accepted {}".format(filename))
+    return unittest.end(env)
+
+_provider_binary_names_test = unittest.make(_provider_binary_names_test_impl)
+
 def source_test_suite(name):
     """Declares the `source.bzl` unit tests.
 
@@ -157,11 +241,14 @@ def source_test_suite(name):
         name,
         _parse_source_lowercases_test,
         _parse_source_rejects_malformed_test,
-        _hashicorp_uses_releases_test,
-        _others_use_registry_test,
+        _registry_by_default_test,
         _url_template_wins_test,
         _url_template_rejects_unknown_placeholders_test,
         _registry_response_matching_pin_test,
         _registry_response_names_correct_pin_test,
         _registry_response_without_url_test,
+        _published_platforms_test,
+        _registry_shasum_test,
+        _cached_facts_validated_test,
+        _provider_binary_names_test,
     )

@@ -2,8 +2,9 @@ load("@rules_tofu//tf:defs.bzl", "tf_deploy", "tf_library")
 
 package(default_visibility = ["//visibility:public"])
 
-# A provider from outside the `hashicorp/` namespace: its zips are found
-# through the OpenTofu registry rather than releases.hashicorp.com.
+# A provider from outside the `hashicorp/` namespace, with no sha256 pinned in
+# MODULE.bazel: the OpenTofu registry's digests are used, recorded in
+# MODULE.bazel.lock.
 tf_library(
     name = "dashboard_lib",
     srcs = ["main.tf"],

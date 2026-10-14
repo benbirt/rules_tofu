@@ -38,9 +38,11 @@ use_repo(tofu, "tofu_toolchains")
 
 register_toolchains("@tofu_toolchains//:all")
 
-# Provider plugins pinned by sha256, downloaded once per workspace and vendored
-# into deploy work trees so `tofu init` runs fully offline. Repo names are
-# derived from `source`: e.g. `hashicorp/aws` → `@tf_providers_hashicorp_aws`.
+# Provider plugins, downloaded once per workspace and vendored into deploy work
+# trees so `tofu init` runs fully offline. aws and google pin their sha256s;
+# posthog trusts the OpenTofu registry's, which are recorded in
+# MODULE.bazel.lock. Repo names are derived from `source`: e.g.
+# `hashicorp/aws` → `@tf_providers_hashicorp_aws`.
 # These declarations exist only to drive the in-tree `examples/aws`,
 # `examples/gcp` and `examples/posthog` targets, so the usage is marked
 # `dev_dependency`: that keeps the example pins out of the published module,
@@ -49,34 +51,27 @@ register_toolchains("@tofu_toolchains//:all")
 tf_providers = use_extension("//tf/providers:extensions.bzl", "tf_providers", dev_dependency = True)
 tf_providers.provider(
     sha256 = {
-        "linux_amd64": "c646eeef45ca8c1a9e2a8768358f5a8235454c629864e481f6afc6421d6781cc",
-        "linux_arm64": "4f0cafa2e609f373e8ba7fdc4172c93e57b1b149165095d23447894973da8c94",
-        "darwin_amd64": "edfa6e69eae9d0cacb17d1791676604a90139bfe21f0b7347f8f71250e15438a",
-        "darwin_arm64": "76451d10c7857a321df8b08d5c160141c3d4bb5f31a5aa5d1a7e597f2286e96b",
-        "windows_amd64": "cbaac79b0d6af1a6c685176711fe9326bd72f2c58dfb1dc6c10854b1f132f26e",
+        "linux_amd64": "49ecd456fb8fee5562725c36bd5992b6982704100ead0164d26c6cbb11b07653",
+        "linux_arm64": "295133d1097c14254729a24a61f4cb2e8d7f278f80a8cbfafd3ac9401ab370d6",
+        "darwin_amd64": "233b84d24e042e7187efc1ff601cdada61ee1bfab6facc454430d880660145ef",
+        "darwin_arm64": "b05796c799ab11b12f2510a06343d30fd61fdad09835ec24ac1741970a3d8f48",
+        "windows_amd64": "1599fc46d0bd5b621ef054a93d69bbaba1e74828d9a59741ff13b10366dad245",
     },
     source = "hashicorp/aws",
     version = "6.45.0",
 )
 tf_providers.provider(
     sha256 = {
-        "linux_amd64": "42fece780ef909136213762731c945d59c58dbaf92f64a46989102da9ebfa998",
-        "linux_arm64": "091afeeeb58035f26ebaec34755a15d56e3229c4ce6db2745c52ba2593204a30",
-        "darwin_amd64": "2e531cf6f3af847104df65675ebd9c9a7450ba91d8d21ff6ed04eeab6a5684e2",
-        "darwin_arm64": "ad3d4419561d19e88b72ad4bedbbc73ee77f20acb594261be8f716bf1a89f947",
-        "windows_amd64": "a62e09bd551de8ea74b68c1eb44f9d7d0dc56957811915d46ec0a28254a30e0b",
+        "linux_amd64": "84cba090b3d9eee432a5121e4484ef592976fc4918cb10eb0182dea00cecd8c1",
+        "linux_arm64": "e24d8380413b3460b1ac09687a9a78904e6b5d011db0fad952ee76d806ee6e85",
+        "darwin_amd64": "d26e0221f7dd7abf5cd9431f5bea227d176ea7e81c50fb0d96c7d7f1fc77ef56",
+        "darwin_arm64": "46722e5509ba24cad6ab85cb5dae6f06e97e416660b68b8ff4cbce682f597d59",
+        "windows_amd64": "1b9261f4a7329c4fa73886e3474ebdc66a0fa36aee78233f5a24e335e6062777",
     },
     source = "hashicorp/google",
     version = "7.32.0",
 )
 tf_providers.provider(
-    sha256 = {
-        "linux_amd64": "4afb3cb829dee5e97f98b51ebdb761b8cc4daf6d0a7f541f9f5a89e0ab86251d",
-        "linux_arm64": "672f48fedf6661afce7e36ff333cd9ea199af2decc5a2985e5d3b25cff8014ab",
-        "darwin_amd64": "f6e42b058b5a2f6074490601ef370aa312714840b5fab3054f3b618bf125014b",
-        "darwin_arm64": "1bc9647121eac3694a5ab816e25397e58be2595b0fb1322aad86d4f9ba15872b",
-        "windows_amd64": "d01ed2764f869608ef856444b1bef9ae32e751a3dc4045d5f972b000f9ef5351",
-    },
     source = "PostHog/posthog",
     version = "1.0.24",
 )

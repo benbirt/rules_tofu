@@ -29,16 +29,22 @@ pair, lower-cased as OpenTofu normalizes provider addresses, becomes
 `tf_providers_posthog_posthog`).
 Callers cannot override this name.
 
-Where each platform's zip comes from (see `download_location` in
-`source.bzl`):
+Each platform's zip comes from the OpenTofu registry (`registry.opentofu.org`),
+whose provider download endpoint gives the zip's URL and SHA256: the same
+binaries a plain `tofu init` fetches. A tag's `url_template`, e.g.
+`"https://example.com/terraform-provider-{name}_{version}_{os}_{arch}.zip"`,
+takes precedence, for a mirror or to avoid needing the registry when the
+repository is fetched (see `download_location` in `source.bzl`).
 
-  1. `url_template`, if the tag sets one, e.g.
-     `"https://example.com/terraform-provider-{name}_{version}_{os}_{arch}.zip"`.
-  2. `releases.hashicorp.com` for the `hashicorp/` namespace.
-  3. Otherwise the OpenTofu registry (`registry.opentofu.org`), whose
-     provider download endpoint gives the zip's URL and checksum. This needs
-     the registry to be reachable when the repository is fetched; a
-     `url_template` avoids that.
+`sha256` is optional. A pinned platform's zip is checked against the pin
+(and the registry's checksum is compared with it first, so a wrong pin fails
+naming the right value). Without a pin, the registry is trusted: the
+extension asks it which of `DEFAULT_PLATFORMS` it publishes for that version
+and what their SHA256s are, and records them as facts in `MODULE.bazel.lock`
+(Bazel 8.5+). Later evaluations, and fresh clones with that lockfile, reuse
+the recorded digests without asking again, so builds stay reproducible as
+long as the lockfile is committed. A `url_template` needs a `sha256`: there
+is nothing to ask for the digest.
 
 When multiple modules in the dependency graph request the same provider (same
 `source`), the extension resolves to a single version:
@@ -62,7 +68,7 @@ whole build, and which version a build runs is the root module's call.
 
 The target `@tf_providers_<ns>_<name>//:provider` then carries
 `TfProviderInfo` and is passed to `tf_library`/`tf_deploy`
-via their `providers` attribute. The `sha256` recorded on each tag gates the
+via their `providers` attribute. A digest, pinned or recorded, gates every
 download, so the provider tree is reproducible and is fetched once per
 workspace.
 
@@ -75,9 +81,15 @@ load(
     "DEFAULT_HOST",
     "check_url_template",
     "download_location",
+    "is_provider_binary",
     "parse_source",
+    "published_platforms",
+    "registry_download_endpoint",
     "registry_download_url",
+    "registry_shasum",
+    "registry_versions_endpoint",
     "repo_name",
+    "valid_cached_sha256s",
 )
 
 # (os/arch -> exe suffix). Keys must match the `sha256` map's platform keys.
@@ -169,6 +181,51 @@ def _resolve_via_registry(repository_ctx, registry_url, pinned_sha256, context):
         fail(resolved.error)
     return resolved.url
 
+def _download_json(module_ctx, url, output, context):
+    result = module_ctx.download(url = url, output = output, allow_fail = True)
+    if not result.success:
+        fail("Could not query the provider registry for {} at {}.".format(context, url))
+    return json.decode(module_ctx.read(output))
+
+def _registry_sha256s(module_ctx, namespace, name, version, fact_key):
+    """Each published default platform's SHA256, from the lockfile's facts or the registry."""
+    if hasattr(module_ctx, "facts"):
+        cached = module_ctx.facts.get(fact_key)
+        if valid_cached_sha256s(cached):
+            return dict(cached)
+
+    context = "{}/{}@{}".format(namespace, name, version)
+    published = published_platforms(
+        _download_json(
+            module_ctx,
+            registry_versions_endpoint(namespace, name),
+            "registry/{}_{}_versions.json".format(namespace, name),
+            context,
+        ),
+        version,
+        context,
+    )
+    if published.error:
+        fail(published.error)
+
+    sha256s = {}
+    for platform_key in published.platforms:
+        os_name, arch = _split_platform_key(platform_key)
+        platform_context = "{} on {}".format(context, platform_key)
+        resolved = registry_shasum(
+            _download_json(
+                module_ctx,
+                registry_download_endpoint(namespace, name, version, os_name, arch),
+                "registry/{}_{}_{}_{}.json".format(namespace, name, version, platform_key),
+                platform_context,
+            ),
+            platform_context,
+        )
+        if resolved.error:
+            fail(resolved.error)
+        sha256s[platform_key] = resolved.sha256
+    return sha256s
+
 def _tf_provider_download_impl(repository_ctx):
     source = repository_ctx.attr.source
     version = repository_ctx.attr.version
@@ -224,31 +281,29 @@ def _tf_provider_download_impl(repository_ctx):
             output = extract_dir,
         )
 
-        # The zip contains the provider binary (typically
-        # `terraform-provider-<name>_v<version>{_x5}{.exe}`) plus, on some
-        # releases, a LICENSE file. Pick the file whose name starts with the
-        # canonical prefix so we don't accidentally grab the LICENSE.
-        expected_prefix = "terraform-provider-{}_v{}".format(name, version)
+        # The zip holds the provider binary alongside files such as LICENSE
+        # and CHANGELOG.md; see `is_provider_binary` for the names accepted.
         exe_suffix = _EXE_SUFFIX[platform_key]
         binary_filename = None
         for child in repository_ctx.path(extract_dir).readdir():
             basename = child.basename
-            if basename.startswith(expected_prefix) and basename.endswith(exe_suffix):
+            if is_provider_binary(basename, name, version, exe_suffix):
                 if binary_filename != None:
                     fail(("Ambiguous provider binary for {}@{} on {}: both `{}` and " +
-                          "`{}` match `{}*{}`. Refusing to guess.").format(
+                          "`{}` look like it. Refusing to guess.").format(
                         source,
                         version,
                         platform_key,
                         binary_filename,
                         basename,
-                        expected_prefix,
-                        exe_suffix,
                     ))
                 binary_filename = basename
         if binary_filename == None:
-            fail("No file matching `{}*{}` found in {} after extracting {}".format(
-                expected_prefix,
+            fail("No provider binary (`terraform-provider-{}{}` or `terraform-provider-{}_v{}*{}`) found in {} after extracting {}".format(
+                name,
+                exe_suffix,
+                name,
+                version,
                 exe_suffix,
                 extract_dir,
                 url,
@@ -311,16 +366,17 @@ _provider_tag = tag_class(
             doc = "Provider version to pin, e.g. \"5.70.0\".",
         ),
         "sha256": attr.string_dict(
-            mandatory = True,
-            doc = "Per-platform SHA256 of the provider zip. Keys are `<os>_<arch>` " +
-                  "(e.g. `linux_amd64`). Declare every platform you intend to run on; " +
-                  "build/runtime fail at deploy time if the exec platform is missing.",
+            doc = "Optional per-platform SHA256 of the provider zip. Keys are `<os>_<arch>` " +
+                  "(e.g. `linux_amd64`). If set, declare every platform you intend to run on; " +
+                  "build/runtime fail at deploy time if the exec platform is missing. If unset, " +
+                  "the OpenTofu registry's digests are used for each of " +
+                  "linux_amd64, linux_arm64, darwin_amd64, darwin_arm64 and windows_amd64 it " +
+                  "publishes, and recorded in MODULE.bazel.lock.",
         ),
         "url_template": attr.string(
             doc = "Optional URL of each platform's provider zip, with `{namespace}`, `{name}`, " +
-                  "`{version}`, `{os}` and `{arch}` placeholders. Without it, `hashicorp/` " +
-                  "providers come from releases.hashicorp.com and others from wherever the " +
-                  "OpenTofu registry (registry.opentofu.org) says.",
+                  "`{version}`, `{os}` and `{arch}` placeholders, used instead of the OpenTofu " +
+                  "registry (registry.opentofu.org). Needs `sha256`.",
         ),
     },
 )
@@ -353,6 +409,10 @@ def _tf_providers_extension_impl(module_ctx):
             name = repo_name(parsed.namespace, parsed.name)
             if mod.is_root and name not in root_repos:
                 root_repos.append(name)
+
+    # Digests the extension resolved from the registry, keyed by
+    # `<source>@<version>`, to record in MODULE.bazel.lock.
+    facts = {}
 
     by_source = {}
     for t in all_tags:
@@ -411,8 +471,22 @@ def _tf_providers_extension_impl(module_ctx):
                 ", ".join(["`{}` from `{}`".format(u, m) for u, m in url_templates.items()]),
             ))
 
-        # Phase 3: Create the repository.
         namespace, name = source.split("/")
+
+        # No module pinned the winning version: trust the registry's digests,
+        # recorded as facts so they're asked for once per lockfile.
+        if not merged_sha256:
+            if url_templates:
+                fail(("Provider `{}` version `{}` has a url_template but no sha256: pin the " +
+                      "sha256 of each platform's zip, since there's no registry to ask for them.").format(
+                    source,
+                    resolved_version,
+                ))
+            fact_key = "{}@{}".format(source, resolved_version)
+            merged_sha256 = _registry_sha256s(module_ctx, namespace, name, resolved_version, fact_key)
+            facts[fact_key] = merged_sha256
+
+        # Phase 3: Create the repository.
         _tf_provider_download(
             name = repo_name(namespace, name),
             source = source,
@@ -421,15 +495,20 @@ def _tf_providers_extension_impl(module_ctx):
             url_template = url_templates.keys()[0] if url_templates else "",
         )
 
-    # `reproducible = True`: every download is gated by the `sha256` attribute
-    # on the tag that requested it, so the repos are a pure function of the
-    # module graph and a lockfile copy would pin nothing MODULE.bazel does not.
+    # `reproducible = True`: every download is gated by a sha256, either pinned
+    # on a tag or recorded in `facts`, so the repos are a pure function of the
+    # module graph and the facts, and a lockfile copy of the repo specs would pin
+    # nothing they don't. Returning only this evaluation's facts drops ones for
+    # versions no longer used.
     non_dev = module_ctx.root_module_has_non_dev_dependency
-    return module_ctx.extension_metadata(
+    metadata = dict(
         root_module_direct_deps = root_repos if non_dev else [],
         root_module_direct_dev_deps = [] if non_dev else root_repos,
         reproducible = True,
     )
+    if hasattr(module_ctx, "facts"):
+        metadata["facts"] = facts
+    return module_ctx.extension_metadata(**metadata)
 
 tf_providers = module_extension(
     implementation = _tf_providers_extension_impl,

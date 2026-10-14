@@ -59,7 +59,7 @@ tf_deploy(
 
 ### Vendoring providers
 
-Provider plugins are pinned per-platform in `MODULE.bazel` and passed to
+Provider plugins are declared in `MODULE.bazel` and passed to
 the rules that use them. The repository name is derived from `source`
 (e.g. `hashicorp/aws` → `@tf_providers_hashicorp_aws`):
 
@@ -72,10 +72,10 @@ tf_providers.provider(
     source = "hashicorp/aws",
     version = "5.70.0",
     sha256 = {
-        "linux_amd64":   "ef2a61e8112c3b5e70095508aadaadf077e904b62b9cfc22030337f773bba041",
-        "linux_arm64":   "19685d9f4c9ddcfa476a9a428c6c612be4a1b4e8e1198fbcbb76436b735284ee",
-        "darwin_amd64":  "79bf8fb8f37c308742e287694a9de081ff8502b065a390d1bcfbd241b4eca203",
-        "darwin_arm64":  "c2cc728cb18ffd5c4814a10c203452c71f5ab0c46d68f9aa9183183fa60afd87",
+        "linux_amd64":   "157ec2424b34ba3a2208ce39763528131d5600daffd72e8f47b08cbd7feebbd4",
+        "linux_arm64":   "47eba28f2c35d71d73dd2d0c2a09c89bdcc99136a5484904b59cc9c299f1a5aa",
+        "darwin_amd64":  "cad9a818e27739e0dcfb78c9170ce5e1b4619d48be7ec529618198633ec5bb63",
+        "darwin_arm64":  "59894534729ed071176f794d25d1cb7aecdcffd6825fbb6100e815ba6e12ec10",
     },
 )
 use_repo(tf_providers, "tf_providers_hashicorp_aws")
@@ -111,36 +111,45 @@ network is required to resolve providers once the zips are in Bazel's
 repository cache. The providers' own backends are obviously not offline; `:foo.plan`
 and `:foo.apply` still talk to AWS / GCP / etc. at runtime as usual.
 
-Providers in the `hashicorp/` namespace are downloaded from
-`releases.hashicorp.com`. Any other provider is looked up in the
-[OpenTofu registry](https://search.opentofu.org/), which says where its zip
-is (usually the publisher's GitHub releases) and what its SHA256 should be:
+Providers come from the [OpenTofu registry](https://search.opentofu.org/),
+which says where each platform's zip is and what its SHA256 is: the same
+binaries a plain `tofu init` fetches. For `hashicorp/` providers those are
+OpenTofu's builds (from `github.com/opentofu/terraform-provider-*`), not
+HashiCorp's, so their checksums differ from releases.hashicorp.com's.
+Sources are case-insensitive and normalized to lower case, as OpenTofu
+does, so the repository name is lower case too (`PostHog/posthog` →
+`@tf_providers_posthog_posthog`).
+
+`sha256` is optional. Leave it out to trust the registry:
 
 ```python
 tf_providers.provider(
-    source = "PostHog/posthog",   # repo: @tf_providers_posthog_posthog
+    source = "PostHog/posthog",
     version = "1.0.24",
-    sha256 = {
-        "linux_amd64":  "4afb3cb829dee5e97f98b51ebdb761b8cc4daf6d0a7f541f9f5a89e0ab86251d",
-        "darwin_arm64": "1bc9647121eac3694a5ab816e25397e58be2595b0fb1322aad86d4f9ba15872b",
-        # ...
-    },
 )
 ```
 
-Sources are case-insensitive and normalized to lower case, as OpenTofu does,
-so the repository name is lower case too. To pin a platform, take the
-`shasum` from the registry's download endpoint:
+The extension then asks the registry which of `linux_amd64`, `linux_arm64`,
+`darwin_amd64`, `darwin_arm64` and `windows_amd64` it publishes for that
+version, and their SHA256s, and records them as facts in `MODULE.bazel.lock`
+(Bazel 8.5 or later). Later builds, and fresh clones with that lockfile,
+reuse the recorded digests without asking the registry again, so commit
+`MODULE.bazel.lock` to keep builds reproducible (and use
+`--lockfile_mode=error` in CI to keep it honest). On older Bazel versions the
+digests are asked for whenever the extension is evaluated.
+
+To pin instead, give each platform you'll run on its `shasum` from the
+registry's download endpoint:
 
 ```sh
-curl -s https://registry.opentofu.org/v1/providers/posthog/posthog/1.0.24/download/linux/amd64 | jq -r .shasum
+curl -s https://registry.opentofu.org/v1/providers/hashicorp/aws/5.70.0/download/linux/amd64 | jq -r .shasum
 ```
 
 If a pin disagrees with the registry, the fetch fails before downloading the
-zip, naming the registry's value. The registry must be reachable whenever
-the provider's repository is fetched. To avoid that, or to use a mirror,
-give the tag a `url_template`, which then takes precedence for any
-namespace:
+zip, naming the registry's value. Either way, the registry must be reachable
+whenever the provider's repository is fetched. To avoid that, or to use a
+mirror, give the tag a `url_template` and pin its `sha256` (with no registry
+in the way, there's nothing else to take the digests from):
 
 ```python
 tf_providers.provider(
@@ -154,9 +163,9 @@ tf_providers.provider(
 The placeholders are `{namespace}`, `{name}`, `{version}`, `{os}` and
 `{arch}`. `examples/posthog/` is a full end-to-end use.
 
-The per-platform `sha256` recorded on each `tf_providers.provider(...)` tag
-is the sole pinning layer — every download is gated on it — so no
-`.terraform.lock.hcl` is generated, shipped, or accepted in `srcs`/`data`.
+A digest, pinned on a tag or recorded in the lockfile, gates every
+download, so no `.terraform.lock.hcl` is generated, shipped, or accepted in
+`srcs`/`data`.
 
 Variable values can also come from `.tfvars.json` files — including files
 generated by other Bazel rules:

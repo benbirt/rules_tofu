@@ -68,13 +68,17 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
 ## Invariants — don't regress these
 
 - No `.terraform.lock.hcl` is generated, shipped, or accepted in
-  `srcs`/`data`. The per-platform `sha256` on each
-  `tf_providers.provider(...)` tag (and the table in
-  `toolchain/versions.bzl` for tofu itself) is the sole pinning layer:
-  every download is gated on it and the repository cache keys on it.
-  Both extensions declare `reproducible = True`, so they deliberately do
-  *not* appear in `MODULE.bazel.lock` — the lockfile pins the registry
-  module graph, not the provider/tofu artefacts.
+  `srcs`/`data`. Every provider download is gated on a per-platform
+  digest: the `sha256` pinned on its `tf_providers.provider(...)` tag, or,
+  for a tag that pins none, the OpenTofu registry's, recorded as a fact in
+  `MODULE.bazel.lock` (keyed `<source>@<version>`). The table in
+  `toolchain/versions.bzl` pins tofu itself. The repository cache keys on
+  these digests. Both extensions declare `reproducible = True`, so their
+  repo specs deliberately do *not* appear in `MODULE.bazel.lock`; the
+  provider extension's facts do. Facts are validated on read
+  (`valid_cached_sha256s`) and treated as a miss if malformed, never
+  trusted blindly, and only the facts in use are returned, so stale ones
+  drop out.
   `init_action.bzl` fails loudly if a lock file slips into the work tree;
   don't relax that check.
 - Both module extensions call `module_ctx.extension_metadata` with the
@@ -96,14 +100,15 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   tool.
 - Where a provider zip comes from is decided by the pure functions in
   `tf/providers/source.bzl` (tested from `//tf/providers/tests`):
-  `url_template` if set, else `releases.hashicorp.com` for `hashicorp/`,
-  else the OpenTofu registry's download endpoint. Keep `hashicorp/` off
-  the registry: registry.opentofu.org serves OpenTofu's own rebuilds of
-  those providers, with different checksums, so moving them would break
-  every existing pin. The registry's `shasum` is checked against the pin
-  before the zip is downloaded; the pinned `sha256` still gates the
-  download itself. Sources are lower-cased (as OpenTofu normalizes
-  addresses) for grouping, the repo name and the plugin tree.
+  `url_template` if set, else the OpenTofu registry's download endpoint,
+  for every namespace including `hashicorp/`, so rules_tofu vendors the
+  binaries `tofu init` would fetch. Don't reintroduce a special case for
+  releases.hashicorp.com: those are different builds with different
+  checksums. The registry's `shasum` is checked against a pin before the
+  zip is downloaded; the digest still gates the download itself. A tag
+  with `url_template` must pin `sha256`. Sources are lower-cased (as
+  OpenTofu normalizes addresses) for grouping, the repo name and the
+  plugin tree.
 - `tf_library` validates inline — the validate stamp goes in
   `DefaultInfo.files` and `bazel build :foo_lib` is the validation
   contract. Don't add a `:foo.validate` sub-target or a `validate_test`
