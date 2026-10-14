@@ -1,0 +1,7 @@
+# The e2e/smoke module is built from inside its own directory (CI, BCR
+# presubmit, or by hand), which leaves Bazel's convenience symlinks there.
+# `bazel-smoke/external/rules_tofu+` points back at this repo (the module's
+# local_path_override), so without this a later `//...` from the root follows
+# it round in a loop and fails with "infinite symlink expansion".
+# --deleted_packages in .bazelrc only hides the e2e/smoke package itself.
+ignore_directories(["e2e/smoke/bazel-*"])
