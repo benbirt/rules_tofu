@@ -49,3 +49,19 @@ tf_providers.provider(
     version = "5.70.0",
 )
 use_repo(tf_providers, "tf_providers_hashicorp_aws")
+
+# A provider outside the `hashicorp/` namespace, found through the OpenTofu
+# registry, pinned with a deliberately wrong sha256 on every platform so the
+# registry_sha256_mismatch case fails whichever platform runs it.
+tf_providers.provider(
+    sha256 = {
+        "linux_amd64": "0000000000000000000000000000000000000000000000000000000000000000",
+        "linux_arm64": "0000000000000000000000000000000000000000000000000000000000000000",
+        "darwin_amd64": "0000000000000000000000000000000000000000000000000000000000000000",
+        "darwin_arm64": "0000000000000000000000000000000000000000000000000000000000000000",
+        "windows_amd64": "0000000000000000000000000000000000000000000000000000000000000000",
+    },
+    source = "PostHog/posthog",
+    version = "1.0.24",
+)
+use_repo(tf_providers, "tf_providers_posthog_posthog")

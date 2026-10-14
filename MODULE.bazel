@@ -41,10 +41,11 @@ register_toolchains("@tofu_toolchains//:all")
 # Provider plugins pinned by sha256, downloaded once per workspace and vendored
 # into deploy work trees so `tofu init` runs fully offline. Repo names are
 # derived from `source`: e.g. `hashicorp/aws` → `@tf_providers_hashicorp_aws`.
-# These declarations exist only to drive the in-tree `examples/aws` and
-# `examples/gcp` targets, so the usage is marked `dev_dependency`: that keeps
-# the example pins out of the published module, where they would otherwise feed
-# into (and skew) a downstream's own `tf_providers` version resolution.
+# These declarations exist only to drive the in-tree `examples/aws`,
+# `examples/gcp` and `examples/posthog` targets, so the usage is marked
+# `dev_dependency`: that keeps the example pins out of the published module,
+# where they would otherwise feed into (and skew) a downstream's own
+# `tf_providers` version resolution.
 tf_providers = use_extension("//tf/providers:extensions.bzl", "tf_providers", dev_dependency = True)
 tf_providers.provider(
     sha256 = {
@@ -68,11 +69,23 @@ tf_providers.provider(
     source = "hashicorp/google",
     version = "7.32.0",
 )
-use_repo(tf_providers, "tf_providers_hashicorp_aws", "tf_providers_hashicorp_google")
+tf_providers.provider(
+    sha256 = {
+        "linux_amd64": "4afb3cb829dee5e97f98b51ebdb761b8cc4daf6d0a7f541f9f5a89e0ab86251d",
+        "linux_arm64": "672f48fedf6661afce7e36ff333cd9ea199af2decc5a2985e5d3b25cff8014ab",
+        "darwin_amd64": "f6e42b058b5a2f6074490601ef370aa312714840b5fab3054f3b618bf125014b",
+        "darwin_arm64": "1bc9647121eac3694a5ab816e25397e58be2595b0fb1322aad86d4f9ba15872b",
+        "windows_amd64": "d01ed2764f869608ef856444b1bef9ae32e751a3dc4045d5f972b000f9ef5351",
+    },
+    source = "PostHog/posthog",
+    version = "1.0.24",
+)
+use_repo(tf_providers, "tf_providers_hashicorp_aws", "tf_providers_hashicorp_google", "tf_providers_posthog_posthog")
 
-# `unittest`/`asserts` for the Starlark tests under //toolchain/tests. Dev-only,
-# which is why those tests are a subpackage: //toolchain:BUILD.bazel is loaded
-# by every downstream module and must not reference a dev-only repo.
+# `unittest`/`asserts` for the Starlark tests under //toolchain/tests and
+# //tf/providers/tests. Dev-only, which is why those tests are subpackages:
+# //toolchain:BUILD.bazel and //tf/providers:BUILD.bazel are loaded by
+# downstream modules and must not reference a dev-only repo.
 bazel_dep(name = "bazel_skylib", version = "1.9.2", dev_dependency = True)
 
 # Bazel-in-Bazel integration tests under //tests/integration.

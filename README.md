@@ -95,7 +95,8 @@ tf_library(
 
 See `examples/hello/` for a minimal no-provider example that exercises
 `tf_library` and `tf_deploy` with no external dependencies. See
-`examples/aws/` and `examples/gcp/` for full end-to-end uses with providers.
+`examples/aws/`, `examples/gcp/` and `examples/posthog/` for full end-to-end
+uses with providers.
 
 A `tf_deploy` may declare its own `providers = [...]`; the union
 of a deploy's direct providers and the providers contributed by its
@@ -110,8 +111,48 @@ network is required to resolve providers once the zips are in Bazel's
 repository cache. The providers' own backends are obviously not offline; `:foo.plan`
 and `:foo.apply` still talk to AWS / GCP / etc. at runtime as usual.
 
-Currently only providers published by the `hashicorp/` namespace (served
-via `releases.hashicorp.com`) are supported.
+Providers in the `hashicorp/` namespace are downloaded from
+`releases.hashicorp.com`. Any other provider is looked up in the
+[OpenTofu registry](https://search.opentofu.org/), which says where its zip
+is (usually the publisher's GitHub releases) and what its SHA256 should be:
+
+```python
+tf_providers.provider(
+    source = "PostHog/posthog",   # repo: @tf_providers_posthog_posthog
+    version = "1.0.24",
+    sha256 = {
+        "linux_amd64":  "4afb3cb829dee5e97f98b51ebdb761b8cc4daf6d0a7f541f9f5a89e0ab86251d",
+        "darwin_arm64": "1bc9647121eac3694a5ab816e25397e58be2595b0fb1322aad86d4f9ba15872b",
+        # ...
+    },
+)
+```
+
+Sources are case-insensitive and normalized to lower case, as OpenTofu does,
+so the repository name is lower case too. To pin a platform, take the
+`shasum` from the registry's download endpoint:
+
+```sh
+curl -s https://registry.opentofu.org/v1/providers/posthog/posthog/1.0.24/download/linux/amd64 | jq -r .shasum
+```
+
+If a pin disagrees with the registry, the fetch fails before downloading the
+zip, naming the registry's value. The registry must be reachable whenever
+the provider's repository is fetched. To avoid that, or to use a mirror,
+give the tag a `url_template`, which then takes precedence for any
+namespace:
+
+```python
+tf_providers.provider(
+    source = "PostHog/posthog",
+    version = "1.0.24",
+    url_template = "https://github.com/PostHog/terraform-provider-posthog/releases/download/v{version}/terraform-provider-{name}_{version}_{os}_{arch}.zip",
+    sha256 = {...},
+)
+```
+
+The placeholders are `{namespace}`, `{name}`, `{version}`, `{os}` and
+`{arch}`. `examples/posthog/` is a full end-to-end use.
 
 The per-platform `sha256` recorded on each `tf_providers.provider(...)` tag
 is the sole pinning layer — every download is gated on it — so no
@@ -279,8 +320,6 @@ module "dns" {
 
 - Build OpenTofu from source via rules_go (currently: download pinned
   binary).
-- Provider sources beyond the `hashicorp/` namespace (needs registry
-  download-protocol resolution).
 - Cross-compilation: the build-time validate action and the runtime
   runner both consume the exec-platform provider binary, so the runtime
   host must match the build host.

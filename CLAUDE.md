@@ -94,6 +94,16 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   extension stays "root wins, else highest version": a provider is a
   per-configuration artefact (MVS-shaped), the tofu binary is one global
   tool.
+- Where a provider zip comes from is decided by the pure functions in
+  `tf/providers/source.bzl` (tested from `//tf/providers/tests`):
+  `url_template` if set, else `releases.hashicorp.com` for `hashicorp/`,
+  else the OpenTofu registry's download endpoint. Keep `hashicorp/` off
+  the registry: registry.opentofu.org serves OpenTofu's own rebuilds of
+  those providers, with different checksums, so moving them would break
+  every existing pin. The registry's `shasum` is checked against the pin
+  before the zip is downloaded; the pinned `sha256` still gates the
+  download itself. Sources are lower-cased (as OpenTofu normalizes
+  addresses) for grouping, the repo name and the plugin tree.
 - `tf_library` validates inline — the validate stamp goes in
   `DefaultInfo.files` and `bazel build :foo_lib` is the validation
   contract. Don't add a `:foo.validate` sub-target or a `validate_test`
@@ -130,9 +140,10 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   versions in README/docstring snippets — use the `X.Y.Z` placeholder
   plus a registry link.
 - `bazel_skylib` is a `dev_dependency`, so the Starlark unit tests that
-  load it live in the `//toolchain/tests` subpackage:
-  `toolchain/BUILD.bazel` is loaded by every downstream module (it holds
-  `:toolchain_type`) and must never reference a dev-only repo.
+  load it live in the `//toolchain/tests` and `//tf/providers/tests`
+  subpackages: `toolchain/BUILD.bazel` (it holds `:toolchain_type`) and
+  `tf/providers/BUILD.bazel` are loaded by downstream modules and must
+  never reference a dev-only repo.
 - The `.bazelversion` copies (root, `e2e/smoke`,
   `tests/integration/broken_workspace`,
   `tests/integration/broken_module`) must stay byte-identical: nested
@@ -145,8 +156,8 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   auto-discovered list covering all nested workspaces (including
   `e2e/smoke`). Rerun it after adding/removing nested packages; don't
   hand-edit the lists or add separate one-off lines.
-- The release tarball (`release_prep.sh`) excludes `examples/`, `tests/`
-  and `toolchain/tests/` but must keep `e2e/` and `.bcr/` — BCR presubmit
+- The release tarball (`release_prep.sh`) excludes `examples/`, `tests/`,
+  `toolchain/tests/` and `tf/providers/tests/` but must keep `e2e/` and `.bcr/` — BCR presubmit
   reads the test module and templates from the extracted archive. The
   pathspecs are prefix-anchored, so a package named `tests` nested under a
   shipped directory needs its own exclusion; anything loading a

@@ -23,9 +23,22 @@ Downstream usage in MODULE.bazel:
     use_repo(tf_providers, "tf_providers_hashicorp_aws")
 
 The repo name is derived deterministically from `source`: the `<ns>/<name>`
-pair becomes `tf_providers_<ns>_<name>` (e.g. `hashicorp/aws` →
-`tf_providers_hashicorp_aws`).
+pair, lower-cased as OpenTofu normalizes provider addresses, becomes
+`tf_providers_<ns>_<name>` (e.g. `hashicorp/aws` →
+`tf_providers_hashicorp_aws`, `PostHog/posthog` →
+`tf_providers_posthog_posthog`).
 Callers cannot override this name.
+
+Where each platform's zip comes from (see `download_location` in
+`source.bzl`):
+
+  1. `url_template`, if the tag sets one, e.g.
+     `"https://example.com/terraform-provider-{name}_{version}_{os}_{arch}.zip"`.
+  2. `releases.hashicorp.com` for the `hashicorp/` namespace.
+  3. Otherwise the OpenTofu registry (`registry.opentofu.org`), whose
+     provider download endpoint gives the zip's URL and checksum. This needs
+     the registry to be reachable when the repository is fetched; a
+     `url_template` avoids that.
 
 When multiple modules in the dependency graph request the same provider (same
 `source`), the extension resolves to a single version:
@@ -36,8 +49,8 @@ When multiple modules in the dependency graph request the same provider (same
 
 For the winning version, `sha256` maps are unioned across all modules that
 declared that version. If two modules provide conflicting sha256 values for
-the same platform at the same version, the extension fails with a clear
-error.
+the same platform at the same version, or different `url_template`s, the
+extension fails with a clear error.
 
 //toolchain:extensions.bzl resolves the OpenTofu version differently — the
 root arbitrates and disagreeing dependencies are an error, never
@@ -53,19 +66,19 @@ via their `providers` attribute. The `sha256` recorded on each tag gates the
 download, so the provider tree is reproducible and is fetched once per
 workspace.
 
-See `examples/aws/` and `examples/gcp/` in-tree for full end-to-end uses.
-
-Currently only providers hosted on `releases.hashicorp.com` (i.e. published by
-the `hashicorp/` namespace) are supported. Other registries require resolving
-the download URL via `registry.opentofu.org`'s download protocol; that can be
-added later behind a `url_template` attribute.
+See `examples/aws/`, `examples/gcp/` and `examples/posthog/` in-tree for full
+end-to-end uses.
 """
 
-# Default plugin-dir host segment. OpenTofu canonicalizes `source = "<ns>/<name>"`
-# in `required_providers` to `registry.opentofu.org/<ns>/<name>` and looks for
-# plugins under `<plugin-dir>/registry.opentofu.org/...`. rules_tofu uses OpenTofu,
-# so the vendored plugin tree mirrors that layout.
-_DEFAULT_HOST = "registry.opentofu.org"
+load(
+    ":source.bzl",
+    "DEFAULT_HOST",
+    "check_url_template",
+    "download_location",
+    "parse_source",
+    "registry_download_url",
+    "repo_name",
+)
 
 # (os/arch -> exe suffix). Keys must match the `sha256` map's platform keys.
 _EXE_SUFFIX = {
@@ -78,24 +91,17 @@ _EXE_SUFFIX = {
     "windows_386": ".exe",
 }
 
-def _split_source(source):
-    parts = source.split("/")
-    if len(parts) != 2 or not parts[0] or not parts[1]:
-        fail("provider `source` must be \"<namespace>/<name>\", got {}".format(repr(source)))
-    return parts[0], parts[1]
+def _parse_source_or_fail(source):
+    parsed = parse_source(source)
+    if parsed.error:
+        fail(parsed.error)
+    return parsed
 
 def _split_platform_key(platform_key):
     parts = platform_key.split("_", 1)
     if len(parts) != 2 or not parts[0] or not parts[1]:
         fail("provider platform key must be \"<os>_<arch>\", got {}".format(repr(platform_key)))
     return parts[0], parts[1]
-
-def _repo_name_from_source(source):
-    """Derive the canonical Bazel repository name from a provider source.
-
-    `hashicorp/aws` → `tf_providers_hashicorp_aws`.
-    """
-    return "tf_providers_" + source.replace("/", "_")
 
 def _parse_version(version):
     """Parse a version string into a list of integers for comparison.
@@ -143,29 +149,39 @@ def _format_binaries_dict(entries):
     lines.append("    },")
     return "\n".join(lines)
 
+def _resolve_via_registry(repository_ctx, registry_url, pinned_sha256, context):
+    """Fetch the registry's download metadata and return the zip's URL."""
+    response_path = "registry_response.json"
+    result = repository_ctx.download(
+        url = registry_url,
+        output = response_path,
+        allow_fail = True,
+    )
+    if not result.success:
+        fail("Could not query the provider registry for {} at {}. A `url_template` on the tag avoids the registry.".format(
+            context,
+            registry_url,
+        ))
+    response = json.decode(repository_ctx.read(response_path))
+    repository_ctx.delete(response_path)
+    resolved = registry_download_url(response, pinned_sha256, context)
+    if resolved.error:
+        fail(resolved.error)
+    return resolved.url
+
 def _tf_provider_download_impl(repository_ctx):
     source = repository_ctx.attr.source
     version = repository_ctx.attr.version
     sha256 = repository_ctx.attr.sha256
-    namespace, name = _split_source(source)
-
-    if namespace != "hashicorp":
-        fail(
-            ("tf_providers.provider `{}` has source `{}`: only providers from " +
-             "the `hashicorp/` namespace (served via releases.hashicorp.com) are " +
-             "currently supported. Support for other registries can be added by " +
-             "extending the extension with a `url_template` attribute.").format(
-                repository_ctx.attr.name,
-                source,
-            ),
-        )
+    parsed = _parse_source_or_fail(source)
+    namespace, name = parsed.namespace, parsed.name
 
     if not sha256:
         fail("tf_providers.provider `{}` must declare at least one platform in `sha256`".format(
             repository_ctx.attr.name,
         ))
 
-    address = "{}/{}/{}".format(_DEFAULT_HOST, namespace, name)
+    address = "{}/{}/{}".format(DEFAULT_HOST, namespace, name)
     entries = []
     for platform_key in sorted(sha256.keys()):
         if platform_key not in _EXE_SUFFIX:
@@ -176,19 +192,30 @@ def _tf_provider_download_impl(repository_ctx):
             ))
         os_name, arch = _split_platform_key(platform_key)
         extract_dir = "plugins/{host}/{ns}/{name}/{version}/{platform}".format(
-            host = _DEFAULT_HOST,
+            host = DEFAULT_HOST,
             ns = namespace,
             name = name,
             version = version,
             platform = platform_key,
         )
-        url = ("https://releases.hashicorp.com/terraform-provider-{name}/{version}/" +
-               "terraform-provider-{name}_{version}_{os}_{arch}.zip").format(
-            name = name,
-            version = version,
-            os = os_name,
-            arch = arch,
+        location = download_location(
+            namespace,
+            name,
+            version,
+            os_name,
+            arch,
+            repository_ctx.attr.url_template,
         )
+        if location.error:
+            fail("tf_providers.provider `{}`: {}".format(source, location.error))
+        url = location.url
+        if location.registry_url:
+            url = _resolve_via_registry(
+                repository_ctx,
+                location.registry_url,
+                sha256[platform_key],
+                "{}@{} on {}".format(source, version, platform_key),
+            )
 
         repository_ctx.download_and_extract(
             url = url,
@@ -269,6 +296,7 @@ _tf_provider_download = repository_rule(
         "source": attr.string(mandatory = True),
         "version": attr.string(mandatory = True),
         "sha256": attr.string_dict(mandatory = True),
+        "url_template": attr.string(),
     },
 )
 
@@ -288,12 +316,19 @@ _provider_tag = tag_class(
                   "(e.g. `linux_amd64`). Declare every platform you intend to run on; " +
                   "build/runtime fail at deploy time if the exec platform is missing.",
         ),
+        "url_template": attr.string(
+            doc = "Optional URL of each platform's provider zip, with `{namespace}`, `{name}`, " +
+                  "`{version}`, `{os}` and `{arch}` placeholders. Without it, `hashicorp/` " +
+                  "providers come from releases.hashicorp.com and others from wherever the " +
+                  "OpenTofu registry (registry.opentofu.org) says.",
+        ),
     },
 )
 
 def _tf_providers_extension_impl(module_ctx):
     # Phase 1: Collect all provider tags into a flat list of structs,
-    # then group by source.
+    # then group by normalized source, so `PostHog/posthog` and
+    # `posthog/posthog` are the same provider.
     all_tags = []
 
     # Repos the root is expected to `use_repo`: only those backing its own
@@ -302,16 +337,22 @@ def _tf_providers_extension_impl(module_ctx):
     root_repos = []
     for mod in module_ctx.modules:
         for tag in mod.tags.provider:
+            parsed = _parse_source_or_fail(tag.source)
+            if tag.url_template:
+                error = check_url_template(tag.url_template)
+                if error:
+                    fail("tf_providers.provider `{}` in module `{}`: {}".format(tag.source, mod.name, error))
             all_tags.append(struct(
-                source = tag.source,
+                source = "{}/{}".format(parsed.namespace, parsed.name),
                 version = tag.version,
                 sha256 = tag.sha256,
+                url_template = tag.url_template,
                 is_root = mod.is_root,
                 mod_name = mod.name,
             ))
-            repo_name = _repo_name_from_source(tag.source)
-            if mod.is_root and repo_name not in root_repos:
-                root_repos.append(repo_name)
+            name = repo_name(parsed.namespace, parsed.name)
+            if mod.is_root and name not in root_repos:
+                root_repos.append(name)
 
     by_source = {}
     for t in all_tags:
@@ -356,13 +397,28 @@ def _tf_providers_extension_impl(module_ctx):
                     )
                 merged_sha256[platform] = digest
 
+        # The tags that declared the winning version must agree on where the
+        # zips come from (or leave it to the default).
+        url_templates = {
+            t.url_template: t.mod_name
+            for t in tags
+            if t.version == resolved_version and t.url_template
+        }
+        if len(url_templates) > 1:
+            fail("Provider `{}` version `{}`: modules disagree on url_template ({})".format(
+                source,
+                resolved_version,
+                ", ".join(["`{}` from `{}`".format(u, m) for u, m in url_templates.items()]),
+            ))
+
         # Phase 3: Create the repository.
-        repo_name = _repo_name_from_source(source)
+        namespace, name = source.split("/")
         _tf_provider_download(
-            name = repo_name,
+            name = repo_name(namespace, name),
             source = source,
             version = resolved_version,
             sha256 = merged_sha256,
+            url_template = url_templates.keys()[0] if url_templates else "",
         )
 
     # `reproducible = True`: every download is gated by the `sha256` attribute
