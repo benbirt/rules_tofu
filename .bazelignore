@@ -1,0 +1,9 @@
+# Bazel's convenience symlinks from building the e2e/smoke module in its own
+# directory. bazel-smoke/external/rules_tofu+ points back at this repo (the
+# module's local_path_override), so a later `//...` from the root would loop
+# through it. Listed one by one: a pattern in REPO.bazel's ignore_directories
+# still logs "infinite symlink expansion detected" while scanning them.
+e2e/smoke/bazel-bin
+e2e/smoke/bazel-out
+e2e/smoke/bazel-smoke
+e2e/smoke/bazel-testlogs
