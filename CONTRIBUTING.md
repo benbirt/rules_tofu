@@ -12,7 +12,7 @@ You need:
 Clone the repo and build everything:
 
 ```sh
-git clone https://github.com/BenBirt/rules_tofu.git
+git clone https://github.com/benbirt/rules_tofu.git
 cd rules_tofu
 bazel build //...
 bazel test //...
@@ -99,7 +99,7 @@ to bump before tagging.
      run `bazel run //tools:add_module`, point it at the release tarball and the
      [`.bcr/`](.bcr) templates, and open the PR. A brand-new module's first PR
      gets extra maintainer review.
-   - **Automated (opt-in):** fork BCR to `BenBirt/bazel-central-registry`, add a
+   - **Automated (opt-in):** fork BCR to `benbirt/bazel-central-registry`, add a
      classic `BCR_PUBLISH_TOKEN` PAT (`repo` + `workflow` scopes), and set the
      repository variable `PUBLISH_TO_BCR=true`. The `publish` job then opens the
      BCR PR automatically on every tag.
