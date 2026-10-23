@@ -152,6 +152,14 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   subpackages: `toolchain/BUILD.bazel` (it holds `:toolchain_type`) and
   `tf/providers/BUILD.bazel` are loaded by downstream modules and must
   never reference a dev-only repo.
+- `bazel_compatibility = [">=8.5.0"]` in `module()` is the supported
+  floor: 8.5 is the first Bazel with extension facts, so
+  `tf/providers/extensions.bzl` uses `module_ctx.facts` unconditionally
+  (no `hasattr` fallback). CI runs Linux and macOS on both the pinned
+  version and 8.5.0; the uncommitted-changes check only runs on the pinned
+  jobs, because other Bazel versions rewrite `MODULE.bazel.lock` in their
+  own format. Raising the floor means bumping `bazel_compatibility`, the CI
+  matrix and the README together.
 - The `.bazelversion` copies (root, `e2e/smoke`,
   `tests/integration/broken_workspace`,
   `tests/integration/broken_module`) must stay byte-identical: nested

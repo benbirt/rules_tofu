@@ -16,6 +16,8 @@ Terraform-compatible) configuration as first-class build targets.
 
 ## Quick start
 
+Requires Bazel 8.5 or later, on Linux or macOS.
+
 In your downstream repo's `MODULE.bazel` (for the latest version, see
 [registry.bazel.build/modules/rules_tofu](https://registry.bazel.build/modules/rules_tofu)
 or the release notes, which carry a copy-pasteable snippet):
@@ -131,12 +133,10 @@ tf_providers.provider(
 
 The extension then asks the registry which of `linux_amd64`, `linux_arm64`,
 `darwin_amd64`, `darwin_arm64` and `windows_amd64` it publishes for that
-version, and their SHA256s, and records them as facts in `MODULE.bazel.lock`
-(Bazel 8.5 or later). Later builds, and fresh clones with that lockfile,
-reuse the recorded digests without asking the registry again, so commit
-`MODULE.bazel.lock` to keep builds reproducible (and use
-`--lockfile_mode=error` in CI to keep it honest). On older Bazel versions the
-digests are asked for whenever the extension is evaluated.
+version, and their SHA256s, and records them as facts in `MODULE.bazel.lock`.
+Later builds, and fresh clones with that lockfile, reuse the recorded digests
+without asking the registry again, so commit `MODULE.bazel.lock` to keep
+builds reproducible (and use `--lockfile_mode=error` in CI to keep it honest).
 
 To pin instead, give each platform you'll run on its `shasum` from the
 registry's download endpoint:

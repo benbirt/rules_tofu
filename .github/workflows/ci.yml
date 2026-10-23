@@ -8,7 +8,21 @@ on:
 
 jobs:
   build-and-test:
-    runs-on: ubuntu-latest
+    # Linux + macOS mirrors the BCR presubmit platforms. "pinned" is
+    # .bazelversion; 8.5.0 is the oldest supported Bazel (bazel_compatibility
+    # in MODULE.bazel), since it is the first with extension facts. BCR
+    # presubmit covers the latest 8.x.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        bazel: [pinned, 8.5.0]
+    name: build-and-test (${{ matrix.os }}, ${{ matrix.bazel }})
+    runs-on: ${{ matrix.os }}
+    env:
+      # Bazelisk reads this for every invocation, including the nested
+      # e2e/smoke module. Empty means "use .bazelversion".
+      USE_BAZEL_VERSION: ${{ matrix.bazel != 'pinned' && matrix.bazel || '' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -16,7 +30,7 @@ jobs:
         uses: bazel-contrib/setup-bazel@0.19.0
         with:
           bazelisk-cache: true
-          disk-cache: ${{ github.workflow }}
+          disk-cache: ${{ github.workflow }}-${{ matrix.os }}-${{ matrix.bazel }}
           repository-cache: true
 
       - name: Build
@@ -34,7 +48,10 @@ jobs:
           bazel build //...
           bazel test //... --test_output=errors
 
+      # MODULE.bazel.lock's format is specific to a Bazel version, so only the
+      # pinned version can be expected to leave it untouched.
       - name: Check for uncommitted changes
+        if: matrix.bazel == 'pinned'
         run: |
           changes=$(git status --porcelain)
           if [ -n "$changes" ]; then

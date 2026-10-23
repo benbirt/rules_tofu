@@ -19,8 +19,12 @@ https://registry.bazel.build/modules/rules_tofu or the GitHub releases page):
 # Keep comments OUT of the module() block below: publish-to-bcr inserts
 # `version` before the first ")" after "module(", so a parenthesis in a
 # comment inside the block yields a broken MODULE.bazel (as with 0.1.1).
+#
+# 8.5.0 is the oldest supported Bazel: it is the first with extension facts,
+# which tf_providers uses to record registry digests in MODULE.bazel.lock.
 module(
     name = "rules_tofu",
+    bazel_compatibility = [">=8.5.0"],
 )
 
 bazel_dep(name = "platforms", version = "1.0.0")
