@@ -9,14 +9,18 @@ https://registry.bazel.build/modules/rules_tofu or the GitHub releases page):
     use_repo(tofu, "tofu_toolchains")
 """
 
+# `version` is deliberately unset: the release tag is the single source of
+# truth. publish-to-bcr patches the release version into the BCR entry's
+# MODULE.bazel, and leaving the default here avoids issues when the module
+# is consumed via non-registry overrides (see
+# https://github.com/bazel-contrib/rules_go/issues/4380 and the NOTE in
+# bazel-contrib/rules-template's MODULE.bazel).
+#
+# Keep comments OUT of the module() block below: publish-to-bcr inserts
+# `version` before the first ")" after "module(", so a parenthesis in a
+# comment inside the block yields a broken MODULE.bazel (as with 0.1.1).
 module(
     name = "rules_tofu",
-    # `version` is deliberately unset: the release tag is the single source of
-    # truth. publish-to-bcr patches the release version into the BCR entry's
-    # MODULE.bazel, and leaving the default here avoids issues when the module
-    # is consumed via non-registry overrides (see
-    # https://github.com/bazel-contrib/rules_go/issues/4380 and the NOTE in
-    # bazel-contrib/rules-template's MODULE.bazel).
 )
 
 bazel_dep(name = "platforms", version = "1.0.0")

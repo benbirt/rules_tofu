@@ -143,7 +143,10 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   `add_module` on the manual path) patches the real version into the
   registry entry. Don't add a version back, and don't hardcode release
   versions in README/docstring snippets — use the `X.Y.Z` placeholder
-  plus a registry link.
+  plus a registry link. Keep comments out of the `module(...)` block:
+  publish-to-bcr inserts `version` before the first `)` after `module(`,
+  so a parenthesis in an in-block comment corrupts the BCR entry (this
+  broke 0.1.1's BCR submission).
 - `bazel_skylib` is a `dev_dependency`, so the Starlark unit tests that
   load it live in the `//toolchain/tests` and `//tf/providers/tests`
   subpackages: `toolchain/BUILD.bazel` (it holds `:toolchain_type`) and
