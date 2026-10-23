@@ -63,14 +63,7 @@ echo "--- starting nested bazel ${_BAZEL_COMMAND} at $(date -u) ---" >&2
 #
 # --output_base is a STARTUP option (before the command) so it overrides any
 # --output_base set in ~/.bazelrc.
-#
-# --repo_contents_cache= disables the nested Bazel's repo contents cache. It
-# defaults to a directory inside the repository cache setup-bazel configures,
-# which the outer Bazel holds locked for the whole test run; on macOS the
-# nested Bazel then blocks on "could not acquire lock on repo contents cache"
-# until the test times out. The plain repository (download) cache is still
-# shared.
-"${BIT_BAZEL_BINARY}" --output_base="${NESTED_OUTPUT_BASE}" "${_BAZEL_COMMAND}" --repo_contents_cache= "${TARGET}" 2>&1 | tee "${LOG}" >&2
+"${BIT_BAZEL_BINARY}" --output_base="${NESTED_OUTPUT_BASE}" "${_BAZEL_COMMAND}" "${TARGET}" 2>&1 | tee "${LOG}" >&2
 rc=${PIPESTATUS[0]}
 
 echo "--- nested bazel ${_BAZEL_COMMAND} finished at $(date -u), exit code: ${rc} ---" >&2
