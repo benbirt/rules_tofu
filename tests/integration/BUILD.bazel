@@ -63,6 +63,16 @@ _RUN_CASES = [
     ("ephemeral_state_refused", "broken_workspace", "//cases/ephemeral_state_refused:deploy.apply", "allow_ephemeral_state"),
 ]
 
+# A nested Bazel is a whole build system: it writes to the repository cache
+# that setup-bazel puts in ~/.bazelrc, outside the sandbox's writable paths.
+# Under darwin-sandbox that fails (a hang on "could not acquire lock on repo
+# contents cache", or "module ... not found in registries"), so run it
+# unsandboxed. `exclusive` keeps the nested servers from competing.
+_TAGS = [
+    "exclusive",
+    "no-sandbox",
+]
+
 [
     bazel_integration_test(
         name = case_name + "_test",
@@ -73,7 +83,7 @@ _RUN_CASES = [
             "TARGET": target,
             "EXPECTED_PATTERN": pattern,
         },
-        tags = ["exclusive"],
+        tags = _TAGS,
         test_runner = ":assert_bazel_fails",
         workspace_files = _WORKSPACE_FILES[workspace],
         workspace_path = workspace,
@@ -92,7 +102,7 @@ _RUN_CASES = [
             "TARGET": target,
             "EXPECTED_PATTERN": pattern,
         },
-        tags = ["exclusive"],
+        tags = _TAGS,
         test_runner = ":assert_bazel_fails",
         workspace_files = _WORKSPACE_FILES[workspace],
         workspace_path = workspace,

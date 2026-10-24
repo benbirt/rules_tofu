@@ -40,8 +40,8 @@ repository is fetched (see `download_location` in `source.bzl`).
 (and the registry's checksum is compared with it first, so a wrong pin fails
 naming the right value). Without a pin, the registry is trusted: the
 extension asks it which of `DEFAULT_PLATFORMS` it publishes for that version
-and what their SHA256s are, and records them as facts in `MODULE.bazel.lock`
-(Bazel 8.5+). Later evaluations, and fresh clones with that lockfile, reuse
+and what their SHA256s are, and records them as facts in `MODULE.bazel.lock`.
+Later evaluations, and fresh clones with that lockfile, reuse
 the recorded digests without asking again, so builds stay reproducible as
 long as the lockfile is committed. A `url_template` needs a `sha256`: there
 is nothing to ask for the digest.
@@ -189,10 +189,9 @@ def _download_json(module_ctx, url, output, context):
 
 def _registry_sha256s(module_ctx, namespace, name, version, fact_key):
     """Each published default platform's SHA256, from the lockfile's facts or the registry."""
-    if hasattr(module_ctx, "facts"):
-        cached = module_ctx.facts.get(fact_key)
-        if valid_cached_sha256s(cached):
-            return dict(cached)
+    cached = module_ctx.facts.get(fact_key)
+    if valid_cached_sha256s(cached):
+        return dict(cached)
 
     context = "{}/{}@{}".format(namespace, name, version)
     published = published_platforms(
@@ -501,14 +500,12 @@ def _tf_providers_extension_impl(module_ctx):
     # nothing they don't. Returning only this evaluation's facts drops ones for
     # versions no longer used.
     non_dev = module_ctx.root_module_has_non_dev_dependency
-    metadata = dict(
+    return module_ctx.extension_metadata(
         root_module_direct_deps = root_repos if non_dev else [],
         root_module_direct_dev_deps = [] if non_dev else root_repos,
         reproducible = True,
+        facts = facts,
     )
-    if hasattr(module_ctx, "facts"):
-        metadata["facts"] = facts
-    return module_ctx.extension_metadata(**metadata)
 
 tf_providers = module_extension(
     implementation = _tf_providers_extension_impl,
