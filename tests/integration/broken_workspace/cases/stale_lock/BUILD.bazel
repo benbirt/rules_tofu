@@ -1,0 +1,11 @@
+load("@rules_tofu//tf:defs.bzl", "tf_library")
+
+# The library's constraint disagrees with the workspace lock, which the build
+# copies into the work tree, so `tofu init` fails and rules_tofu points at
+# `@tf_providers//:pin`.
+tf_library(
+    name = "lib",
+    srcs = ["main.tf"],
+    fmt_test = False,
+    providers = ["@tf_providers//hashicorp/null"],
+)

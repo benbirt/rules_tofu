@@ -10,11 +10,16 @@ The deploy rule (and the library's auto-emitted validating deploy) call
 whether `required_providers` is declared. With zero providers in scope the
 plugin tree has no files, so the action falls back to an empty directory and
 init is still a no-op for provider installation.
+
+When providers come from `tf_providers.from_lock`, the workspace's lock is
+copied next to the configuration (after the check that refuses a lock in
+`srcs`/`data`), so init fails when the configuration's version constraints
+no longer match it, and checks the vendored packages against its hashes.
 """
 
 load("//toolchain:toolchain.bzl", "TOOLCHAIN_TYPE")
 
-def tf_init_validate(ctx, work_tree_files, work_tree_root, package_dir, plugin_tree_root):
+def tf_init_validate(ctx, work_tree_files, work_tree_root, package_dir, plugin_tree_root, lock = None):
     """Emit a build-time `tofu init -backend=false` + `tofu validate` action.
 
     Args:
@@ -29,6 +34,8 @@ def tf_init_validate(ctx, work_tree_files, work_tree_root, package_dir, plugin_t
       plugin_tree_root: string, exec-root-relative path to the sibling plugin
           tree root, e.g. `<bin>/<pkg>/<name>.plugins`. Pinned via
           `-plugin-dir` so init runs offline.
+      lock: optional File, the `.terraform.lock.hcl` pinning the providers
+          (see `provider_lock` in work_tree.bzl).
 
     Returns:
       File: a stamp file declared as an action output.
@@ -46,7 +53,7 @@ def tf_init_validate(ctx, work_tree_files, work_tree_root, package_dir, plugin_t
     # copied. Bazel cleans up the action's sandbox on exit, so the copy is
     # throwaway — no explicit `rm -rf` needed.
     ctx.actions.run_shell(
-        inputs = depset(direct = [tofu.binary], transitive = [work_tree_files]),
+        inputs = depset(direct = [tofu.binary] + ([lock] if lock else []), transitive = [work_tree_files]),
         outputs = [stamp],
         command = """\
 set -euo pipefail
@@ -55,6 +62,7 @@ WORK_TREE_ROOT=$2
 PACKAGE_DIR=$3
 PLUGIN_TREE_ROOT=$4
 STAMP=$5
+LOCK=${6:-}
 # Resolve the input plugin tree to an absolute path up front: tofu resolves a
 # relative -plugin-dir against the -chdir directory, and $PWD here is the
 # action's exec root. The script never cd's, so capturing $PWD inline is safe.
@@ -74,12 +82,22 @@ if [ -e "$CWD/.terraform.lock.hcl" ]; then
          "Lock files are managed implicitly via Bazel's provider pinning; remove it from srcs/data." 1>&2
     exit 1
 fi
+if [ -n "$LOCK" ]; then
+    cp "$LOCK" "$CWD/.terraform.lock.hcl"
+fi
 # Redirect init stdout to suppress "Installing provider" progress spam.
 # Stderr is kept so error messages (e.g. "Failed to query available provider
 # packages") and the "Incomplete lock file" warning remain visible.
 # There is no flag to skip lockfile generation — the lockfile is written into
-# $SCRATCH and discarded with it.
-"$TOFU" -chdir="$CWD" init -backend=false -input=false -plugin-dir="$PLUGIN_DIR" >/dev/null
+# $SCRATCH and discarded with it. (Not -lockfile=readonly: that also fails on
+# lock entries this configuration doesn't use.)
+if ! "$TOFU" -chdir="$CWD" init -backend=false -input=false -plugin-dir="$PLUGIN_DIR" >/dev/null; then
+    if [ -n "$LOCK" ]; then
+        echo 'rules_tofu: if the provider versions in required_providers changed, run' \
+             '`bazel run @tf_providers//:pin` to update the lock file.' 1>&2
+    fi
+    exit 1
+fi
 "$TOFU" -chdir="$CWD" validate
 touch "$STAMP"
 """,
@@ -89,7 +107,7 @@ touch "$STAMP"
             package_dir,
             plugin_tree_root,
             stamp.path,
-        ],
+        ] + ([lock.path] if lock else []),
         env = {"TF_IN_AUTOMATION": "1"},
         mnemonic = "TofuValidate",
         progress_message = "TofuValidate %{label}",
