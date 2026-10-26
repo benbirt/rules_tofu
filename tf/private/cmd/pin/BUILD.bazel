@@ -1,0 +1,33 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+
+package(default_visibility = ["//tf/private:__subpackages__"])
+
+go_library(
+    name = "pin_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/benbirt/rules_tofu/tf/private/cmd/pin",
+    deps = [
+        "@com_github_hashicorp_hcl_v2//:hcl",
+        "@com_github_hashicorp_hcl_v2//hclparse",
+    ],
+)
+
+# Run by `tf_pin` (//tf/private:pin.bzl) in the `@tf_providers` hub repo of
+# any module using `tf_providers.from_lock`, hence public.
+go_binary(
+    name = "pin",
+    embed = [":pin_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "pin_test",
+    srcs = ["main_test.go"],
+    embed = [":pin_lib"],
+)
+
+filegroup(
+    name = "all_files",
+    srcs = glob(["*"]),
+    visibility = ["//:__subpackages__"],
+)

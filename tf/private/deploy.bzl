@@ -37,6 +37,7 @@ load(
     _materialize = "materialize",
     _materialize_plugin_tree = "materialize_plugin_tree",
     _plugin_tree_root = "plugin_tree_root",
+    _provider_lock = "provider_lock",
     _work_tree_root = "work_tree_root",
 )
 
@@ -62,6 +63,7 @@ def _tf_deploy_impl(ctx):
     providers_depset = depset(direct = direct_providers, transitive = transitive_provider_sets)
     plugin_outputs = _materialize_plugin_tree(ctx, providers_depset)
     outputs = outputs + plugin_outputs
+    lock = _provider_lock(ctx, providers_depset)
 
     work_tree_files = depset(direct = outputs)
 
@@ -71,6 +73,7 @@ def _tf_deploy_impl(ctx):
         work_tree_root = _work_tree_root(ctx),
         package_dir = ctx.label.package,
         plugin_tree_root = _plugin_tree_root(ctx),
+        lock = lock,
     )
 
     var_files_check_stamp = _tf_check_var_files(
@@ -90,6 +93,7 @@ def _tf_deploy_impl(ctx):
             package_dir = ctx.label.package,
             var_file_relpaths = [f.short_path for f in ctx.files.var_files],
             allow_ephemeral_state = ctx.attr.allow_ephemeral_state,
+            lock = lock,
         ),
     ]
 

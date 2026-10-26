@@ -63,6 +63,10 @@ def _tf_runner_impl(ctx):
     if deploy.allow_ephemeral_state:
         ephemeral_state_flag = "    --allow-ephemeral-state \\\n"
 
+    lock_flag = ""
+    if deploy.lock:
+        lock_flag = '    --lock-file="$R/{}" \\\n'.format(runfiles_path(workspace_name, deploy.lock))
+
     out = ctx.actions.declare_file(ctx.label.name + ".sh")
     ctx.actions.write(
         output = out,
@@ -79,7 +83,7 @@ exec "$R/{runner}" \\
     --plugin-dir="$R/{plugin_tree}" \\
     --state-dir="${{BUILD_WORKSPACE_DIRECTORY:?must be invoked via 'bazel run'}}/{state_dir_rel}" \\
     --command="{command}" \\
-{ephemeral_state_flag}{var_file_flags}    -- "$@"
+{ephemeral_state_flag}{lock_flag}{var_file_flags}    -- "$@"
 """.format(
             runner = runner_rel,
             tofu = tofu_rel,
@@ -89,12 +93,13 @@ exec "$R/{runner}" \\
             state_dir_rel = state_dir_rel,
             command = ctx.attr.command,
             ephemeral_state_flag = ephemeral_state_flag,
+            lock_flag = lock_flag,
             var_file_flags = var_file_flags,
         ),
     )
 
     runfiles = ctx.runfiles(
-        files = [tofu.binary] + deploy.work_tree_files.to_list(),
+        files = [tofu.binary] + ([deploy.lock] if deploy.lock else []) + deploy.work_tree_files.to_list(),
     ).merge(ctx.attr._runner_bin[DefaultInfo].default_runfiles)
 
     return [DefaultInfo(executable = out, runfiles = runfiles)]

@@ -102,7 +102,7 @@ def materialize_plugin_tree(ctx, providers_depset):
     for each unique `(address, version)`, using Terraform's canonical
     plugin-dir layout `<host>/<namespace>/<name>/<version>/<os>_<arch>/`: a
     symlink to the binary and to each other file from the provider's zip, so
-    the directory holds the package exactly as `tofu init` installs it.
+    the directory hashes to the lock's `h1:` value.
 
     Args:
       ctx: rule ctx. Must list `TOOLCHAIN_TYPE` in `toolchains` so
@@ -141,8 +141,8 @@ def materialize_plugin_tree(ctx, providers_depset):
         if binary == None:
             fail(
                 ("`{label}` requires provider `{addr}@{ver}` for exec platform " +
-                 "`{plat}`, but the provider was declared without a `{plat}` entry " +
-                 "in its `sha256` map. Add it in MODULE.bazel.").format(
+                 "`{plat}`, but it was vendored without one: add `{plat}` to its " +
+                 "`sha256` map in MODULE.bazel, or check that the registry publishes it.").format(
                     label = ctx.label,
                     addr = prov.address,
                     ver = prov.version,
@@ -168,6 +168,23 @@ def materialize_plugin_tree(ctx, providers_depset):
             outputs.append(out)
 
     return outputs
+
+def provider_lock(ctx, providers_depset):
+    """The `.terraform.lock.hcl` pinning the providers in scope, or None.
+
+    Only providers from `tf_providers.from_lock` carry one, and a workspace
+    has a single lock, so every provider that carries one carries the same.
+    """
+    locks = {}
+    for prov in providers_depset.to_list():
+        if prov.lock != None:
+            locks[prov.lock] = prov.address
+    if len(locks) > 1:
+        fail("`{}` has providers pinned by different lock files: {}".format(
+            ctx.label,
+            ", ".join(["{} ({})".format(f.short_path, addr) for f, addr in locks.items()]),
+        ))
+    return locks.keys()[0] if locks else None
 
 def work_tree_root(ctx):
     """Exec-root-relative path to this rule's work tree root."""

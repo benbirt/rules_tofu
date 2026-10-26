@@ -1,0 +1,2 @@
+# Holds the workspace's .terraform.lock.hcl, read by `tf_providers.from_lock`
+# in MODULE.bazel.

@@ -83,6 +83,10 @@ tf_providers.provider(
     source = "PostHog/posthog",
     version = "1.0.24",
 )
+
+# examples/lock takes its providers from a .terraform.lock.hcl instead, which
+# Renovate and Dependabot can update. `@tf_providers//:pin` regenerates it.
+tf_providers.from_lock(lock = "//examples/lock:.terraform.lock.hcl")
 use_repo(tf_providers, "tf_providers")
 
 # `unittest`/`asserts` for the Starlark tests under //toolchain/tests and

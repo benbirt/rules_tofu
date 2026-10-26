@@ -19,6 +19,7 @@ load(
     _materialize = "materialize",
     _materialize_plugin_tree = "materialize_plugin_tree",
     _plugin_tree_root = "plugin_tree_root",
+    _provider_lock = "provider_lock",
     _work_tree_root = "work_tree_root",
 )
 
@@ -54,6 +55,7 @@ def _tf_library_impl(ctx):
         work_tree_root = _work_tree_root(ctx),
         package_dir = ctx.label.package,
         plugin_tree_root = _plugin_tree_root(ctx),
+        lock = _provider_lock(ctx, providers_depset),
     )
 
     return [

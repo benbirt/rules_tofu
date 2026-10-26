@@ -67,11 +67,16 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
 
 ## Invariants — don't regress these
 
-- No `.terraform.lock.hcl` is generated, shipped, or accepted in
-  `srcs`/`data`. Every provider download is gated on a per-platform
+- No `.terraform.lock.hcl` is accepted in `srcs`/`data`. The only lock
+  rules_tofu uses is the root module's `tf_providers.from_lock` file, which
+  `@tf_providers//:pin` writes into the user's tree. Every provider download
+  is gated on a per-platform
   digest: the `sha256` pinned on its `tf_providers.provider(...)` tag, or,
-  for a tag that pins none, the OpenTofu registry's, recorded as a fact in
-  `MODULE.bazel.lock` (keyed `<source>@<version>`). The table in
+  for a tag that pins none and for a locked provider, the OpenTofu
+  registry's, recorded as a fact in
+  `MODULE.bazel.lock` (keyed `<source>@<version>`). A locked provider's
+  digest must also be one of the lock's `zh:` hashes (`lock_sha256s` in
+  `tf/providers/lock.bzl`), checked on every evaluation, facts or not. The table in
   `toolchain/versions.bzl` pins tofu itself. The repository cache keys on
   these digests. Both extensions declare `reproducible = True`, so their
   repo specs deliberately do *not* appear in `MODULE.bazel.lock`; the
@@ -80,13 +85,45 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   trusted blindly, and only the facts in use are returned, so stale ones
   drop out.
   `init_action.bzl` fails loudly if a lock file slips into the work tree;
-  don't relax that check.
+  don't relax that check. The managed lock is never part of the work tree:
+  it travels as `TfProviderInfo.lock` (from the copy in the hub repo), and
+  the validate action copies it in only *after* that check, as the runner
+  does with `--lock-file`. Don't use `-lockfile=readonly`: it also fails on
+  lock entries a work tree doesn't use.
+- `from_lock` details: one lock per workspace, named `.terraform.lock.hcl`.
+  Only the root module's lock counts; a dependency's `from_lock` is
+  silently ignored (never read, never an error), as OpenTofu ignores a
+  child module's lock and Cargo/npm ignore a dependency's: libraries
+  constrain, the root decides. The `@tf_providers` hub is always created
+  (so a dependency's `use_repo(tf_providers, "tf_providers")` resolves),
+  with an alias for every resolved provider; `:pin` explains itself and
+  fails when the root has no lock. A missing lock is an empty one, so `pin` can write
+  the first. A lock *entry* the extension can't use (wrong host, `zh:`
+  mismatch, version not on the registry) becomes a `_tf_provider_download`
+  with `error` set that fails when fetched, never a `fail()` in the
+  extension: that would also break `@tf_providers//:pin`, the way to fix
+  it. Only an unparseable file fails the extension.
+- `pin` (`tf/private/cmd/pin`) locks against the `required_providers` of
+  every `tf_library`/`tf_deploy` in the main repository, found with
+  `bazel query` (run from inside `bazel run`; `$BAZEL` overrides the
+  binary). Only `.tf` files in those rules count, a `versions.tf` included:
+  don't reintroduce a filesystem walk, which would have to duplicate
+  Bazel's own `.bazelignore`/deleted-package/nested-workspace handling. A
+  `versions.tf` beside the lock is strongly recommended but optional;
+  without one the libraries' constraints are all there is. It extracts only
+  the `required_providers` entries into a scratch configuration, one child
+  module per directory, so tofu combines them as for nested modules, and
+  runs `tofu get` + `tofu providers lock` there from scratch, because
+  `providers lock` keeps an existing lock's versions and has no
+  `-upgrade`. It leaves out providers the root module tags (the hub passes
+  them as `--exclude-source`), and on failure lists the constraints by
+  provider and directory, since tofu's error doesn't say where they came
+  from. The resulting `constraints` line is the combined
+  one; Renovate and Dependabot write their own, and nothing verifies it.
 - Provider repos vendor the whole unpacked zip (`package_files`), not just
-  the binary, and `materialize_plugin_tree` symlinks all of it, so the
-  plugin directory holds each package exactly as `tofu init` installs it.
-  tofu checks a `.terraform.lock.hcl`'s `h1:` hash over the entire package
-  directory, so a binary-only plugin tree would fail `tofu init` against a
-  lock.
+  the binary, and `materialize_plugin_tree` symlinks all of it: tofu checks
+  a lock's `h1:` hash over the entire package directory, so a binary-only
+  plugin tree fails `tofu init` against a lock.
 - Both module extensions call `module_ctx.extension_metadata` with the
   dev/non-dev split keyed on `root_module_has_non_dev_dependency`, so
   `bazel mod tidy` can manage downstream `use_repo` lines. Root direct
@@ -174,7 +211,8 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   matrix and the README together.
 - The `.bazelversion` copies (root, `e2e/smoke`,
   `tests/integration/broken_workspace`,
-  `tests/integration/broken_module`) must stay byte-identical: nested
+  `tests/integration/broken_module`,
+  `tests/integration/lock_dependency`) must stay byte-identical: nested
   modules are separate bazelisk boundaries that never see the root pin.
   CI's lint job `cmp`s every nested copy against the root; bump them all
   together.
