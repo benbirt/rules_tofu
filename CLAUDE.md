@@ -81,6 +81,12 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   drop out.
   `init_action.bzl` fails loudly if a lock file slips into the work tree;
   don't relax that check.
+- Provider repos vendor the whole unpacked zip (`package_files`), not just
+  the binary, and `materialize_plugin_tree` symlinks all of it, so the
+  plugin directory holds each package exactly as `tofu init` installs it.
+  tofu checks a `.terraform.lock.hcl`'s `h1:` hash over the entire package
+  directory, so a binary-only plugin tree would fail `tofu init` against a
+  lock.
 - Both module extensions call `module_ctx.extension_metadata` with the
   dev/non-dev split keyed on `root_module_has_non_dev_dependency`, so
   `bazel mod tidy` can manage downstream `use_repo` lines. Root direct

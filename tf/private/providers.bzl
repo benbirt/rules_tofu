@@ -22,6 +22,8 @@ TfProviderInfo = provider(
         "address": "string: the canonical provider address, e.g. \"registry.opentofu.org/hashicorp/aws\".",
         "version": "string: the provider version, e.g. \"5.70.0\".",
         "binaries": "dict[string -> File]: provider binary keyed by `<os>_<arch>` platform key.",
+        "package_files": "dict[string -> list[struct(path, file)]]: the rest of each platform's unpacked zip, " +
+                         "keyed like `binaries`; `path` is relative to the `<os>_<arch>` directory.",
     },
 )
 
