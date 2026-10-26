@@ -20,7 +20,7 @@ Requires Bazel 8.5 or later, on Linux or macOS.
 
 In your downstream repo's `MODULE.bazel` (for the latest version, see
 [registry.bazel.build/modules/rules_tofu](https://registry.bazel.build/modules/rules_tofu)
-or the release notes, which carry a copy-pasteable snippet):
+or the snippet in the release notes):
 
 ```python
 bazel_dep(name = "rules_tofu", version = "X.Y.Z")
@@ -31,12 +31,12 @@ use_repo(tofu, "tofu_toolchains")
 ```
 
 One OpenTofu toolchain is registered for the whole build, so all
-`tofu.version` tags in the module graph resolve to a single version: a tag
-in your root module wins outright (declare at most one), a version asked
-for by dependencies alone is honoured if they all agree, and dependencies
-asking for different versions is an error telling you to pin one yourself.
-With no tags anywhere, the version pinned in
-[`toolchain/versions.bzl`](toolchain/versions.bzl) is used.
+`tofu.version` tags in the module graph resolve to a single version. A tag
+in the root module (at most one) takes precedence. Otherwise, the version
+that dependencies declare is used if they all agree; if they disagree, the
+build fails and asks the root module to declare one. With no tags at all,
+the version pinned in [`toolchain/versions.bzl`](toolchain/versions.bzl) is
+used.
 
 In a `BUILD.bazel`:
 
@@ -61,17 +61,17 @@ tf_deploy(
 
 ### Providers
 
-Providers are vendored by Bazel and passed to the rules that use them, so
-`tofu init` never downloads anything. There are two ways to say which
-versions to vendor, and they can be mixed:
+Providers are vendored by Bazel and passed to the rules that use them. There
+are two ways to declare which versions to vendor, and they can be mixed:
 
-- **A lock file** (`tf_providers.from_lock`): versions live in `.tf` files
-  and a standard `.terraform.lock.hcl`, as in a plain OpenTofu project, so
-  Renovate and Dependabot can keep them up to date.
+- **A lock file** (`tf_providers.from_lock`): versions are declared in `.tf`
+  files and a standard `.terraform.lock.hcl`, as in a plain OpenTofu
+  project, so Renovate and Dependabot can keep them up to date. Only the root
+  module can use a lock file.
 - **Tags in `MODULE.bazel`** (`tf_providers.provider`): each provider and
   version is declared in Bazel, optionally with per-platform digests or a
-  mirror. This suits a module that others depend on, and providers not on the
-  OpenTofu registry.
+  mirror. A module that other modules depend on declares its providers this
+  way.
 
 A provider can't be both tagged in the root module and locked. A
 dependency's tag for a provider the root locks is overridden by the lock, as
@@ -93,32 +93,27 @@ tf_library(
 )
 ```
 
-BUILD files name providers, never versions: `@tf_providers//<namespace>/<name>`
-is an alias onto the provider's repository, so only the providers a build
-uses are downloaded. `@tf_providers` lists providers from tags too.
+BUILD files name providers, never versions. `@tf_providers//<namespace>/<name>`
+covers providers from tags too, and only the providers a build uses are
+downloaded.
 
-The workspace has one lock, and each provider one version across the build.
-`pin` writes the lock from the `required_providers` of every directory in
-the workspace:
+The workspace has one lock, and each provider has one version across the
+build. To write or update the lock:
 
 ```sh
 bazel run @tf_providers//:pin
 ```
 
-It runs `tofu providers lock` with the toolchain's tofu, treating the lock's
-directory as the root module and every other directory with `.tf` files as
-a child module. It skips hidden directories, paths in `.bazelignore` and
-nested Bazel workspaces. Providers the root module pins with tags are left
-out. It locks for `linux_amd64`, `linux_arm64`, `darwin_amd64`,
-`darwin_arm64` and `windows_amd64`; pass `-platform=<os>_<arch>` arguments to
-choose others. The lock doesn't need to exist beforehand. If the constraints
-can't all be met, `pin` lists them by provider and directory, and leaves the
-lock alone.
+`pin` locks against the `required_providers` of every `tf_library` and
+`tf_deploy` in the workspace, for `linux_amd64`, `linux_arm64`,
+`darwin_amd64`, `darwin_arm64` and `windows_amd64` (pass
+`-platform=<os>_<arch>` to choose others). If the version constraints
+conflict, it lists them by directory and leaves the lock unchanged.
 
 **Pin versions in a `versions.tf` beside the lock (strongly recommended).**
-This follows OpenTofu's advice for root and child modules: the root
-configuration pins exact versions, and reusable modules declare at most a
-`>=` floor. Here the whole workspace is the root configuration:
+This follows OpenTofu's advice: the root configuration pins exact versions,
+and reusable modules declare at most a `>=` floor. Here the whole workspace
+is the root configuration:
 
 ```hcl
 # versions.tf, beside .terraform.lock.hcl: the only place versions are pinned
@@ -138,10 +133,7 @@ terraform {
 }
 ```
 
-Re-run `pin` whenever a pin changes. Each upgrade is then a reviewable
-one-line change, and the bots below bump the pin and the lock together.
-Build `versions.tf` as a library, so a pin edited by hand without re-running
-`pin` fails the build:
+Like any `.tf` file that `pin` reads, `versions.tf` belongs to a rule:
 
 ```python
 tf_library(
@@ -151,37 +143,28 @@ tf_library(
 )
 ```
 
-**Without a `versions.tf`**, the libraries' own constraints are all there is,
-and `pin` locks the newest version that every library accepts. The lock is
-then the only record of which version is in use. Re-running `pin` upgrades
-everything at once, within those constraints, and the bots propose
-lock-only updates.
+Run `pin` after changing a pin. Each upgrade is then a reviewable one-line
+change, which the bots below make for you.
 
-For each provider in the lock, the extension asks the OpenTofu registry for
-each platform's zip and accepts it only if its SHA256 is one of the lock's
-`zh:` hashes. Builds copy the lock next to the configuration, so `tofu init`
-also checks the unpacked provider against its `h1:` hashes. It fails if the
-lock no longer satisfies a library's version constraints, and the error then
-suggests running `pin`.
+**Without a `versions.tf`**, `pin` locks the newest version that every
+library accepts. The lock is then the only record of which version is in
+use, and re-running `pin` upgrades every provider within the libraries'
+constraints.
 
-A lock entry the extension can't use, such as one locked by `terraform`
-against `registry.terraform.io`, fails when that provider is fetched and
-names the problem. `@tf_providers//:pin` keeps working, so you can fix the
-lock with it. `examples/lock/` is a full end-to-end use.
+If the lock doesn't satisfy a library's version constraints (for example,
+after a pin or a floor is raised without re-running `pin`), building that
+library fails with a message to run `pin`. `examples/lock/` is a full
+end-to-end example.
 
 Keeping the lock up to date:
 
 - **Renovate** works with its default `terraform` manager. With a
-  `versions.tf`, it bumps the pin and rewrites the lock in the same PR, and
-  leaves `>=` floors alone. Without one, it proposes lock-only updates from
-  the libraries' constraints.
-- **Dependabot** needs `package-ecosystem: "opentofu"`, with `directory`
-  set to the lock's directory. Its `terraform` ecosystem runs HashiCorp's
-  `terraform` against `registry.terraform.io` and can't update an OpenTofu
-  lock. Dependabot only reads `.tf` files beside the lock, and refuses a
-  directory without any. So without a `versions.tf`, it needs at least a
-  file there naming each provider (a floor will do), and then proposes
-  lock-only updates.
+  `versions.tf`, it updates the pin and the lock in one PR. Without one, it
+  proposes updates to the lock alone.
+- **Dependabot** needs `package-ecosystem: "opentofu"` (not `terraform`),
+  with `directory` set to the lock's directory. It only reads `.tf` files in
+  that directory, so without a `versions.tf` it needs another file there that
+  declares each provider; a floor is enough.
 
 #### Tags in `MODULE.bazel`
 
@@ -207,19 +190,15 @@ tf_library(
 
 The repository name is derived from `source`: `hashicorp/aws` →
 `@tf_providers_hashicorp_aws`. When several modules in the dependency graph
-tag the same provider, the root module's version wins if it sets one;
+tag the same provider, the root module's version wins if it declares one;
 otherwise the highest requested version is selected.
 
-With no `sha256`, the extension asks the registry which of `linux_amd64`,
-`linux_arm64`, `darwin_amd64`, `darwin_arm64` and `windows_amd64` it
-publishes for that version, and their SHA256s, and records them as facts in
-`MODULE.bazel.lock`. Later builds, and fresh clones with that lockfile,
-reuse the recorded digests without asking the registry again. So commit
-`MODULE.bazel.lock` to keep builds reproducible, and use
-`--lockfile_mode=error` in CI to keep it honest.
+Without `sha256`, the OpenTofu registry's digests are used, and recorded in
+`MODULE.bazel.lock`. Commit `MODULE.bazel.lock` to keep builds reproducible,
+and run CI with `--lockfile_mode=error` so that a stale one fails the build.
 
-To pin instead, give each platform you'll run on its `shasum` from the
-registry's download endpoint:
+To pin the digests yourself, give each platform you'll run on its `shasum`
+from the registry's download endpoint:
 
 ```python
 tf_providers.provider(
@@ -238,11 +217,9 @@ tf_providers.provider(
 curl -s https://registry.opentofu.org/v1/providers/hashicorp/aws/5.70.0/download/linux/amd64 | jq -r .shasum
 ```
 
-If a pin disagrees with the registry, the fetch fails before downloading the
-zip, naming the registry's value. Either way, the registry must be reachable
-whenever the provider's repository is fetched. To avoid that, or to use a
-mirror, give the tag a `url_template` and pin its `sha256` (with no registry
-in the way, there's nothing else to take the digests from):
+If a pinned digest disagrees with the registry, the fetch fails and reports
+the registry's value. To download from a mirror instead of the registry,
+give the tag a `url_template`; it then needs `sha256`:
 
 ```python
 tf_providers.provider(
@@ -255,39 +232,29 @@ tf_providers.provider(
 
 The placeholders are `{namespace}`, `{name}`, `{version}`, `{os}` and
 `{arch}`. `examples/aws/`, `examples/gcp/` and `examples/posthog/` are full
-end-to-end uses.
+end-to-end examples.
 
 #### How providers are vendored
 
-Either way, providers come from the
-[OpenTofu registry](https://search.opentofu.org/) (unless a tag sets
-`url_template`), which says where each platform's zip is and what its
-SHA256 is: the same binaries a plain `tofu init` fetches. For `hashicorp/`
-providers those are OpenTofu's builds (from
-`github.com/opentofu/terraform-provider-*`), not HashiCorp's, so their
-checksums differ from releases.hashicorp.com's. A digest, pinned on a tag or
-recorded in `MODULE.bazel.lock`, gates every download. Sources are
-case-insensitive and normalized to lower case, as OpenTofu does, so
-repository names are lower case too (`PostHog/posthog` →
-`@tf_providers_posthog_posthog`).
+Either way, providers are downloaded from the
+[OpenTofu registry](https://search.opentofu.org/) (unless a tag declares a
+`url_template`): the same builds that `tofu init` installs. For
+`hashicorp/` providers, these are OpenTofu's builds, not HashiCorp's, so
+their checksums differ from those on releases.hashicorp.com. Provider
+sources are case-insensitive, as in OpenTofu, and repository names are
+lower case (`PostHog/posthog` → `@tf_providers_posthog_posthog`).
 
-A `tf_deploy` may declare its own `providers = [...]`; the union of a
-deploy's direct providers and the providers contributed by its library
-`deps` is the set that gets vendored. The exec-platform package (the binary
-and the rest of its zip) is symlinked alongside the deploy's work tree at
-Terraform's canonical `<host>/<namespace>/<name>/<version>/<os>_<arch>/`
-layout, and `tofu init` is run with `-plugin-dir=<that tree>`.
+A `tf_deploy` vendors its own `providers` plus those of its library `deps`.
 
-The effect is that `tofu init` — both the build-time `validate` action and
-the runtime invocation behind `:foo.plan` — never contacts a registry: no
-network is required to resolve providers once the zips are in Bazel's
-repository cache. The providers' own backends are obviously not offline;
-`:foo.plan` and `:foo.apply` still talk to AWS / GCP / etc. at runtime as
-usual. A `.terraform.lock.hcl` listed in `srcs`/`data` is rejected: the
-only lock rules_tofu uses is the `from_lock` one.
+The checks that `tofu init` and `tofu validate` would normally make online,
+against the registry, run offline as part of `bazel build` and `bazel test`,
+once Bazel has downloaded the providers. `:foo.plan` and `:foo.apply` also
+use the vendored providers, though the providers themselves still contact
+their own APIs (AWS, GCP and so on). A `.terraform.lock.hcl` listed in
+`srcs` or `data` is rejected; use `from_lock` instead.
 
-See `examples/hello/` for a minimal example that exercises `tf_library` and
-`tf_deploy` with no providers at all.
+See `examples/hello/` for a minimal example of `tf_library` and `tf_deploy`
+with no providers.
 
 ### Variable values and data files
 
@@ -326,7 +293,7 @@ Files listed in `data` are symlinked into the work tree at their
 workspace-relative short path (e.g. `config/tls_cert.pem`), making them
 readable via Terraform's `file()` or `templatefile()` functions.
 
-Then:
+To run a deploy:
 
 ```sh
 bazel run //path/to:prod.plan
@@ -345,14 +312,14 @@ each file's workspace-relative path. It also writes
 `<name>.work/<pkg>/rules_tofu.auto.tfvars.json` from `vars = {...}`.
 
 `bazel build :foo` (whether `:foo` is a `tf_library` or a
-`tf_deploy`) materializes the work tree AND runs
+`tf_deploy`) materializes the work tree and runs
 `tofu init -backend=false && tofu validate` as a build action, so
 configuration syntax/reference errors fail the build (with action
 caching). `bazel test //...` runs the `:foo.fmt_check` test targets;
 validation does not live in a separate `:foo.validate` target — building
 the rule itself is the validation contract.
 
-At runtime the launcher invokes a small Go binary that cd's into the
+At runtime the launcher invokes a small Go binary that changes into the
 materialized work tree, runs
 `tofu init -input=false -plugin-dir=<vendored>` (which "overrides all
 default search paths for plugins, and prevents the automatic installation
