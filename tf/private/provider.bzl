@@ -6,9 +6,10 @@ OpenTofu/Terraform provider plugin (e.g. `hashicorp/aws` at a given version).
 It is intended to be instantiated by the `tf_providers` module
 extension (see `//tf/providers:extensions.bzl`); end users do not
 write `tf_provider(...)` rules directly. Instead, they declare the
-provider in MODULE.bazel and reference the resulting `@<repo>//:provider`
-label from a `tf_library(providers = [...])` or
-`tf_deploy(providers = [...])` attribute.
+provider in MODULE.bazel and reference it as `@tf_providers//<namespace>/<name>`
+from a `tf_library(providers = [...])` or `tf_deploy(providers = [...])`
+attribute. The generated `tf_provider` targets are visible only to those
+`@tf_providers` aliases.
 """
 
 load(":providers.bzl", "TfProviderInfo")

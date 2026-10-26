@@ -205,14 +205,11 @@ tf_providers.provider(
     source = "hashicorp/aws",
     version = "5.70.0",
 )
-use_repo(tf_providers, "tf_providers", "tf_providers_hashicorp_aws")
+use_repo(tf_providers, "tf_providers")
 ```
 
 A tagged provider is named like any other, as `@tf_providers//hashicorp/aws`.
-`tf_providers_hashicorp_aws` is its own repository, which `bazel mod tidy`
-also lists; older BUILD files name it as
-`@tf_providers_hashicorp_aws//:provider`. `pin` leaves tagged providers out
-of the lock. When several modules tag the same provider, the root module's
+`pin` leaves tagged providers out of the lock. When several modules tag the same provider, the root module's
 tag or lock decides; otherwise the highest requested version is selected.
 
 Without `sha256`, the OpenTofu registry's digests are used, and recorded in

@@ -54,6 +54,7 @@ _CASES = [
     ("malformed_var_file", "broken_workspace", "//cases/malformed_var_file:deploy", "parse:"),
     ("conflicting_providers", "broken_workspace", "//cases/conflicting_providers:lib", "conflicting versions"),
     ("registry_sha256_mismatch", "broken_workspace", "//cases/registry_sha256_mismatch:lib", "but the registry reports"),
+    ("provider_repo_private", "broken_workspace", "//cases/provider_repo_private:lib", "Visibility error"),
     ("stale_lock", "broken_workspace", "//cases/stale_lock:lib", "bazel run @tf_providers//:pin"),
     ("duplicate_root_version", "broken_module", "//cases/duplicate_root_version:lib", "declares tofu.version more than once"),
     # A dependency's from_lock is ignored, so the root must supply its providers.

@@ -20,14 +20,13 @@ Downstream usage in MODULE.bazel:
             "windows_amd64": "...",
         },
     )
-    use_repo(tf_providers, "tf_providers_hashicorp_aws")
+    use_repo(tf_providers, "tf_providers")
 
-The repo name is derived deterministically from `source`: the `<ns>/<name>`
-pair, lower-cased as OpenTofu normalizes provider addresses, becomes
-`tf_providers_<ns>_<name>` (e.g. `hashicorp/aws` →
-`tf_providers_hashicorp_aws`, `PostHog/posthog` →
-`tf_providers_posthog_posthog`).
-Callers cannot override this name.
+BUILD files name each provider through the `@tf_providers` hub repo as
+`@tf_providers//<ns>/<name>`, with `<ns>/<name>` lower-cased as OpenTofu
+normalizes provider addresses (e.g. `@tf_providers//posthog/posthog` for
+`PostHog/posthog`). Behind each alias is a private per-provider repo,
+`tf_providers_<ns>_<name>`, whose `:provider` target only the hub can see.
 
 Each platform's zip comes from the OpenTofu registry (`registry.opentofu.org`),
 whose provider download endpoint gives the zip's URL and SHA256: the same
@@ -66,9 +65,8 @@ the same domain as Bzlmod's own MVS, where taking the highest version is
 the norm. The tofu binary is a single global tool registered once for the
 whole build, and which version a build runs is the root module's call.
 
-The target `@tf_providers_<ns>_<name>//:provider` then carries
-`TfProviderInfo` and is passed to `tf_library`/`tf_deploy`
-via their `providers` attribute. A digest, pinned or recorded, gates every
+The hub's `@tf_providers//<ns>/<name>` then carries `TfProviderInfo` and is
+passed to `tf_library`/`tf_deploy` via their `providers` attribute. A digest, pinned or recorded, gates every
 download, so the provider tree is reproducible and is fetched once per
 workspace.
 
@@ -388,15 +386,16 @@ def _tf_provider_download_impl(repository_ctx):
     exports_lines = ["exports_files(["]
     for path, _ in entries + package_entries:
         exports_lines.append("    \"{}\",".format(path))
-    exports_lines.append("])")
+    exports_lines.append("], visibility = [\"//visibility:private\"])")
 
+    # An implementation detail of the hub: BUILD files name the provider as
+    # `@tf_providers//<namespace>/<name>`, whose alias is the only thing
+    # that may see `:provider`.
     repository_ctx.file("WORKSPACE", "")
     repository_ctx.file(
         "BUILD.bazel",
         content = """\
 load("@rules_tofu//tf/private:provider.bzl", "tf_provider")
-
-package(default_visibility = ["//visibility:public"])
 
 {exports}
 
@@ -406,6 +405,7 @@ tf_provider(
     version = "{version}",
 {binaries}
 {package_files}{lock}
+    visibility = ["@{hub}//:__subpackages__"],
 )
 """.format(
             exports = "\n".join(exports_lines),
@@ -414,6 +414,7 @@ tf_provider(
             binaries = _format_dict("binaries", entries),
             package_files = _format_dict("package_files", package_entries),
             lock = "\n    lock = \"{}\",".format(repository_ctx.attr.lock) if repository_ctx.attr.lock else "",
+            hub = _HUB,
         ),
         executable = False,
     )
@@ -569,9 +570,8 @@ def _tf_providers_extension_impl(module_ctx):
     # `posthog/posthog` are the same provider.
     all_tags = []
 
-    # Repos the root is expected to `use_repo`: the hub, plus those backing
-    # its own tags. A repo that exists purely because a dependency asked for
-    # the provider is not a direct dep of the root.
+    # The repos the root is expected to `use_repo`: just the hub. The
+    # per-provider repos behind it are private implementation details.
     root_repos = []
     lock = None
     for mod in module_ctx.modules:
@@ -596,9 +596,6 @@ def _tf_providers_extension_impl(module_ctx):
                 is_root = mod.is_root,
                 mod_name = mod.name,
             ))
-            name = repo_name(parsed.namespace, parsed.name)
-            if mod.is_root and name not in root_repos:
-                root_repos.append(name)
 
     # Digests the extension resolved from the registry, keyed by
     # `<source>@<version>`, to record in MODULE.bazel.lock.

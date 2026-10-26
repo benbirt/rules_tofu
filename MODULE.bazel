@@ -87,7 +87,7 @@ tf_providers.provider(
 # examples/lock takes its providers from a .terraform.lock.hcl instead, which
 # Renovate and Dependabot can update. `@tf_providers//:pin` regenerates it.
 tf_providers.from_lock(lock = "//examples/lock:.terraform.lock.hcl")
-use_repo(tf_providers, "tf_providers", "tf_providers_hashicorp_aws", "tf_providers_hashicorp_google", "tf_providers_posthog_posthog")
+use_repo(tf_providers, "tf_providers")
 
 # `unittest`/`asserts` for the Starlark tests under //toolchain/tests and
 # //tf/providers/tests. Dev-only, which is why those tests are subpackages:

@@ -128,10 +128,14 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   dev/non-dev split keyed on `root_module_has_non_dev_dependency`, so
   `bazel mod tidy` can manage downstream `use_repo` lines. Root direct
   deps are `tofu_toolchains` only (never the internal `tofu_<platform>`
-  repos) and, for providers, only the repos backing the **root module's
-  own** tags, plus `tf_providers` (the hub) whenever the root uses the
-  extension. Keep reporting the per-provider repos of root tags: BUILD
-  files written before the hub name them directly. `bazel mod tidy` must leave `MODULE.bazel` unchanged.
+  repos) and, for providers, only `tf_providers` (the hub), whenever the
+  root uses the extension. The per-provider `tf_providers_<ns>_<name>`
+  repos are private implementation details: they're never reported as
+  direct deps, their files are private, and `:provider` is visible only to
+  `@tf_providers//:__subpackages__` (the hub's aliases). BUILD files name
+  every provider as `@tf_providers//<ns>/<name>`; don't document or reintroduce
+  the per-provider labels (removing them was a breaking change).
+  `bazel mod tidy` must leave `MODULE.bazel` unchanged.
 - The tofu extension resolves `tofu.version` as "root arbitrates": >1
   root tag fails, one root tag wins unconditionally, agreeing non-root
   requests are honoured, disagreeing non-root requests fail naming the
