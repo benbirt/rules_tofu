@@ -84,7 +84,8 @@ _tf_library = rule(
             providers = [TfProviderInfo],
             doc = "Vendored OpenTofu/Terraform providers this library references. " +
                   "Declare each provider once in MODULE.bazel via the `tf_providers` " +
-                  "extension and pass `@<repo>//:provider` here. Propagates transitively to " +
+                  "extension and pass `@tf_providers//<namespace>/<name>` here. " +
+                  "Propagates transitively to " +
                   "any `tf_deploy` that pulls this library in.",
         ),
     },
@@ -127,8 +128,8 @@ def tf_library(name, srcs = None, deps = None, data = None, providers = None, fm
       srcs: source .tf/.tf.json/.tftpl/.hcl files.
       deps: other `tf_library` targets to compose with.
       data: arbitrary files to include in the work tree for `file()` calls.
-      providers: `tf_provider` targets (typically `@<repo>//:provider` exposed
-          by `tf_providers.provider(...)` in MODULE.bazel) that this library
+      providers: providers (`@tf_providers//<namespace>/<name>`, from the
+          `tf_providers` extension in MODULE.bazel) that this library
           references in `required_providers`. Propagates transitively to any
           `tf_deploy` consuming this library.
       fmt_test: whether to emit a `:<name>.fmt_check` test target. Only emitted

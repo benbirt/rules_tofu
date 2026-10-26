@@ -122,8 +122,8 @@ tf_deploy_rule = rule(
             providers = [TfProviderInfo],
             doc = "Vendored OpenTofu/Terraform providers this deploy declares directly. " +
                   "Unioned with providers contributed transitively by `deps`. " +
-                  "Each entry is typically a `@<repo>//:provider` target exposed by " +
-                  "`tf_providers.provider(...)` in MODULE.bazel.",
+                  "Each entry is a `@tf_providers//<namespace>/<name>` target from the " +
+                  "`tf_providers` extension in MODULE.bazel.",
         ),
         "allow_ephemeral_state": attr.bool(
             default = False,
@@ -171,8 +171,8 @@ def tf_deploy(name, srcs = None, deps = None, vars = None, var_files = None, dat
           `bazel build` time via a dedicated check action.
       data: arbitrary files to include in the work tree, enabling `file()` calls
           in Terraform configs.
-      providers: `tf_provider` targets (typically `@<repo>//:provider` exposed
-          by `tf_providers.provider(...)` in MODULE.bazel) declared at the deploy
+      providers: providers (`@tf_providers//<namespace>/<name>`, from the
+          `tf_providers` extension in MODULE.bazel) declared at the deploy
           level. Unioned with providers transitively contributed by `deps`. The exec
           platform binary is symlinked into a sibling plugin tree; `tofu init`
           runs offline against it.

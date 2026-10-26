@@ -20,14 +20,13 @@ Downstream usage in MODULE.bazel:
             "windows_amd64": "...",
         },
     )
-    use_repo(tf_providers, "tf_providers_hashicorp_aws")
+    use_repo(tf_providers, "tf_providers")
 
-The repo name is derived deterministically from `source`: the `<ns>/<name>`
-pair, lower-cased as OpenTofu normalizes provider addresses, becomes
-`tf_providers_<ns>_<name>` (e.g. `hashicorp/aws` →
-`tf_providers_hashicorp_aws`, `PostHog/posthog` →
-`tf_providers_posthog_posthog`).
-Callers cannot override this name.
+BUILD files name each provider through the `@tf_providers` hub repo as
+`@tf_providers//<ns>/<name>`, with `<ns>/<name>` lower-cased as OpenTofu
+normalizes provider addresses (e.g. `@tf_providers//posthog/posthog` for
+`PostHog/posthog`). Behind each alias is a private per-provider repo,
+`tf_providers_<ns>_<name>`, whose `:provider` target only the hub can see.
 
 Each platform's zip comes from the OpenTofu registry (`registry.opentofu.org`),
 whose provider download endpoint gives the zip's URL and SHA256: the same
@@ -66,9 +65,8 @@ the same domain as Bzlmod's own MVS, where taking the highest version is
 the norm. The tofu binary is a single global tool registered once for the
 whole build, and which version a build runs is the root module's call.
 
-The target `@tf_providers_<ns>_<name>//:provider` then carries
-`TfProviderInfo` and is passed to `tf_library`/`tf_deploy`
-via their `providers` attribute. A digest, pinned or recorded, gates every
+The hub's `@tf_providers//<ns>/<name>` then carries `TfProviderInfo` and is
+passed to `tf_library`/`tf_deploy` via their `providers` attribute. A digest, pinned or recorded, gates every
 download, so the provider tree is reproducible and is fetched once per
 workspace.
 
@@ -91,6 +89,9 @@ load(
     "repo_name",
     "valid_cached_sha256s",
 )
+
+# The hub repo: `@tf_providers//<namespace>/<name>` for every resolved provider.
+_HUB = "tf_providers"
 
 # (os/arch -> exe suffix). Keys must match the `sha256` map's platform keys.
 _EXE_SUFFIX = {
@@ -346,15 +347,16 @@ def _tf_provider_download_impl(repository_ctx):
     exports_lines = ["exports_files(["]
     for path, _ in entries + package_entries:
         exports_lines.append("    \"{}\",".format(path))
-    exports_lines.append("])")
+    exports_lines.append("], visibility = [\"//visibility:private\"])")
 
+    # An implementation detail of the hub: BUILD files name the provider as
+    # `@tf_providers//<namespace>/<name>`, whose alias is the only thing
+    # that may see `:provider`.
     repository_ctx.file("WORKSPACE", "")
     repository_ctx.file(
         "BUILD.bazel",
         content = """\
 load("@rules_tofu//tf/private:provider.bzl", "tf_provider")
-
-package(default_visibility = ["//visibility:public"])
 
 {exports}
 
@@ -364,6 +366,7 @@ tf_provider(
     version = "{version}",
 {binaries}
 {package_files}
+    visibility = ["@{hub}//:__subpackages__"],
 )
 """.format(
             exports = "\n".join(exports_lines),
@@ -371,6 +374,7 @@ tf_provider(
             version = version,
             binaries = _format_dict("binaries", entries),
             package_files = _format_dict("package_files", package_entries),
+            hub = _HUB,
         ),
         executable = False,
     )
@@ -382,6 +386,36 @@ _tf_provider_download = repository_rule(
         "version": attr.string(mandatory = True),
         "sha256": attr.string_dict(mandatory = True),
         "url_template": attr.string(),
+    },
+)
+
+def _tf_providers_hub_impl(repository_ctx):
+    repository_ctx.file("WORKSPACE", "")
+    repository_ctx.file(
+        "BUILD.bazel",
+        content = "# Each provider's alias is in its `<namespace>/<name>` package.\n",
+        executable = False,
+    )
+
+    # `@tf_providers//<namespace>/<name>`: the package's default target.
+    for package, repo in repository_ctx.attr.providers.items():
+        repository_ctx.file(
+            package + "/BUILD.bazel",
+            content = """\
+alias(
+    name = "{name}",
+    actual = "@{repo}//:provider",
+    visibility = ["//visibility:public"],
+)
+""".format(name = package.split("/")[1], repo = repo),
+            executable = False,
+        )
+
+_tf_providers_hub = repository_rule(
+    implementation = _tf_providers_hub_impl,
+    attrs = {
+        # `<namespace>/<name>` -> the repo vendoring that provider.
+        "providers": attr.string_dict(),
     },
 )
 
@@ -417,11 +451,12 @@ def _tf_providers_extension_impl(module_ctx):
     # `posthog/posthog` are the same provider.
     all_tags = []
 
-    # Repos the root is expected to `use_repo`: only those backing its own
-    # tags. A repo that exists purely because a dependency asked for the
-    # provider is not a direct dep of the root.
+    # The repos the root is expected to `use_repo`: just the hub. The
+    # per-provider repos behind it are private implementation details.
     root_repos = []
     for mod in module_ctx.modules:
+        if mod.is_root:
+            root_repos.append(_HUB)
         for tag in mod.tags.provider:
             parsed = _parse_source_or_fail(tag.source)
             if tag.url_template:
@@ -436,9 +471,6 @@ def _tf_providers_extension_impl(module_ctx):
                 is_root = mod.is_root,
                 mod_name = mod.name,
             ))
-            name = repo_name(parsed.namespace, parsed.name)
-            if mod.is_root and name not in root_repos:
-                root_repos.append(name)
 
     # Digests the extension resolved from the registry, keyed by
     # `<source>@<version>`, to record in MODULE.bazel.lock.
@@ -524,6 +556,13 @@ def _tf_providers_extension_impl(module_ctx):
             sha256 = merged_sha256,
             url_template = url_templates.keys()[0] if url_templates else "",
         )
+
+    # Always created, so that BUILD files in any module can name providers as
+    # `@tf_providers//<namespace>/<name>`.
+    _tf_providers_hub(
+        name = _HUB,
+        providers = {source: repo_name(*source.split("/")) for source in by_source},
+    )
 
     # `reproducible = True`: every download is gated by a sha256, either pinned
     # on a tag or recorded in `facts`, so the repos are a pure function of the

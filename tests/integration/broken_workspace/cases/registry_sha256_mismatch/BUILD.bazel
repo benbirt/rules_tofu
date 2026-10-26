@@ -8,5 +8,5 @@ tf_library(
     name = "lib",
     srcs = ["main.tf"],
     fmt_test = False,
-    providers = ["@tf_providers_posthog_posthog//:provider"],
+    providers = ["@tf_providers//posthog/posthog"],
 )
