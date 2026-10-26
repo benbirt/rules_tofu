@@ -33,11 +33,15 @@ jobs:
           disk-cache: ${{ github.workflow }}-${{ matrix.os }}-${{ matrix.bazel }}
           repository-cache: true
 
+      # On the pinned version, a MODULE.bazel.lock that needs any update
+      # (e.g. a provider digest not yet recorded as a fact) fails the build
+      # rather than being rewritten. Other versions write the lockfile in
+      # their own format, so they can't use it.
       - name: Build
-        run: bazel build //...
+        run: bazel build //... ${{ matrix.bazel == 'pinned' && '--lockfile_mode=error' || '' }}
 
       - name: Test
-        run: bazel test //... --test_output=errors --verbose_failures
+        run: bazel test //... --test_output=errors --verbose_failures ${{ matrix.bazel == 'pinned' && '--lockfile_mode=error' || '' }}
 
       # e2e/smoke is the BCR presubmit test module and models the README-shaped
       # consumer path. It's excluded from //... via --deleted_packages, so build
