@@ -69,8 +69,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # Nested Bazel modules (e2e/smoke, tests/integration/broken_workspace,
-      # tests/integration/broken_module) each carry their own .bazelversion:
+      # Nested Bazel modules (e2e/smoke and the tests/integration
+      # sub-workspaces) each carry their own .bazelversion:
       # bazelisk resolves the version from the nearest MODULE.bazel boundary
       # and never sees the root pin. Keep every copy identical to the root
       # file.

@@ -6,7 +6,7 @@ Each case names a sub-workspace, a target inside it under
 fails on that target: `_CASES` drives the target with `bazel build`,
 `_RUN_CASES` with `bazel run`. Most cases live in `broken_workspace`, whose
 single MODULE.bazel they share; a case whose break *is* the module graph
-needs a sub-workspace of its own (`broken_module`). The child workspace
+needs a sub-workspace of its own (`broken_module`, `lock_dependency`). The child workspace
 packages are excluded from the parent Bazel via the `--deleted_packages`
 flag in `.bazelrc` (the "deleted packages" trick recommended by
 rules_bazel_integration_test), so the outer Bazel never analyzes the
@@ -35,6 +35,9 @@ _WORKSPACE_FILES = {
     "broken_workspace": integration_test_utils.glob_workspace_files("broken_workspace") + [
         "//:local_repository_files",
     ],
+    "lock_dependency": integration_test_utils.glob_workspace_files("lock_dependency") + [
+        "//:local_repository_files",
+    ],
 }
 
 # Failures raised by the outer Bazel itself — loading, analysis, or an action
@@ -53,6 +56,8 @@ _CASES = [
     ("registry_sha256_mismatch", "broken_workspace", "//cases/registry_sha256_mismatch:lib", "but the registry reports"),
     ("stale_lock", "broken_workspace", "//cases/stale_lock:lib", "bazel run @tf_providers//:pin"),
     ("duplicate_root_version", "broken_module", "//cases/duplicate_root_version:lib", "declares tofu.version more than once"),
+    # A dependency's from_lock is ignored, so the root must supply its providers.
+    ("dependency_lock_ignored", "lock_dependency", "@lib_module//:lib", "BUILD file not found in directory 'hashicorp/null'"),
 ]
 
 # Failures raised at runtime by the launcher a `tf_deploy` generates: the

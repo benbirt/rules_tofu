@@ -90,8 +90,14 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   the validate action copies it in only *after* that check, as the runner
   does with `--lock-file`. Don't use `-lockfile=readonly`: it also fails on
   lock entries a work tree doesn't use.
-- `from_lock` details: one lock per workspace, root module only, named
-  `.terraform.lock.hcl`. A missing lock is an empty one, so `pin` can write
+- `from_lock` details: one lock per workspace, named `.terraform.lock.hcl`.
+  Only the root module's lock counts; a dependency's `from_lock` is
+  silently ignored (never read, never an error), as OpenTofu ignores a
+  child module's lock and Cargo/npm ignore a dependency's: libraries
+  constrain, the root decides. The `@tf_providers` hub is always created
+  (so a dependency's `use_repo(tf_providers, "tf_providers")` resolves),
+  with an alias for every resolved provider; `:pin` explains itself and
+  fails when the root has no lock. A missing lock is an empty one, so `pin` can write
   the first. A lock *entry* the extension can't use (wrong host, `zh:`
   mismatch, version not on the registry) becomes a `_tf_provider_download`
   with `error` set that fails when fetched, never a `fail()` in the
@@ -123,8 +129,9 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   `bazel mod tidy` can manage downstream `use_repo` lines. Root direct
   deps are `tofu_toolchains` only (never the internal `tofu_<platform>`
   repos) and, for providers, only the repos backing the **root module's
-  own** tags, plus `tf_providers` (the hub) when the root uses
-  `from_lock`. `bazel mod tidy` must leave `MODULE.bazel` unchanged.
+  own** tags, plus `tf_providers` (the hub) whenever the root uses the
+  extension. Keep reporting the per-provider repos of root tags: BUILD
+  files written before the hub name them directly. `bazel mod tidy` must leave `MODULE.bazel` unchanged.
 - The tofu extension resolves `tofu.version` as "root arbitrates": >1
   root tag fails, one root tag wins unconditionally, agreeing non-root
   requests are honoured, disagreeing non-root requests fail naming the
@@ -200,7 +207,8 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   matrix and the README together.
 - The `.bazelversion` copies (root, `e2e/smoke`,
   `tests/integration/broken_workspace`,
-  `tests/integration/broken_module`) must stay byte-identical: nested
+  `tests/integration/broken_module`,
+  `tests/integration/lock_dependency`) must stay byte-identical: nested
   modules are separate bazelisk boundaries that never see the root pin.
   CI's lint job `cmp`s every nested copy against the root; bump them all
   together.

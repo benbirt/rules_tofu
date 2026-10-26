@@ -1,0 +1,13 @@
+"""A dependency module that pins providers with its own lock, as it would
+when developed as a root module. See ../MODULE.bazel."""
+
+module(
+    name = "lib_module",
+    version = "0.0.0",
+)
+
+bazel_dep(name = "rules_tofu", version = "0.0.0")
+
+tf_providers = use_extension("@rules_tofu//tf/providers:extensions.bzl", "tf_providers")
+tf_providers.from_lock()
+use_repo(tf_providers, "tf_providers")

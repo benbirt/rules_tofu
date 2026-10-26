@@ -72,17 +72,22 @@ via their `providers` attribute. A digest, pinned or recorded, gates every
 download, so the provider tree is reproducible and is fetched once per
 workspace.
 
-Alternatively, the root module can take pins from a `.terraform.lock.hcl`:
+The documented default is for the root module to take its pins from a
+`.terraform.lock.hcl` instead:
 
     tf_providers.from_lock(lock = "//:.terraform.lock.hcl")
     use_repo(tf_providers, "tf_providers")
+
+Only the root module's lock counts. A dependency's `from_lock` is ignored, as
+OpenTofu ignores a child module's lock: libraries constrain versions, and the
+root decides them.
 
 Each locked provider gets the same `tf_providers_<ns>_<name>` repo, with
 the version from the lock and, per platform, the registry's digest, which is
 accepted only if it is one of the lock's `zh:` hashes. A lock entry wins
 over tags from dependencies, as a root tag does; the root may not also tag it.
-The hub repo `@tf_providers` aliases `@tf_providers//<ns>/<name>` onto every
-resolved provider's repo, and `@tf_providers//:pin` rewrites the lock with
+The hub repo `@tf_providers`, always created, aliases
+`@tf_providers//<ns>/<name>` onto every resolved provider's repo, and `@tf_providers//:pin` rewrites the lock with
 `tofu providers lock`, against the `required_providers` of every
 `tf_library` and `tf_deploy` in the workspace (a `versions.tf` library
 beside the lock pins them). A locked provider's target carries the lock, which
@@ -112,7 +117,8 @@ load(
     "valid_cached_sha256s",
 )
 
-# The hub repo `from_lock` creates: `@tf_providers//<namespace>/<name>` and `@tf_providers//:pin`.
+# The hub repo, always created: `@tf_providers//<namespace>/<name>` for every
+# resolved provider, and `@tf_providers//:pin` for the root module's lock.
 _HUB = "tf_providers"
 
 # (os/arch -> exe suffix). Keys must match the `sha256` map's platform keys.
@@ -428,9 +434,12 @@ _tf_provider_download = repository_rule(
 )
 
 def _tf_providers_hub_impl(repository_ctx):
-    lock = repository_ctx.path(repository_ctx.attr.lock)
-    repository_ctx.watch(lock)
-    content = repository_ctx.read(lock) if lock.exists else ""
+    content = ""
+    if repository_ctx.attr.lock:
+        lock = repository_ctx.path(repository_ctx.attr.lock)
+        repository_ctx.watch(lock)
+        if lock.exists:
+            content = repository_ctx.read(lock)
 
     repository_ctx.file("WORKSPACE", "")
     repository_ctx.file(".terraform.lock.hcl", content, executable = False)
@@ -445,6 +454,7 @@ exports_files([".terraform.lock.hcl"])
 
 tf_pin(
     name = "pin",
+    has_lock = {has_lock},
     lock_dir = "{lock_dir}",
     platforms = {platforms},
     exclude_sources = {tagged},
@@ -453,6 +463,7 @@ tf_pin(
             lock_dir = repository_ctx.attr.lock_dir,
             platforms = repr(DEFAULT_PLATFORMS),
             tagged = repr(repository_ctx.attr.tagged),
+            has_lock = repr(bool(repository_ctx.attr.lock)),
         ),
         executable = False,
     )
@@ -474,8 +485,9 @@ alias(
 _tf_providers_hub = repository_rule(
     implementation = _tf_providers_hub_impl,
     attrs = {
-        "lock": attr.label(mandatory = True),
-        "lock_dir": attr.string(mandatory = True),
+        # The root module's `from_lock` file, if it uses one.
+        "lock": attr.label(),
+        "lock_dir": attr.string(),
         # `<namespace>/<name>` -> the repo vendoring that provider.
         "providers": attr.string_dict(),
         # `<namespace>/<name>` of the root module's tags, which `pin` leaves
@@ -557,16 +569,18 @@ def _tf_providers_extension_impl(module_ctx):
     # `posthog/posthog` are the same provider.
     all_tags = []
 
-    # Repos the root is expected to `use_repo`: only those backing its own
-    # tags, plus the hub if it uses `from_lock`. A repo that exists purely
-    # because a dependency asked for the provider is not a direct dep of the
-    # root.
+    # Repos the root is expected to `use_repo`: the hub, plus those backing
+    # its own tags. A repo that exists purely because a dependency asked for
+    # the provider is not a direct dep of the root.
     root_repos = []
     lock = None
     for mod in module_ctx.modules:
-        if mod.tags.from_lock and not mod.is_root:
-            fail("tf_providers.from_lock in module `{}`: only the root module may use a lock file".format(mod.name))
+        # Only the root module's lock counts, as in OpenTofu, where a child
+        # module's lock is ignored: the root decides versions, and libraries
+        # only constrain them. A dependency's `from_lock` (from developing it
+        # as a root module of its own) is ignored, not an error.
         if mod.is_root:
+            root_repos.append(_HUB)
             lock = _read_lock(module_ctx, mod)
         for tag in mod.tags.provider:
             parsed = _parse_source_or_fail(tag.source)
@@ -600,7 +614,6 @@ def _tf_providers_extension_impl(module_ctx):
     # whatever dependencies ask for.
     locked = {}
     if lock:
-        root_repos.append(_HUB)
         for entry in lock.entries:
             if [t for t in by_source.get(entry.source, []) if t.is_root]:
                 fail(("Provider `{}` is pinned both by a tf_providers.provider tag and by {}. " +
@@ -691,14 +704,15 @@ def _tf_providers_extension_impl(module_ctx):
             url_template = url_templates.keys()[0] if url_templates else "",
         )
 
-    if lock:
-        _tf_providers_hub(
-            name = _HUB,
-            lock = lock.label,
-            lock_dir = lock.lock_dir,
-            providers = {source: repo_name(*source.split("/")) for source in by_source},
-            tagged = sorted({t.source: True for t in all_tags if t.is_root}.keys()),
-        )
+    # Always created, so that BUILD files in any module can name providers as
+    # `@tf_providers//<namespace>/<name>` however the root pins them.
+    _tf_providers_hub(
+        name = _HUB,
+        lock = lock.label if lock else None,
+        lock_dir = lock.lock_dir if lock else "",
+        providers = {source: repo_name(*source.split("/")) for source in by_source},
+        tagged = sorted({t.source: True for t in all_tags if t.is_root}.keys()),
+    )
 
     # `reproducible = True`: every download is gated by a sha256, either pinned
     # on a tag or recorded in `facts`, so the repos are a pure function of the

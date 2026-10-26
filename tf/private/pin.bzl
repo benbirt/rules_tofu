@@ -13,6 +13,20 @@ load(":work_tree.bzl", "runfiles_path")
 visibility(["public"])
 
 def _tf_pin_impl(ctx):
+    if not ctx.attr.has_lock:
+        out = ctx.actions.declare_file(ctx.label.name + ".sh")
+        ctx.actions.write(
+            output = out,
+            is_executable = True,
+            content = """\
+#!/usr/bin/env bash
+echo 'rules_tofu: the root module has no lock file to pin. Add' \\
+     '`tf_providers.from_lock()` to MODULE.bazel, then run this again.' 1>&2
+exit 1
+""",
+        )
+        return [DefaultInfo(executable = out)]
+
     tofu = ctx.toolchains[TOOLCHAIN_TYPE].tofu
     pin_bin = ctx.attr._pin_bin[DefaultInfo].files_to_run.executable
     workspace_name = ctx.workspace_name or "_main"
@@ -43,6 +57,10 @@ exec "$R/{pin}" \\
 tf_pin = rule(
     implementation = _tf_pin_impl,
     attrs = {
+        "has_lock": attr.bool(
+            default = True,
+            doc = "False when the root module has no `from_lock`: running the target then explains that.",
+        ),
         "lock_dir": attr.string(
             doc = "Workspace-relative directory of the `.terraform.lock.hcl`.",
         ),
