@@ -59,25 +59,51 @@ tf_deploy(
 )
 ```
 
+To use providers, pin them in a `versions.tf` and a standard
+`.terraform.lock.hcl` at the workspace root:
+
+```python
+# MODULE.bazel
+tf_providers = use_extension("@rules_tofu//tf/providers:extensions.bzl", "tf_providers")
+tf_providers.from_lock()
+use_repo(tf_providers, "tf_providers")
+```
+
+```hcl
+# versions.tf
+terraform {
+  required_providers {
+    aws = { source = "hashicorp/aws", version = "6.2.0" }
+  }
+}
+```
+
+```python
+# BUILD.bazel
+tf_library(
+    name = "versions",
+    srcs = ["versions.tf"],
+    providers = ["@tf_providers//hashicorp/aws"],
+)
+```
+
+Then write the lock with `bazel run @tf_providers//:pin`, and add
+`providers = ["@tf_providers//hashicorp/aws"]` to the libraries that use the
+provider. [Providers](#providers) explains the details.
+
 ### Providers
 
-Providers are vendored by Bazel and passed to the rules that use them. There
-are two ways to declare which versions to vendor, and they can be mixed:
+Providers are vendored by Bazel and passed to the rules that use them. BUILD
+files name them as `@tf_providers//<namespace>/<name>`, never with a
+version, and only the providers a build uses are downloaded.
 
-- **A lock file** (`tf_providers.from_lock`): versions are declared in `.tf`
-  files and a standard `.terraform.lock.hcl`, as in a plain OpenTofu
-  project, so Renovate and Dependabot can keep them up to date. Only the root
-  module can use a lock file.
-- **Tags in `MODULE.bazel`** (`tf_providers.provider`): each provider and
-  version is declared in Bazel, optionally with per-platform digests or a
-  mirror. A module that other modules depend on declares its providers this
-  way.
+By default, versions are declared as in a plain OpenTofu project: in `.tf`
+files and a standard `.terraform.lock.hcl`, which Renovate and Dependabot
+can keep up to date. Tags in `MODULE.bazel` cover what a lock file can't
+express, such as a mirror or digests you pin yourself. The two can be mixed,
+but a provider can't be both tagged in the root module and locked.
 
-A provider can't be both tagged in the root module and locked. A
-dependency's tag for a provider the root locks is overridden by the lock, as
-it would be by a root tag.
-
-#### From a lock file
+#### Pinning with a lock file
 
 ```python
 tf_providers = use_extension("@rules_tofu//tf/providers:extensions.bzl", "tf_providers")
@@ -93,12 +119,13 @@ tf_library(
 )
 ```
 
-BUILD files name providers, never versions. `@tf_providers//<namespace>/<name>`
-covers providers from tags too, and only the providers a build uses are
-downloaded.
-
 The workspace has one lock, and each provider has one version across the
-build. To write or update the lock:
+build. As in OpenTofu, where only the root configuration's lock is used, only
+the root module's lock counts: a `from_lock` in a Bazel module you depend on
+is ignored. Libraries declare version constraints, and the root module
+decides the versions.
+
+To write or update the lock:
 
 ```sh
 bazel run @tf_providers//:pin
@@ -166,32 +193,27 @@ Keeping the lock up to date:
   that directory, so without a `versions.tf` it needs another file there that
   declares each provider; a floor is enough.
 
-#### Tags in `MODULE.bazel`
+#### Pinning with tags
+
+Use a `tf_providers.provider` tag for a provider that needs something a lock
+file can't express: digests you pin yourself, or a mirror instead of the
+OpenTofu registry.
 
 ```python
-tf_providers = use_extension(
-    "@rules_tofu//tf/providers:extensions.bzl",
-    "tf_providers",
-)
+tf_providers = use_extension("@rules_tofu//tf/providers:extensions.bzl", "tf_providers")
 tf_providers.provider(
     source = "hashicorp/aws",
     version = "5.70.0",
 )
-use_repo(tf_providers, "tf_providers_hashicorp_aws")
+use_repo(tf_providers, "tf_providers", "tf_providers_hashicorp_aws")
 ```
 
-```python
-tf_library(
-    name = "s3_bucket_lib",
-    srcs = ["main.tf"],
-    providers = ["@tf_providers_hashicorp_aws//:provider"],
-)
-```
-
-The repository name is derived from `source`: `hashicorp/aws` →
-`@tf_providers_hashicorp_aws`. When several modules in the dependency graph
-tag the same provider, the root module's version wins if it declares one;
-otherwise the highest requested version is selected.
+A tagged provider is named like any other, as `@tf_providers//hashicorp/aws`.
+`tf_providers_hashicorp_aws` is its own repository, which `bazel mod tidy`
+also lists; older BUILD files name it as
+`@tf_providers_hashicorp_aws//:provider`. `pin` leaves tagged providers out
+of the lock. When several modules tag the same provider, the root module's
+tag or lock decides; otherwise the highest requested version is selected.
 
 Without `sha256`, the OpenTofu registry's digests are used, and recorded in
 `MODULE.bazel.lock`. Commit `MODULE.bazel.lock` to keep builds reproducible,
@@ -241,8 +263,8 @@ Either way, providers are downloaded from the
 `url_template`): the same builds that `tofu init` installs. For
 `hashicorp/` providers, these are OpenTofu's builds, not HashiCorp's, so
 their checksums differ from those on releases.hashicorp.com. Provider
-sources are case-insensitive, as in OpenTofu, and repository names are
-lower case (`PostHog/posthog` → `@tf_providers_posthog_posthog`).
+sources are case-insensitive, as in OpenTofu, and are named in lower case
+(`PostHog/posthog` → `@tf_providers//posthog/posthog`).
 
 A `tf_deploy` vendors its own `providers` plus those of its library `deps`.
 

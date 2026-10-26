@@ -7,7 +7,7 @@ package(default_visibility = ["//visibility:public"])
 tf_library(
     name = "s3_bucket_lib",
     srcs = ["main.tf"],
-    providers = ["@tf_providers_hashicorp_aws//:provider"],
+    providers = ["@tf_providers//hashicorp/aws"],
 )
 
 # Root invocation that binds variable values. `bazel build :s3_bucket` runs

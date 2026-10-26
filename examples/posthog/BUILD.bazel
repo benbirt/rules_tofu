@@ -8,7 +8,7 @@ package(default_visibility = ["//visibility:public"])
 tf_library(
     name = "dashboard_lib",
     srcs = ["main.tf"],
-    providers = ["@tf_providers_posthog_posthog//:provider"],
+    providers = ["@tf_providers//posthog/posthog"],
 )
 
 # This is a demo whose state is disposable, so it opts in to local state under
