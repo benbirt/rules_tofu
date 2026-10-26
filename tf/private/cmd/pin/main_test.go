@@ -26,34 +26,25 @@ const nullFloor = `terraform {
 }
 `
 
-func TestDiscover_SkipsHiddenIgnoredAndNestedWorkspaces(t *testing.T) {
-	ws := t.TempDir()
-	writeFile(t, filepath.Join(ws, "MODULE.bazel"), "")
-	writeFile(t, filepath.Join(ws, "versions.tf"), nullFloor)
-	writeFile(t, filepath.Join(ws, "net/vpc/main.tf"), nullFloor)
-	writeFile(t, filepath.Join(ws, "dash/main.tf.json"), `{}`)
-	writeFile(t, filepath.Join(ws, "docs/README.md"), "")
-	writeFile(t, filepath.Join(ws, ".git/hooks/x.tf"), nullFloor)
-	writeFile(t, filepath.Join(ws, "net/.terraform/modules/m/main.tf"), nullFloor)
-	writeFile(t, filepath.Join(ws, "e2e/smoke/MODULE.bazel"), "")
-	writeFile(t, filepath.Join(ws, "e2e/smoke/main.tf"), nullFloor)
-	writeFile(t, filepath.Join(ws, "vendor/thing/main.tf"), nullFloor)
-	writeFile(t, filepath.Join(ws, ".bazelignore"), "# comment\nvendor/thing/\n")
-	if err := os.Symlink(filepath.Join(ws, "net"), filepath.Join(ws, "bazel-out")); err != nil {
-		t.Fatal(err)
+func TestGroupByDir(t *testing.T) {
+	got := groupByDir(`//:versions.tf
+//net/vpc:main.tf
+//net/vpc:outputs.tf.json
+//net:vpc/extra.tf
+@@//dash:main.tf
+@other//x:main.tf
+`)
+	want := map[string][]string{
+		"":        {"versions.tf"},
+		"net/vpc": {"net/vpc/main.tf", "net/vpc/outputs.tf.json", "net/vpc/extra.tf"},
+		"dash":    {"dash/main.tf"},
 	}
-
-	got, err := discover(ws)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []string{"", "dash", "net/vpc"}
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("discover = %q, want %q", got, want)
+		t.Errorf("groupByDir = %q, want %q", got, want)
 	}
 }
 
-func TestParseDir_Forms(t *testing.T) {
+func TestParseFiles_Forms(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "main.tf"), `
 terraform {
@@ -75,7 +66,9 @@ resource "null_resource" "x" {
 `)
 	writeFile(t, filepath.Join(dir, "extra.tf.json"), `{"terraform": {"required_providers": {"random": {"source": "hashicorp/random", "version": "3.6.0"}}}}`)
 
-	got, err := parseDir(dir)
+	writeFile(t, filepath.Join(dir, "unlisted.tf"), nullFloor)
+
+	got, err := parseFiles(dir, []string{"main.tf", "extra.tf.json"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,11 +83,11 @@ resource "null_resource" "x" {
 	}
 }
 
-func TestParseDir_DuplicateLocalName(t *testing.T) {
+func TestParseFiles_DuplicateLocalName(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "a.tf"), nullFloor)
 	writeFile(t, filepath.Join(dir, "b.tf"), nullFloor)
-	if _, err := parseDir(dir); err == nil || !strings.Contains(err.Error(), "already required") {
+	if _, err := parseFiles(dir, []string{"a.tf", "b.tf"}); err == nil || !strings.Contains(err.Error(), "already required") {
 		t.Errorf("expected a duplicate error, got %v", err)
 	}
 }
@@ -105,6 +98,17 @@ func TestModuleNames(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("moduleNames = %q, want %q", got, want)
 	}
+}
+
+// fakeBazel writes a bazel stand-in whose `query` prints labels, one per line.
+func fakeBazel(t *testing.T, labels ...string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "bazel")
+	writeFile(t, path, "#!/bin/sh\n[ \"$1\" = query ] || exit 2\ncat <<'EOF'\n"+strings.Join(labels, "\n")+"\nEOF\n")
+	if err := os.Chmod(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 // fakeTofu writes a tofu stand-in that logs its arguments, copies the root
@@ -133,7 +137,25 @@ exit 0
 	return path, logPath
 }
 
-func TestRun_LocksAgainstEveryDirectory(t *testing.T) {
+// lockedModules reads the fake lock back: the scratch root module, then each
+// child module's required_providers.
+func lockedModules(t *testing.T, lock []byte) (root map[string]any, children []map[string]any) {
+	t.Helper()
+	dec := json.NewDecoder(strings.NewReader(string(lock)))
+	if err := dec.Decode(&root); err != nil {
+		t.Fatal(err)
+	}
+	for dec.More() {
+		var doc map[string]any
+		if err := dec.Decode(&doc); err != nil {
+			t.Fatal(err)
+		}
+		children = append(children, doc["terraform"].(map[string]any)["required_providers"].(map[string]any))
+	}
+	return root, children
+}
+
+func TestRun_LocksAgainstEveryRule(t *testing.T) {
 	ws := t.TempDir()
 	writeFile(t, filepath.Join(ws, "infra/versions.tf"), `terraform {
   required_providers {
@@ -142,10 +164,18 @@ func TestRun_LocksAgainstEveryDirectory(t *testing.T) {
 }
 `)
 	writeFile(t, filepath.Join(ws, "infra/net/main.tf"), nullFloor)
+	// In no rule, so not queried and not locked against.
+	writeFile(t, filepath.Join(ws, "scratch/main.tf"), `terraform {
+  required_providers {
+    null = { source = "hashicorp/null", version = "< 3.0" }
+  }
+}
+`)
+	bazel := fakeBazel(t, "//infra:versions.tf", "//infra/net:main.tf")
 	tofu, logPath := fakeTofu(t)
 
 	var log strings.Builder
-	if err := run(ws, "infra", tofu, []string{"linux_amd64", "darwin_arm64"}, nil, nil, &log); err != nil {
+	if err := run(ws, "infra", tofu, bazel, []string{"linux_amd64", "darwin_arm64"}, nil, nil, &log); err != nil {
 		t.Fatalf("run: %v\n%s", err, log.String())
 	}
 
@@ -153,27 +183,22 @@ func TestRun_LocksAgainstEveryDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The fake lock is the root module then each child module.
-	dec := json.NewDecoder(strings.NewReader(string(lock)))
-	var rootDoc, childDoc map[string]any
-	if err := dec.Decode(&rootDoc); err != nil {
-		t.Fatal(err)
+	root, children := lockedModules(t, lock)
+	calls := root["module"].(map[string]any)
+	if len(calls) != 2 || calls["infra"].(map[string]any)["source"] != "./modules/infra" ||
+		calls["infra_net"].(map[string]any)["source"] != "./modules/infra_net" {
+		t.Errorf("module calls = %v", calls)
 	}
-	if err := dec.Decode(&childDoc); err != nil {
-		t.Fatal(err)
+	var versions []string
+	for _, reqs := range children {
+		versions = append(versions, reqs["null"].(map[string]any)["version"].(string))
 	}
-	if got := rootDoc["terraform"].(map[string]any)["required_providers"].(map[string]any)["null"].(map[string]any)["version"]; got != "3.2.4" {
-		t.Errorf("root module pins %v, want 3.2.4", got)
-	}
-	if got := rootDoc["module"].(map[string]any)["infra_net"].(map[string]any)["source"]; got != "./modules/infra_net" {
-		t.Errorf("child module source = %v", got)
-	}
-	if got := childDoc["terraform"].(map[string]any)["required_providers"].(map[string]any)["null"].(map[string]any)["version"]; got != ">= 3.0" {
-		t.Errorf("child module requires %v, want >= 3.0", got)
+	if !reflect.DeepEqual(versions, []string{"3.2.4", ">= 3.0"}) {
+		t.Errorf("locked against %q, want the versions.tf pin and the library floor", versions)
 	}
 
-	calls, _ := os.ReadFile(logPath)
-	lines := strings.Split(strings.TrimSpace(string(calls)), "\n")
+	tofuCalls, _ := os.ReadFile(logPath)
+	lines := strings.Split(strings.TrimSpace(string(tofuCalls)), "\n")
 	if len(lines) != 2 || !strings.HasSuffix(lines[0], " get") ||
 		!strings.HasSuffix(lines[1], "providers lock -platform=linux_amd64 -platform=darwin_arm64") {
 		t.Errorf("tofu calls = %q", lines)
@@ -187,22 +212,23 @@ func TestRun_NoVersionsTF(t *testing.T) {
 	ws := t.TempDir()
 	writeFile(t, filepath.Join(ws, "a/main.tf"), nullFloor)
 	writeFile(t, filepath.Join(ws, "b/main.tf"), nullFloor)
+	bazel := fakeBazel(t, "//a:main.tf", "//b:main.tf")
 	tofu, logPath := fakeTofu(t)
 
 	var log strings.Builder
-	if err := run(ws, "", tofu, []string{"linux_amd64"}, nil, []string{"-platform=windows_amd64"}, &log); err != nil {
+	if err := run(ws, "", tofu, bazel, []string{"linux_amd64"}, nil, []string{"-platform=windows_amd64"}, &log); err != nil {
 		t.Fatalf("run: %v\n%s", err, log.String())
 	}
 	lock, err := os.ReadFile(filepath.Join(ws, ".terraform.lock.hcl"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(strings.SplitN(string(lock), "\n}\n", 2)[0], "required_providers") {
-		t.Errorf("root module should have no requirements of its own:\n%s", lock)
+	if _, children := lockedModules(t, lock); len(children) != 2 {
+		t.Errorf("expected a module per library, got %d", len(children))
 	}
-	calls, _ := os.ReadFile(logPath)
-	if !strings.Contains(string(calls), "providers lock -platform=windows_amd64\n") {
-		t.Errorf("explicit -platform should replace the defaults, got %q", calls)
+	tofuCalls, _ := os.ReadFile(logPath)
+	if !strings.Contains(string(tofuCalls), "providers lock -platform=windows_amd64\n") {
+		t.Errorf("explicit -platform should replace the defaults, got %q", tofuCalls)
 	}
 }
 
@@ -216,11 +242,12 @@ func TestRun_ConflictListsConstraints(t *testing.T) {
 `)
 	writeFile(t, filepath.Join(ws, "net/main.tf"), nullFloor)
 	writeFile(t, filepath.Join(ws, ".terraform.lock.hcl"), "# old\n")
+	bazel := fakeBazel(t, "//:versions.tf", "//net:main.tf")
 	tofu, _ := fakeTofu(t)
 	t.Setenv("FAKE_TOFU_FAIL", "1")
 
 	var log strings.Builder
-	err := run(ws, "", tofu, []string{"linux_amd64"}, nil, nil, &log)
+	err := run(ws, "", tofu, bazel, []string{"linux_amd64"}, nil, nil, &log)
 	if err == nil {
 		t.Fatal("expected run to fail")
 	}
@@ -237,9 +264,25 @@ func TestRun_ConflictListsConstraints(t *testing.T) {
 func TestRun_NothingToLock(t *testing.T) {
 	ws := t.TempDir()
 	writeFile(t, filepath.Join(ws, "main.tf"), `output "x" { value = 1 }`)
+	bazel := fakeBazel(t, "//:main.tf")
 	tofu, _ := fakeTofu(t)
-	if err := run(ws, "", tofu, nil, nil, nil, &strings.Builder{}); err == nil || !strings.Contains(err.Error(), "no required_providers") {
+	if err := run(ws, "", tofu, bazel, nil, nil, nil, &strings.Builder{}); err == nil || !strings.Contains(err.Error(), "declares required_providers") {
 		t.Errorf("expected a nothing-to-lock error, got %v", err)
+	}
+}
+
+func TestRun_QueryFailure(t *testing.T) {
+	ws := t.TempDir()
+	bazel := filepath.Join(t.TempDir(), "bazel")
+	writeFile(t, bazel, "#!/bin/sh\necho 'ERROR: no such package' >&2\nexit 7\n")
+	if err := os.Chmod(bazel, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tofu, _ := fakeTofu(t)
+	var log strings.Builder
+	err := run(ws, "", tofu, bazel, nil, nil, nil, &log)
+	if err == nil || !strings.Contains(err.Error(), "bazel query") || !strings.Contains(log.String(), "no such package") {
+		t.Errorf("expected the query's failure to surface, got %v\n%s", err, log.String())
 	}
 }
 
@@ -258,10 +301,11 @@ func TestRun_ExcludesTaggedProviders(t *testing.T) {
   }
 }
 `)
+	bazel := fakeBazel(t, "//lib:main.tf", "//tagged:main.tf")
 	tofu, _ := fakeTofu(t)
 
 	var log strings.Builder
-	if err := run(ws, "", tofu, nil, []string{"posthog/posthog"}, nil, &log); err != nil {
+	if err := run(ws, "", tofu, bazel, nil, []string{"posthog/posthog"}, nil, &log); err != nil {
 		t.Fatalf("run: %v\n%s", err, log.String())
 	}
 	lock, _ := os.ReadFile(filepath.Join(ws, ".terraform.lock.hcl"))

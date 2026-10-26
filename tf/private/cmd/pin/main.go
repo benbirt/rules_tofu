@@ -2,36 +2,36 @@
 // .terraform.lock.hcl (tf_providers.from_lock) with `tofu providers lock`.
 //
 // The lock serves every tf_library and tf_deploy in the workspace, so it is
-// locked against all of their version constraints, not just those beside it:
+// locked against all of their version constraints:
 //
-//   - The workspace is walked for directories holding .tf/.tf.json files,
-//     skipping hidden directories, `.bazelignore`d paths and nested Bazel
-//     workspaces (their own MODULE.bazel, REPO.bazel or WORKSPACE).
-//   - Each directory's `terraform { required_providers { ... } }` entries are
+//   - `bazel query` lists the .tf/.tf.json source files of every tf_library
+//     and tf_deploy in the main repository (with their dependencies). Bazel
+//     already knows which packages exist, so .bazelignore, deleted packages
+//     and nested workspaces need no handling here. A .tf file outside every
+//     rule, a versions.tf included, is not locked against.
+//   - Each file's `terraform { required_providers { ... } }` entries are
 //     extracted, and nothing else, so resources, variables and module calls
 //     that only make sense in place never need to load.
 //   - Providers the root module pins with tf_providers.provider tags
 //     (--exclude-source) are left out: the lock mustn't pin them too.
-//   - A scratch configuration is generated: the lock's directory is the root
-//     module, every other directory a child module. A versions.tf beside the
-//     lock thereby pins the versions; without one, tofu picks the newest
-//     version that every directory accepts.
+//   - A scratch configuration is generated with one child module per
+//     directory, so tofu combines the constraints exactly as it would for
+//     nested modules: a versions.tf's exact pins decide the versions, and
+//     without one tofu picks the newest version every directory accepts.
 //   - `tofu get` + `tofu providers lock` run there, from scratch: `providers
 //     lock` keeps an existing lock's versions and has no -upgrade. The new
-//     lock is copied back over the old one.
+//     lock is copied over the old one.
 //
 // When the constraints can't all be met, tofu's error doesn't say where they
 // came from, so pin lists them by provider and directory.
 package main
 
 import (
-	"bufio"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -66,7 +66,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "rules_tofu: pin must be invoked via `bazel run @tf_providers//:pin`")
 		os.Exit(1)
 	}
-	if err := run(workspace, *lockDir, *tofu, platforms, excluded, flag.Args(), os.Stderr); err != nil {
+	if err := run(workspace, *lockDir, *tofu, bazelCommand(), platforms, excluded, flag.Args(), os.Stderr); err != nil {
 		fmt.Fprintln(os.Stderr, "rules_tofu:", err)
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
@@ -88,32 +88,44 @@ type module struct {
 	Reqs map[string]requirement
 }
 
-func run(workspace, lockDir, tofu string, defaultPlatforms, excludedSources, extraArgs []string, log io.Writer) error {
-	dirs, err := discover(workspace)
+// bazelCommand is the Bazel to query with: $BAZEL, else bazel or bazelisk
+// from PATH.
+func bazelCommand() string {
+	if b := os.Getenv("BAZEL"); b != "" {
+		return b
+	}
+	for _, name := range []string{"bazel", "bazelisk"} {
+		if path, err := exec.LookPath(name); err == nil {
+			return path
+		}
+	}
+	return "bazel"
+}
+
+func run(workspace, lockDir, tofu, bazel string, defaultPlatforms, excludedSources, extraArgs []string, log io.Writer) error {
+	byDir, err := queryConfigFiles(bazel, workspace, log)
 	if err != nil {
 		return err
 	}
-	lockDir = filepath.ToSlash(filepath.Clean(lockDir))
-	if lockDir == "." {
-		lockDir = ""
+	dirs := make([]string, 0, len(byDir))
+	for dir := range byDir {
+		dirs = append(dirs, dir)
 	}
+	sort.Strings(dirs)
 
-	root := module{Dir: lockDir, Reqs: map[string]requirement{}}
-	var children []module
+	var modules []module
 	for _, dir := range dirs {
-		reqs, err := parseDir(filepath.Join(workspace, dir))
+		reqs, err := parseFiles(workspace, byDir[dir])
 		if err != nil {
 			return err
 		}
 		reqs = withoutSources(reqs, excludedSources)
-		if dir == lockDir {
-			root.Reqs = reqs
-		} else if len(reqs) > 0 {
-			children = append(children, module{Dir: dir, Reqs: reqs})
+		if len(reqs) > 0 {
+			modules = append(modules, module{Dir: dir, Reqs: reqs})
 		}
 	}
-	if len(root.Reqs) == 0 && len(children) == 0 {
-		return fmt.Errorf("no required_providers found under %s to lock", workspace)
+	if len(modules) == 0 {
+		return errors.New("no tf_library or tf_deploy in the workspace declares required_providers to lock")
 	}
 
 	scratch, err := os.MkdirTemp("", "rules_tofu-pin-")
@@ -121,7 +133,7 @@ func run(workspace, lockDir, tofu string, defaultPlatforms, excludedSources, ext
 		return err
 	}
 	defer os.RemoveAll(scratch)
-	if err := writeScratch(scratch, root, children); err != nil {
+	if err := writeScratch(scratch, modules); err != nil {
 		return err
 	}
 
@@ -137,7 +149,7 @@ func run(workspace, lockDir, tofu string, defaultPlatforms, excludedSources, ext
 		return fmt.Errorf("tofu get: %w", err)
 	}
 	if err := runTofu(tofu, log, log, args...); err != nil {
-		fmt.Fprint(log, constraintsSummary(root, children))
+		fmt.Fprint(log, constraintsSummary(modules))
 		return fmt.Errorf("tofu providers lock: %w", err)
 	}
 
@@ -149,10 +161,7 @@ func run(workspace, lockDir, tofu string, defaultPlatforms, excludedSources, ext
 	if err := os.WriteFile(dst, lock, 0o644); err != nil {
 		return err
 	}
-	n := len(children)
-	if len(root.Reqs) > 0 {
-		n++
-	}
+	n := len(modules)
 	fmt.Fprintf(log, "rules_tofu: wrote %s from the required_providers of %d director%s\n",
 		dst, n, map[bool]string{true: "y", false: "ies"}[n == 1])
 	return nil
@@ -193,88 +202,48 @@ func hasPlatformArg(args []string) bool {
 	return false
 }
 
-// isConfigFile reports whether name is a file tofu reads as configuration.
-func isConfigFile(name string) bool {
-	return strings.HasSuffix(name, ".tf") || strings.HasSuffix(name, ".tf.json")
+// configQuery lists the configuration files of every tf_library and
+// tf_deploy (whose underlying rules are `_tf_library` and `tf_deploy_rule`),
+// including those reached through filegroups and library deps.
+const configQuery = `filter("\.tf(\.json)?$", kind("source file", deps(kind("^(_tf_library|tf_deploy_rule) rule$", //...))))`
+
+// queryConfigFiles asks Bazel for the configuration files of every tf_library
+// and tf_deploy in the main repository, grouped by workspace-relative
+// directory ("" for the workspace root).
+func queryConfigFiles(bazel, workspace string, log io.Writer) (map[string][]string, error) {
+	cmd := exec.Command(bazel, "query", "--noimplicit_deps", "--notool_deps", "--output=label", configQuery)
+	cmd.Dir = workspace
+	cmd.Stderr = log
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("bazel query: %w", err)
+	}
+	return groupByDir(string(out)), nil
 }
 
-// workspaceMarkers make a directory the root of another Bazel workspace,
-// whose .tf files belong to it, not to this one.
-var workspaceMarkers = []string{"MODULE.bazel", "REPO.bazel", "WORKSPACE", "WORKSPACE.bazel"}
-
-// discover returns the workspace-relative directories ("" for the root) that
-// hold configuration files, sorted.
-func discover(workspace string) ([]string, error) {
-	ignored, err := readBazelignore(workspace)
-	if err != nil {
-		return nil, err
-	}
-	found := map[string]bool{}
-	err = filepath.WalkDir(workspace, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(workspace, path)
-		if err != nil {
-			return err
-		}
-		rel = filepath.ToSlash(rel)
-		if d.IsDir() {
-			if rel == "." {
-				return nil
-			}
-			// WalkDir doesn't follow symlinks, so bazel-* convenience links are
-			// never entered; hidden directories (.git, .terraform) are skipped.
-			if strings.HasPrefix(d.Name(), ".") || ignored[rel] {
-				return filepath.SkipDir
-			}
-			for _, marker := range workspaceMarkers {
-				if _, err := os.Stat(filepath.Join(path, marker)); err == nil {
-					return filepath.SkipDir
-				}
-			}
-			return nil
-		}
-		if d.Type().IsRegular() && isConfigFile(d.Name()) {
-			dir := filepath.ToSlash(filepath.Dir(rel))
-			if dir == "." {
-				dir = ""
-			}
-			found[dir] = true
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	dirs := make([]string, 0, len(found))
-	for dir := range found {
-		dirs = append(dirs, dir)
-	}
-	sort.Strings(dirs)
-	return dirs, nil
-}
-
-// readBazelignore returns the workspace-relative paths listed in .bazelignore.
-func readBazelignore(workspace string) (map[string]bool, error) {
-	ignored := map[string]bool{}
-	f, err := os.Open(filepath.Join(workspace, ".bazelignore"))
-	if errors.Is(err, os.ErrNotExist) {
-		return ignored, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
+// groupByDir turns main-repository source file labels (`//pkg:sub/f.tf`)
+// into workspace-relative paths, grouped by directory. Labels from other
+// repositories can't be part of a work tree, so they're skipped.
+func groupByDir(labels string) map[string][]string {
+	byDir := map[string][]string{}
+	for _, label := range strings.Fields(labels) {
+		label = strings.TrimPrefix(label, "@@")
+		label = strings.TrimPrefix(label, "@")
+		if !strings.HasPrefix(label, "//") {
 			continue
 		}
-		ignored[strings.Trim(filepath.ToSlash(filepath.Clean(line)), "/")] = true
+		pkg, name, ok := strings.Cut(label[2:], ":")
+		if !ok {
+			continue
+		}
+		path := strings.TrimPrefix(pkg+"/"+name, "/")
+		dir := filepath.ToSlash(filepath.Dir(path))
+		if dir == "." {
+			dir = ""
+		}
+		byDir[dir] = append(byDir[dir], path)
 	}
-	return ignored, scanner.Err()
+	return byDir
 }
 
 var (
@@ -282,21 +251,15 @@ var (
 	requiredSchema  = &hcl.BodySchema{Blocks: []hcl.BlockHeaderSchema{{Type: "required_providers"}}}
 )
 
-// parseDir returns the required_providers entries declared in dir's
-// configuration files, keyed by local name.
-func parseDir(dir string) (map[string]requirement, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, err
-	}
+// parseFiles returns the required_providers entries declared in the given
+// workspace-relative files, which share a directory, keyed by local name.
+func parseFiles(workspace string, files []string) (map[string]requirement, error) {
 	parser := hclparse.NewParser()
 	reqs := map[string]requirement{}
 	where := map[string]string{}
-	for _, e := range entries {
-		if !e.Type().IsRegular() || !isConfigFile(e.Name()) {
-			continue
-		}
-		path := filepath.Join(dir, e.Name())
+	sort.Strings(files)
+	for _, rel := range files {
+		path := filepath.Join(workspace, rel)
 		src, err := os.ReadFile(path)
 		if err != nil {
 			return nil, err
@@ -413,13 +376,10 @@ func moduleNames(children []module) []string {
 }
 
 // writeScratch writes the configuration that `providers lock` runs against:
-// root's requirements in the root module, each child's in a module of its
-// own, so tofu combines them exactly as it would for nested modules.
-func writeScratch(scratch string, root module, children []module) error {
+// each directory's requirements in a child module of its own, so tofu
+// combines them exactly as it would for nested modules.
+func writeScratch(scratch string, children []module) error {
 	rootDoc := map[string]any{}
-	if len(root.Reqs) > 0 {
-		rootDoc["terraform"] = map[string]any{"required_providers": root.Reqs}
-	}
 	calls := map[string]any{}
 	for i, name := range moduleNames(children) {
 		dir := filepath.Join(scratch, "modules", name)
@@ -448,7 +408,7 @@ func writeJSON(path string, v any) error {
 
 // constraintsSummary lists every directory's constraint, by provider, so a
 // conflict tofu reports without naming its sources can be traced.
-func constraintsSummary(root module, children []module) string {
+func constraintsSummary(modules []module) string {
 	type entry struct{ dir, version string }
 	bySource := map[string][]entry{}
 	add := func(m module) {
@@ -465,8 +425,7 @@ func constraintsSummary(root module, children []module) string {
 			bySource[source] = append(bySource[source], entry{dir, version})
 		}
 	}
-	add(root)
-	for _, m := range children {
+	for _, m := range modules {
 		add(m)
 	}
 	sources := make([]string, 0, len(bySource))

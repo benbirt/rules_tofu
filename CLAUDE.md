@@ -98,18 +98,21 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   extension: that would also break `@tf_providers//:pin`, the way to fix
   it. Only an unparseable file fails the extension.
 - `pin` (`tf/private/cmd/pin`) locks against the `required_providers` of
-  *every* directory in the workspace, not just the lock's: a `versions.tf`
-  beside the lock is strongly recommended but optional, and without one the
-  libraries' constraints are all there is. It extracts only the
-  `required_providers` entries into a scratch configuration (lock directory
-  = root module, every other directory a child module), so tofu combines
-  them as for nested modules, and runs `tofu get` + `tofu providers lock`
-  there from scratch, because `providers lock` keeps an existing lock's
-  versions and has no `-upgrade`. It skips hidden dirs, `.bazelignore`d
-  paths and nested workspaces, leaves out providers the root module tags
-  (the hub passes them as `--exclude-source`), and on failure lists the
-  constraints by provider and directory, since tofu's error doesn't say
-  where they came from. The resulting `constraints` line is the combined
+  every `tf_library`/`tf_deploy` in the main repository, found with
+  `bazel query` (run from inside `bazel run`; `$BAZEL` overrides the
+  binary). Only `.tf` files in those rules count, a `versions.tf` included:
+  don't reintroduce a filesystem walk, which would have to duplicate
+  Bazel's own `.bazelignore`/deleted-package/nested-workspace handling. A
+  `versions.tf` beside the lock is strongly recommended but optional;
+  without one the libraries' constraints are all there is. It extracts only
+  the `required_providers` entries into a scratch configuration, one child
+  module per directory, so tofu combines them as for nested modules, and
+  runs `tofu get` + `tofu providers lock` there from scratch, because
+  `providers lock` keeps an existing lock's versions and has no
+  `-upgrade`. It leaves out providers the root module tags (the hub passes
+  them as `--exclude-source`), and on failure lists the constraints by
+  provider and directory, since tofu's error doesn't say where they came
+  from. The resulting `constraints` line is the combined
   one; Renovate and Dependabot write their own, and nothing verifies it.
 - Provider repos vendor the whole unpacked zip (`package_files`), not just
   the binary, and `materialize_plugin_tree` symlinks all of it: tofu checks

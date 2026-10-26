@@ -3,8 +3,8 @@
 Instantiated by the `tf_providers` extension in the hub repo it creates for
 `tf_providers.from_lock`. Running it rewrites the lock with
 `tofu providers lock`, using the toolchain's tofu, against the
-`required_providers` of every directory in the workspace (see
-//tf/private/cmd/pin).
+`required_providers` of every `tf_library` and `tf_deploy` in the
+workspace, found with `bazel query` (see //tf/private/cmd/pin).
 """
 
 load("//toolchain:toolchain.bzl", "TOOLCHAIN_TYPE")

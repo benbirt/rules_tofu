@@ -83,8 +83,9 @@ accepted only if it is one of the lock's `zh:` hashes. A lock entry wins
 over tags from dependencies, as a root tag does; the root may not also tag it.
 The hub repo `@tf_providers` aliases `@tf_providers//<ns>/<name>` onto every
 resolved provider's repo, and `@tf_providers//:pin` rewrites the lock with
-`tofu providers lock`, against the `required_providers` of every directory
-in the workspace (a `versions.tf` beside the lock pins them). A locked provider's target carries the lock, which
+`tofu providers lock`, against the `required_providers` of every
+`tf_library` and `tf_deploy` in the workspace (a `versions.tf` library
+beside the lock pins them). A locked provider's target carries the lock, which
 builds copy next to the configuration so `tofu init` checks against it.
 A lock entry that can't be used becomes a repo that fails when fetched, so
 that `pin` stays runnable.
