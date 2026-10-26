@@ -102,8 +102,8 @@ uses with providers.
 
 A `tf_deploy` may declare its own `providers = [...]`; the union
 of a deploy's direct providers and the providers contributed by its
-library `deps` is the set that gets vendored. The exec-platform binary is
-symlinked alongside the deploy's work tree at Terraform's canonical
+library `deps` is the set that gets vendored. The exec-platform package (the
+binary and the rest of its zip) is symlinked alongside the deploy's work tree at Terraform's canonical
 `<host>/<namespace>/<name>/<version>/<os>_<arch>/` layout, and `tofu init`
 is run with `-plugin-dir=<that tree>`.
 

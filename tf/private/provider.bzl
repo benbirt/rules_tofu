@@ -27,12 +27,25 @@ def _tf_provider_impl(ctx):
             ))
         binaries[platform_key] = files[0]
 
+    # Each file sits at `plugins/<address>/<version>/<os>_<arch>/<path>` in
+    # the provider's repo; the plugin tree wants `<path>`.
+    package_files = {}
+    for tgt, platform_key in ctx.attr.package_files.items():
+        prefix = "plugins/{}/{}/{}/".format(ctx.attr.address, ctx.attr.version, platform_key)
+        for f in tgt.files.to_list():
+            if not f.owner.name.startswith(prefix):
+                fail("tf_provider `{}`: {} is not under {}".format(ctx.label, f.path, prefix))
+            package_files.setdefault(platform_key, []).append(
+                struct(path = f.owner.name[len(prefix):], file = f),
+            )
+
     return [
         DefaultInfo(files = depset(direct = binaries.values())),
         TfProviderInfo(
             address = ctx.attr.address,
             version = ctx.attr.version,
             binaries = binaries,
+            package_files = package_files,
         ),
     ]
 
@@ -54,6 +67,11 @@ tf_provider = rule(
                   "Each file must already live at the canonical plugin-dir path " +
                   "`<host>/<namespace>/<name>/<version>/<os>_<arch>/<filename>` " +
                   "relative to the work tree's plugin-dir root.",
+        ),
+        "package_files": attr.label_keyed_string_dict(
+            allow_files = True,
+            doc = "The rest of each platform's unpacked zip (LICENSE, README...) -> " +
+                  "`<os>_<arch>` platform key, under `plugins/` like the binaries.",
         ),
     },
     provides = [TfProviderInfo],

@@ -148,14 +148,14 @@ def _version_gt(a, b):
             return False
     return False
 
-def _format_binaries_dict(entries):
-    """Format `entries` as a Starlark dict literal for the generated BUILD.
+def _format_dict(attr_name, entries):
+    """Format `entries` as a Starlark dict attribute for the generated BUILD.
 
-    `entries` is a list of `(binary_path, platform_key)` tuples. The dict
-    is keyed by file label (so `label_keyed_string_dict` resolves each to a
-    File) and valued by platform key string.
+    `entries` is a list of `(path, platform_key)` tuples. The dict is keyed
+    by file label (so `label_keyed_string_dict` resolves each to a File) and
+    valued by platform key string.
     """
-    lines = ["    binaries = {"]
+    lines = ["    {} = {{".format(attr_name)]
     for binary_path, platform_key in entries:
         lines.append("        \"{}\": \"{}\",".format(binary_path, platform_key))
     lines.append("    },")
@@ -225,6 +225,26 @@ def _registry_sha256s(module_ctx, namespace, name, version, fact_key):
         sha256s[platform_key] = resolved.sha256
     return sha256s
 
+def _files_under(path, prefix):
+    """Every file below the directory `path`, as paths relative to it joined onto `prefix`."""
+    files = []
+    pending = [(path, prefix)]
+
+    # Starlark has no `while`; one iteration per directory.
+    for _ in range(1000):
+        if not pending:
+            break
+        directory, rel = pending.pop()
+        for child in directory.readdir():
+            child_rel = "{}/{}".format(rel, child.basename)
+            if child.is_dir:
+                pending.append((child, child_rel))
+            else:
+                files.append(child_rel)
+    if pending:
+        fail("{} holds more directories than a provider zip should".format(path))
+    return sorted(files)
+
 def _tf_provider_download_impl(repository_ctx):
     source = repository_ctx.attr.source
     version = repository_ctx.attr.version
@@ -239,6 +259,7 @@ def _tf_provider_download_impl(repository_ctx):
 
     address = "{}/{}/{}".format(DEFAULT_HOST, namespace, name)
     entries = []
+    package_entries = []
     for platform_key in sorted(sha256.keys()):
         if platform_key not in _EXE_SUFFIX:
             fail("tf_providers.provider `{}` declares unknown platform `{}`. Known: {}".format(
@@ -308,15 +329,23 @@ def _tf_provider_download_impl(repository_ctx):
                 url,
             ))
 
-        entries.append(("{}/{}".format(extract_dir, binary_filename), platform_key))
+        binary_path = "{}/{}".format(extract_dir, binary_filename)
+        entries.append((binary_path, platform_key))
 
-    # Extracted binaries live in nested directories; Bazel doesn't auto-expose
-    # them as source labels, so the `label_keyed_string_dict` on
+        # The rest of the zip (LICENSE, README and the like) is vendored too,
+        # so the plugin directory holds the package exactly as `tofu init`
+        # would install it: a lock file's `h1:` hash covers all of it.
+        for path in _files_under(repository_ctx.path(extract_dir), extract_dir):
+            if path != binary_path:
+                package_entries.append((path, platform_key))
+
+    # Extracted files live in nested directories; Bazel doesn't auto-expose
+    # them as source labels, so the `label_keyed_string_dict`s on
     # `tf_provider` couldn't resolve them without an explicit
     # `exports_files()`.
     exports_lines = ["exports_files(["]
-    for binary_path, _ in entries:
-        exports_lines.append("    \"{}\",".format(binary_path))
+    for path, _ in entries + package_entries:
+        exports_lines.append("    \"{}\",".format(path))
     exports_lines.append("])")
 
     repository_ctx.file("WORKSPACE", "")
@@ -334,12 +363,14 @@ tf_provider(
     address = "{address}",
     version = "{version}",
 {binaries}
+{package_files}
 )
 """.format(
             exports = "\n".join(exports_lines),
             address = address,
             version = version,
-            binaries = _format_binaries_dict(entries),
+            binaries = _format_dict("binaries", entries),
+            package_files = _format_dict("package_files", package_entries),
         ),
         executable = False,
     )
