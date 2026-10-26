@@ -48,6 +48,11 @@ tf_providers.provider(
     source = "hashicorp/aws",
     version = "5.70.0",
 )
+
+# The provider's own repo is private to the `@tf_providers` hub, and the
+# extension doesn't report it as a direct dependency. It's imported anyway so
+# the provider_repo_private case can show that its `:provider` target is not
+# visible outside the hub.
 use_repo(tf_providers, "tf_providers_hashicorp_aws")
 
 # A provider pinned with a deliberately wrong sha256 on every platform so the
@@ -63,4 +68,6 @@ tf_providers.provider(
     source = "PostHog/posthog",
     version = "1.0.24",
 )
-use_repo(tf_providers, "tf_providers_posthog_posthog")
+
+# Every provider is named through the hub.
+use_repo(tf_providers, "tf_providers")

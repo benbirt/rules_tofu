@@ -49,8 +49,8 @@ register_toolchains("@tofu_toolchains//:all")
 # Provider plugins, downloaded once per workspace and vendored into deploy work
 # trees so `tofu init` runs fully offline. aws and google pin their sha256s;
 # posthog trusts the OpenTofu registry's, which are recorded in
-# MODULE.bazel.lock. Repo names are derived from `source`: e.g.
-# `hashicorp/aws` → `@tf_providers_hashicorp_aws`.
+# MODULE.bazel.lock. BUILD files name every provider through the hub, e.g.
+# `@tf_providers//hashicorp/aws`.
 # These declarations exist only to drive the in-tree `examples/aws`,
 # `examples/gcp` and `examples/posthog` targets, so the usage is marked
 # `dev_dependency`: that keeps the example pins out of the published module,
@@ -83,7 +83,7 @@ tf_providers.provider(
     source = "PostHog/posthog",
     version = "1.0.24",
 )
-use_repo(tf_providers, "tf_providers_hashicorp_aws", "tf_providers_hashicorp_google", "tf_providers_posthog_posthog")
+use_repo(tf_providers, "tf_providers")
 
 # `unittest`/`asserts` for the Starlark tests under //toolchain/tests and
 # //tf/providers/tests. Dev-only, which is why those tests are subpackages:

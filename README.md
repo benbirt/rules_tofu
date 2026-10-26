@@ -62,8 +62,9 @@ tf_deploy(
 ### Vendoring providers
 
 Provider plugins are declared in `MODULE.bazel` and passed to
-the rules that use them. The repository name is derived from `source`
-(e.g. `hashicorp/aws` → `@tf_providers_hashicorp_aws`):
+the rules that use them. BUILD files name each one through the
+`@tf_providers` repository as `@tf_providers//<namespace>/<name>`
+(e.g. `@tf_providers//hashicorp/aws`):
 
 ```python
 tf_providers = use_extension(
@@ -80,7 +81,7 @@ tf_providers.provider(
         "darwin_arm64":  "59894534729ed071176f794d25d1cb7aecdcffd6825fbb6100e815ba6e12ec10",
     },
 )
-use_repo(tf_providers, "tf_providers_hashicorp_aws")
+use_repo(tf_providers, "tf_providers")
 ```
 
 When multiple modules in the dependency graph request the same provider,
@@ -91,7 +92,7 @@ if specified, otherwise the highest requested version is selected.
 tf_library(
     name = "s3_bucket_lib",
     srcs = ["main.tf"],
-    providers = ["@tf_providers_hashicorp_aws//:provider"],
+    providers = ["@tf_providers//hashicorp/aws"],
 )
 ```
 
@@ -119,8 +120,8 @@ binaries a plain `tofu init` fetches. For `hashicorp/` providers those are
 OpenTofu's builds (from `github.com/opentofu/terraform-provider-*`), not
 HashiCorp's, so their checksums differ from releases.hashicorp.com's.
 Sources are case-insensitive and normalized to lower case, as OpenTofu
-does, so the repository name is lower case too (`PostHog/posthog` →
-`@tf_providers_posthog_posthog`).
+does, so the label is lower case too (`PostHog/posthog` →
+`@tf_providers//posthog/posthog`).
 
 `sha256` is optional. Leave it out to trust the registry:
 
