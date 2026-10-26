@@ -98,8 +98,27 @@ is an alias onto the provider's repository, so only the providers a build
 uses are downloaded. `@tf_providers` lists providers from tags too.
 
 The workspace has one lock, and each provider one version across the build.
-Pin the versions next to the lock, and give reusable modules at most a `>=`
-floor (OpenTofu's own advice for root and child modules):
+`pin` writes the lock from the `required_providers` of every directory in
+the workspace:
+
+```sh
+bazel run @tf_providers//:pin
+```
+
+It runs `tofu providers lock` with the toolchain's tofu, treating the lock's
+directory as the root module and every other directory with `.tf` files as
+a child module. It skips hidden directories, paths in `.bazelignore` and
+nested Bazel workspaces. Providers the root module pins with tags are left
+out. It locks for `linux_amd64`, `linux_arm64`, `darwin_amd64`,
+`darwin_arm64` and `windows_amd64`; pass `-platform=<os>_<arch>` arguments to
+choose others. The lock doesn't need to exist beforehand. If the constraints
+can't all be met, `pin` lists them by provider and directory, and leaves the
+lock alone.
+
+**Pin versions in a `versions.tf` beside the lock (strongly recommended).**
+This follows OpenTofu's advice for root and child modules: the root
+configuration pins exact versions, and reusable modules declare at most a
+`>=` floor. Here the whole workspace is the root configuration:
 
 ```hcl
 # versions.tf, beside .terraform.lock.hcl: the only place versions are pinned
@@ -119,26 +138,10 @@ terraform {
 }
 ```
 
-Then write the lock, and rewrite it whenever a pin changes:
-
-```sh
-bazel run @tf_providers//:pin
-```
-
-`pin` runs `tofu providers lock` with the toolchain's tofu, for the
-`required_providers` of the `.tf` files beside the lock and for
-`linux_amd64`, `linux_arm64`, `darwin_amd64`, `darwin_arm64` and
-`windows_amd64`. Pass `-platform=<os>_<arch>` arguments to choose others. The
-lock doesn't need to exist beforehand.
-
-For each provider in the lock, the extension asks the OpenTofu registry for
-each platform's zip and accepts it only if its SHA256 is one of the lock's
-`zh:` hashes. Builds copy the lock next to the configuration, so `tofu init`
-also checks the unpacked provider against its `h1:` hashes. It fails if the
-lock no longer satisfies the configuration's version constraints, and the
-error then suggests running `pin`. A floor above the locked version is
-caught this way. To catch a `versions.tf` edited by hand without re-pinning,
-build it as a library:
+Re-run `pin` whenever a pin changes. Each upgrade is then a reviewable
+one-line change, and the bots below bump the pin and the lock together.
+Build `versions.tf` as a library, so a pin edited by hand without re-running
+`pin` fails the build:
 
 ```python
 tf_library(
@@ -148,6 +151,19 @@ tf_library(
 )
 ```
 
+**Without a `versions.tf`**, the libraries' own constraints are all there is,
+and `pin` locks the newest version that every library accepts. The lock is
+then the only record of which version is in use. Re-running `pin` upgrades
+everything at once, within those constraints, and the bots propose
+lock-only updates.
+
+For each provider in the lock, the extension asks the OpenTofu registry for
+each platform's zip and accepts it only if its SHA256 is one of the lock's
+`zh:` hashes. Builds copy the lock next to the configuration, so `tofu init`
+also checks the unpacked provider against its `h1:` hashes. It fails if the
+lock no longer satisfies a library's version constraints, and the error then
+suggests running `pin`.
+
 A lock entry the extension can't use, such as one locked by `terraform`
 against `registry.terraform.io`, fails when that provider is fetched and
 names the problem. `@tf_providers//:pin` keeps working, so you can fix the
@@ -155,12 +171,17 @@ lock with it. `examples/lock/` is a full end-to-end use.
 
 Keeping the lock up to date:
 
-- **Renovate** works with its default `terraform` manager. It bumps
-  `versions.tf` and rewrites the lock in the same PR, and leaves `>=`
-  floors alone.
-- **Dependabot** needs `package-ecosystem: "opentofu"`, pointed at the lock's
-  directory. Its `terraform` ecosystem runs HashiCorp's `terraform` against
-  `registry.terraform.io` and can't update an OpenTofu lock.
+- **Renovate** works with its default `terraform` manager. With a
+  `versions.tf`, it bumps the pin and rewrites the lock in the same PR, and
+  leaves `>=` floors alone. Without one, it proposes lock-only updates from
+  the libraries' constraints.
+- **Dependabot** needs `package-ecosystem: "opentofu"`, with `directory`
+  set to the lock's directory. Its `terraform` ecosystem runs HashiCorp's
+  `terraform` against `registry.terraform.io` and can't update an OpenTofu
+  lock. Dependabot only reads `.tf` files beside the lock, and refuses a
+  directory without any. So without a `versions.tf`, it needs at least a
+  file there naming each provider (a floor will do), and then proposes
+  lock-only updates.
 
 #### Tags in `MODULE.bazel`
 

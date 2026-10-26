@@ -3,7 +3,7 @@
 
 provider "registry.opentofu.org/hashicorp/null" {
   version     = "3.2.4"
-  constraints = "3.2.4"
+  constraints = ">= 3.0.0, 3.2.4"
   hashes = [
     "h1:346niW/SBt/jtCZctHefjkQGqtX9YgxSkCAKeCzQhXw=",
     "h1:8V2yVD20zG5UkKm5VgZLtao3vsiS09pTU4AyFuf6/iA=",

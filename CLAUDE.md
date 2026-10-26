@@ -96,9 +96,21 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   mismatch, version not on the registry) becomes a `_tf_provider_download`
   with `error` set that fails when fetched, never a `fail()` in the
   extension: that would also break `@tf_providers//:pin`, the way to fix
-  it. Only an unparseable file fails the extension. `pin` locks a scratch
-  copy of the lock directory's `.tf` files, because `tofu providers lock`
-  keeps an existing lock's versions and has no `-upgrade`.
+  it. Only an unparseable file fails the extension.
+- `pin` (`tf/private/cmd/pin`) locks against the `required_providers` of
+  *every* directory in the workspace, not just the lock's: a `versions.tf`
+  beside the lock is strongly recommended but optional, and without one the
+  libraries' constraints are all there is. It extracts only the
+  `required_providers` entries into a scratch configuration (lock directory
+  = root module, every other directory a child module), so tofu combines
+  them as for nested modules, and runs `tofu get` + `tofu providers lock`
+  there from scratch, because `providers lock` keeps an existing lock's
+  versions and has no `-upgrade`. It skips hidden dirs, `.bazelignore`d
+  paths and nested workspaces, leaves out providers the root module tags
+  (the hub passes them as `--exclude-source`), and on failure lists the
+  constraints by provider and directory, since tofu's error doesn't say
+  where they came from. The resulting `constraints` line is the combined
+  one; Renovate and Dependabot write their own, and nothing verifies it.
 - Provider repos vendor the whole unpacked zip (`package_files`), not just
   the binary, and `materialize_plugin_tree` symlinks all of it: tofu checks
   a lock's `h1:` hash over the entire package directory, so a binary-only

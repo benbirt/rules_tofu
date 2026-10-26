@@ -83,7 +83,8 @@ accepted only if it is one of the lock's `zh:` hashes. A lock entry wins
 over tags from dependencies, as a root tag does; the root may not also tag it.
 The hub repo `@tf_providers` aliases `@tf_providers//<ns>/<name>` onto every
 resolved provider's repo, and `@tf_providers//:pin` rewrites the lock with
-`tofu providers lock`. A locked provider's target carries the lock, which
+`tofu providers lock`, against the `required_providers` of every directory
+in the workspace (a `versions.tf` beside the lock pins them). A locked provider's target carries the lock, which
 builds copy next to the configuration so `tofu init` checks against it.
 A lock entry that can't be used becomes a repo that fails when fetched, so
 that `pin` stays runnable.
@@ -445,10 +446,12 @@ tf_pin(
     name = "pin",
     lock_dir = "{lock_dir}",
     platforms = {platforms},
+    exclude_sources = {tagged},
 )
 """.format(
             lock_dir = repository_ctx.attr.lock_dir,
             platforms = repr(DEFAULT_PLATFORMS),
+            tagged = repr(repository_ctx.attr.tagged),
         ),
         executable = False,
     )
@@ -474,6 +477,9 @@ _tf_providers_hub = repository_rule(
         "lock_dir": attr.string(mandatory = True),
         # `<namespace>/<name>` -> the repo vendoring that provider.
         "providers": attr.string_dict(),
+        # `<namespace>/<name>` of the root module's tags, which `pin` leaves
+        # out of the lock.
+        "tagged": attr.string_list(),
     },
 )
 
@@ -690,6 +696,7 @@ def _tf_providers_extension_impl(module_ctx):
             lock = lock.label,
             lock_dir = lock.lock_dir,
             providers = {source: repo_name(*source.split("/")) for source in by_source},
+            tagged = sorted({t.source: True for t in all_tags if t.is_root}.keys()),
         )
 
     # `reproducible = True`: every download is gated by a sha256, either pinned
