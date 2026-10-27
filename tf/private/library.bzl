@@ -16,18 +16,20 @@ load(":providers.bzl", "TfLibraryInfo", "TfProviderInfo")
 load(
     ":work_tree.bzl",
     "ALLOWED_SRC_EXTS",
+    "MODULES_BIN",
+    _files_entries = "files_entries",
+    _library_module = "library_module",
     _materialize = "materialize",
     _materialize_plugin_tree = "materialize_plugin_tree",
+    _modules_manifest = "modules_manifest",
+    _package_dir = "package_dir",
     _plugin_tree_root = "plugin_tree_root",
     _provider_lock = "provider_lock",
     _work_tree_root = "work_tree_root",
 )
 
 def _tf_library_impl(ctx):
-    direct = [
-        struct(path = f.short_path, file = f)
-        for f in ctx.files.srcs + ctx.files.data
-    ]
+    direct = _files_entries(ctx.files.srcs + ctx.files.data)
     transitive = [
         d[TfLibraryInfo].transitive_files
         for d in ctx.attr.deps
@@ -41,6 +43,12 @@ def _tf_library_impl(ctx):
     ]
     providers_depset = depset(direct = direct_providers, transitive = transitive_providers)
 
+    module = _library_module(ctx.label, ctx.attr.module_source, ctx.attr.module_version)
+    modules = depset(
+        direct = [module] if module else [],
+        transitive = [d[TfLibraryInfo].modules for d in ctx.attr.deps],
+    )
+
     # Materialize a work tree (no tfvars — libraries carry no var values) and
     # symlink the exec-platform binary for each provider into the plugin
     # tree. Then run init+validate; the stamp lives in DefaultInfo.files so
@@ -53,8 +61,9 @@ def _tf_library_impl(ctx):
         ctx,
         work_tree_files = work_tree_files,
         work_tree_root = _work_tree_root(ctx),
-        package_dir = ctx.label.package,
+        package_dir = _package_dir(ctx.label),
         plugin_tree_root = _plugin_tree_root(ctx),
+        modules_manifest = _modules_manifest(ctx, work_tree_outputs, ctx.attr.deps),
         lock = _provider_lock(ctx, providers_depset),
     )
 
@@ -63,6 +72,8 @@ def _tf_library_impl(ctx):
         TfLibraryInfo(
             transitive_files = files,
             providers = providers_depset,
+            module = module,
+            modules = modules,
         ),
     ]
 
@@ -90,6 +101,23 @@ _tf_library = rule(
                   "Propagates transitively to " +
                   "any `tf_deploy` that pulls this library in.",
         ),
+        "module_source": attr.string(
+            doc = "The address by which HCL calls this library as a module, e.g. " +
+                  "`\"git::https://github.com/acme/infra.git//vpc?ref=v1.2.0\"`: the `source` that " +
+                  "users outside Bazel would write. A `module` block whose `source` is this " +
+                  "address (or this address plus `//<subdir>`) uses this library's files, " +
+                  "when the library is in the caller's `deps`. Needed to call a library " +
+                  "from another Bazel repository, which a relative path can't reach.",
+        ),
+        "module_version": attr.string(
+            doc = "The version of this module, required when `module_source` is a module " +
+                  "registry address. A caller's `version` constraint must accept it.",
+        ),
+        "_modules_bin": attr.label(
+            default = MODULES_BIN,
+            executable = True,
+            cfg = "exec",
+        ),
     },
     toolchains = [TOOLCHAIN_TYPE],
     doc = """Bundles a set of OpenTofu/Terraform configuration files for reuse.
@@ -110,10 +138,17 @@ workspace-relative path, so:
 Note: Terraform parses any `source` not starting with `./` or `../` as
 a registry address, so to reach a top-level workspace directory from a
 deeply nested module, traverse with `../../...`.
+
+A library from another Bazel repository is called by its `module_source`
+instead, the address that users outside Bazel would write. rules_tofu writes
+every module call into `.terraform/modules/modules.json`, as `tofu init`
+does when it installs modules, and runs `tofu init -get=false`, so no module
+is ever fetched. A call whose `source` no dep provides fails the build, as
+does a dep with `module_source` that no call uses.
 """,
 )
 
-def tf_library(name, srcs = None, deps = None, data = None, providers = None, fmt_test = True, **kwargs):
+def tf_library(name, srcs = None, deps = None, data = None, providers = None, module_source = None, module_version = None, fmt_test = True, **kwargs):
     """A reusable bundle of OpenTofu/Terraform configuration files.
 
     Always generates:
@@ -134,6 +169,12 @@ def tf_library(name, srcs = None, deps = None, data = None, providers = None, fm
           `tf_providers` extension in MODULE.bazel) that this library
           references in `required_providers`. Propagates transitively to any
           `tf_deploy` consuming this library.
+      module_source: the address by which HCL calls this library as a module,
+          as users outside Bazel would write it in `source`. Callers with this
+          library in `deps` use its files for a `module` block with that
+          `source` (or that plus `//<subdir>`).
+      module_version: this module's version. Required when `module_source` is
+          a module registry address.
       fmt_test: whether to emit a `:<name>.fmt_check` test target. Only emitted
           when True (the default) and `srcs` is non-empty.
       **kwargs: forwarded to the underlying rule (visibility, tags, testonly).
@@ -149,6 +190,8 @@ def tf_library(name, srcs = None, deps = None, data = None, providers = None, fm
         deps = deps or [],
         data = data or [],
         providers = providers or [],
+        module_source = module_source or "",
+        module_version = module_version or "",
         **dict(common_kwargs, **kwargs)
     )
 

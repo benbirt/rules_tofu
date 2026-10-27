@@ -14,6 +14,7 @@ tree ever carrying the (large) provider binaries.
 """
 
 load("//toolchain:toolchain.bzl", "TOOLCHAIN_TYPE")
+load(":providers.bzl", "TfLibraryInfo")
 
 # Only structural Terraform inputs are allowed in a rule's srcs. Variable
 # values come from `tf_deploy(vars = {...})`; allowing `.tfvars[.json]`
@@ -34,6 +35,35 @@ def runfiles_path(workspace_name, f):
         return sp[3:]
     return workspace_name + "/" + sp
 
+def work_tree_path(f):
+    """The path at which `f` appears in a work tree.
+
+    Main-repository files keep their workspace-relative path. Files from
+    other repositories go under `external/<canonical repo name>/`, which no
+    main-repository package can occupy (Bazel reserves `//external`). HCL
+    reaches them by `module_source`, never by a relative path, since the
+    canonical names are Bazel's to choose.
+    """
+    sp = f.short_path
+    if sp.startswith("../"):
+        return "external/" + sp[3:]
+    return sp
+
+def package_dir(label):
+    """The directory of `label`'s package in a work tree (see `work_tree_path`)."""
+    return _join(label.workspace_root, label.package)
+
+def _join(a, b):
+    if not a:
+        return b
+    if not b:
+        return a
+    return a + "/" + b
+
+def files_entries(files):
+    """`struct(path, file)` for each of `files`, at its `work_tree_path`."""
+    return [struct(path = work_tree_path(f), file = f) for f in files]
+
 def materialize(ctx, entries, tfvars_content = None):
     """Materialize a work tree under `<pkg>/<name>.work/`.
 
@@ -43,7 +73,7 @@ def materialize(ctx, entries, tfvars_content = None):
 
     Args:
       ctx: rule ctx.
-      entries: list[struct(path, file)] — workspace-relative paths + Files.
+      entries: list[struct(path, file)] — work-tree paths (`work_tree_path`) + Files.
       tfvars_content: optional string. Pass None for library work trees
           (which carry no variable values).
 
@@ -56,15 +86,6 @@ def materialize(ctx, entries, tfvars_content = None):
     seen = {}
     for entry in entries:
         path = entry.path
-        if path.startswith("../"):
-            fail(
-                "`{}` would include `{}` from an external Bazel module. ".format(
-                    ctx.label,
-                    entry.file.path,
-                ) + "Terraform has no addressing scheme for files outside the workspace " +
-                "root, so this is not supported. Bring the file in-workspace (e.g. via " +
-                "a `genrule` or a local copy) and depend on that instead.",
-            )
         if path in seen:
             other = seen[path]
             if other != entry.file:
@@ -82,7 +103,7 @@ def materialize(ctx, entries, tfvars_content = None):
         outputs.append(out)
 
     if tfvars_content != None:
-        tfvars_path = work_prefix + "/" + ctx.label.package + "/rules_tofu.auto.tfvars.json"
+        tfvars_path = work_prefix + "/" + _join(package_dir(ctx.label), "rules_tofu.auto.tfvars.json")
         if tfvars_path[len(work_prefix) + 1:] in seen:
             fail(
                 "`{}` collides with the generated rules_tofu.auto.tfvars.json. ".format(
@@ -190,7 +211,7 @@ def work_tree_root(ctx):
     """Exec-root-relative path to this rule's work tree root."""
     return "{bin}/{pkg}/{name}.work".format(
         bin = ctx.bin_dir.path,
-        pkg = ctx.label.package,
+        pkg = package_dir(ctx.label),
         name = ctx.label.name,
     )
 
@@ -202,6 +223,82 @@ def plugin_tree_root(ctx):
     """
     return "{bin}/{pkg}/{name}.plugins".format(
         bin = ctx.bin_dir.path,
-        pkg = ctx.label.package,
+        pkg = package_dir(ctx.label),
         name = ctx.label.name,
     )
+
+MODULES_BIN = "//tf/private/cmd/modules:modules"
+
+def library_module(label, module_source, module_version):
+    """`TfLibraryInfo.module` for a library with these attributes, or None."""
+    if not module_source:
+        if module_version:
+            fail("`{}` sets module_version without module_source".format(label))
+        return None
+    return struct(
+        label = _display_label(label),
+        source = module_source,
+        version = module_version,
+        dir = package_dir(label),
+    )
+
+def modules_manifest(ctx, work_tree_outputs, deps):
+    """Emit the action writing this rule's `.terraform/modules/modules.json`.
+
+    See //tf/private/cmd/modules: every module call from the root module down
+    is recorded, local ones by their directory in the work tree and others by
+    the dep whose `module_source` they name, so `tofu init -get=false` finds
+    them all installed. The validate action and the runner copy the manifest
+    into place.
+
+    Args:
+      ctx: rule ctx. Must declare `_modules_bin` (cfg = "exec") on the rule.
+      work_tree_outputs: list[File], the work tree's files (`materialize`).
+      deps: the rule's `deps` targets, each with `TfLibraryInfo`.
+
+    Returns:
+      File: the manifest.
+    """
+    direct = {}
+    for d in deps:
+        module = d[TfLibraryInfo].module
+        if module:
+            direct[module.label] = True
+    modules = depset(transitive = [d[TfLibraryInfo].modules for d in deps]).to_list()
+    listing = ctx.actions.declare_file(ctx.label.name + ".modules_deps.json")
+    ctx.actions.write(
+        output = listing,
+        content = json.encode([
+            struct(
+                label = m.label,
+                source = m.source,
+                version = m.version,
+                dir = m.dir,
+                direct = m.label in direct,
+            )
+            for m in modules
+        ]),
+    )
+
+    manifest = ctx.actions.declare_file(ctx.label.name + ".modules.json")
+    args = ctx.actions.args()
+    args.add("--work-tree", work_tree_root(ctx))
+    args.add("--root", package_dir(ctx.label))
+    args.add("--modules", listing)
+    args.add("--label", _display_label(ctx.label))
+    args.add("--out", manifest)
+    ctx.actions.run(
+        executable = ctx.attr._modules_bin[DefaultInfo].files_to_run,
+        inputs = [listing] + work_tree_outputs,
+        outputs = [manifest],
+        arguments = [args],
+        mnemonic = "TofuModules",
+        progress_message = "TofuModules %{label}",
+    )
+    return manifest
+
+def _display_label(label):
+    """`label` as users write it: `//pkg:name` in the main repository."""
+    if label.workspace_root:
+        return str(label)
+    return "//{}:{}".format(label.package, label.name)

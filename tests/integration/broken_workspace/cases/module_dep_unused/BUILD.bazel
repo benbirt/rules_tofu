@@ -1,0 +1,10 @@
+load("@rules_tofu//tf:defs.bzl", "tf_library")
+
+# A dep with module_source that no module call uses: it is left over, or the
+# call names a different address.
+tf_library(
+    name = "lib",
+    srcs = ["main.tf"],
+    fmt_test = False,
+    deps = ["//cases/module_dep_unused/net"],
+)

@@ -1,0 +1,8 @@
+"""A Bazel module shipping a registry module. See ../MODULE.bazel."""
+
+module(
+    name = "dns_module",
+    version = "0.0.0",
+)
+
+bazel_dep(name = "rules_tofu", version = "0.0.0")

@@ -1,0 +1,9 @@
+load("@rules_tofu//tf:defs.bzl", "tf_library")
+
+# A module call by address with no dep whose module_source it is: rules_tofu
+# never fetches a module, so the build must fail naming the source.
+tf_library(
+    name = "lib",
+    srcs = ["main.tf"],
+    fmt_test = False,
+)
