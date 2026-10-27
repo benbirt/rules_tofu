@@ -1,6 +1,8 @@
-"""Public rules_tofu API.
+"""Rules for OpenTofu and Terraform-compatible configuration.
 
-Downstream loads:
+`tf_library` bundles reusable `.tf` files; `tf_deploy` is a root
+configuration you can plan, apply and destroy with `bazel run`. Load them
+with:
 
     load("@rules_tofu//tf:defs.bzl", "tf_library", "tf_deploy")
 """
