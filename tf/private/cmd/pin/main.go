@@ -38,26 +38,17 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/benbirt/rules_tofu/tf/private/cmd/internal/flags"
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclparse"
 )
 
-type stringList []string
-
-func (s *stringList) String() string     { return strings.Join(*s, ",") }
-func (s *stringList) Set(v string) error { *s = append(*s, v); return nil }
-
 var (
 	tofu      = flag.String("tofu", "", "path to the tofu binary")
 	lockDir   = flag.String("lock-dir", "", "workspace-relative directory of the .terraform.lock.hcl")
-	platforms stringList
-	excluded  stringList
+	platforms = flags.StringList("platform", "`<os>_<arch>` to lock for unless -platform= arguments follow (repeatable)")
+	excluded  = flags.StringList("exclude-source", "`<namespace>/<name>` pinned by a tag instead, left out of the lock (repeatable)")
 )
-
-func init() {
-	flag.Var(&platforms, "platform", "`<os>_<arch>` to lock for unless -platform= arguments follow (repeatable)")
-	flag.Var(&excluded, "exclude-source", "`<namespace>/<name>` pinned by a tag instead, left out of the lock (repeatable)")
-}
 
 func main() {
 	flag.Parse()
@@ -66,7 +57,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "rules_tofu: pin must be invoked via `bazel run @tf_providers//:pin`")
 		os.Exit(1)
 	}
-	if err := run(workspace, *lockDir, *tofu, bazelCommand(), platforms, excluded, flag.Args(), os.Stderr); err != nil {
+	if err := run(workspace, *lockDir, *tofu, bazelCommand(), *platforms, *excluded, flag.Args(), os.Stderr); err != nil {
 		fmt.Fprintln(os.Stderr, "rules_tofu:", err)
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {

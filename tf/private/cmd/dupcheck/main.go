@@ -20,24 +20,14 @@ import (
 	"os"
 	"strings"
 
+	"github.com/benbirt/rules_tofu/tf/private/cmd/internal/flags"
 	"github.com/hashicorp/hcl/v2/hclparse"
 )
 
-type stringList []string
-
-func (s *stringList) String() string     { return strings.Join(*s, ",") }
-func (s *stringList) Set(v string) error { *s = append(*s, v); return nil }
-
-func stringListFlag(name, usage string) *stringList {
-	sl := new(stringList)
-	flag.Var(sl, name, usage)
-	return sl
-}
-
 var (
 	stamp    = flag.String("stamp", "", "path to a stamp file to touch on success")
-	varsKeys = stringListFlag("vars-key", "key from the deploy's `vars` dict (repeatable)")
-	varFiles = stringListFlag("var-file", "`label:path` of a .tfvars.json or .tfvars file (repeatable)")
+	varsKeys = flags.StringList("vars-key", "key from the deploy's `vars` dict (repeatable)")
+	varFiles = flags.StringList("var-file", "`label:path` of a .tfvars.json or .tfvars file (repeatable)")
 )
 
 func main() {

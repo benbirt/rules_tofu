@@ -28,27 +28,16 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/benbirt/rules_tofu/tf/private/cmd/internal/flags"
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclparse"
 )
-
-// stringList is a repeatable string flag (e.g. --var-file can appear multiple times).
-type stringList []string
-
-func (s *stringList) String() string     { return strings.Join(*s, ",") }
-func (s *stringList) Set(v string) error { *s = append(*s, v); return nil }
-
-func stringListFlag(name, usage string) *stringList {
-	sl := new(stringList)
-	flag.Var(sl, name, usage)
-	return sl
-}
 
 var (
 	workTree   = flag.String("work-tree", "", "path to the materialized work tree root")
 	packageDir = flag.String("package-dir", "", "workspace-relative dir to cd into within the work tree")
 	pluginDir  = flag.String("plugin-dir", "", "absolute path to the vendored provider plugin tree, passed to tofu init via -plugin-dir")
-	varFiles   = stringListFlag("var-file", "path to a .tfvars.json file passed to tofu via -var-file (repeatable)")
+	varFiles   = flags.StringList("var-file", "path to a .tfvars.json file passed to tofu via -var-file (repeatable)")
 	lockFile   = flag.String("lock-file", "", "optional .terraform.lock.hcl pinning the providers (tf_providers.from_lock), copied next to the configuration before tofu init")
 
 	stateDir = flag.String("state-dir", "", "absolute path to the per-deploy state directory")

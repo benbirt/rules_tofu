@@ -6,7 +6,10 @@ go_library(
     name = "dupcheck_lib",
     srcs = ["main.go"],
     importpath = "github.com/benbirt/rules_tofu/tf/private/cmd/dupcheck",
-    deps = ["@com_github_hashicorp_hcl_v2//hclparse"],
+    deps = [
+        "//tf/private/cmd/internal/flags",
+        "@com_github_hashicorp_hcl_v2//hclparse",
+    ],
 )
 
 go_binary(

@@ -7,6 +7,7 @@ go_library(
     srcs = ["main.go"],
     importpath = "github.com/benbirt/rules_tofu/tf/private/cmd/runner",
     deps = [
+        "//tf/private/cmd/internal/flags",
         "@com_github_hashicorp_hcl_v2//:hcl",
         "@com_github_hashicorp_hcl_v2//hclparse",
     ],
