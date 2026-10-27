@@ -1,0 +1,68 @@
+# Weekly version updates. Each ecosystem waits a week before proposing a new
+# release, so a compromised or broken one is likely to have been caught
+# upstream first.
+#
+# Not covered: .bazelversion (and its nested copies, which must stay
+# identical), the Go SDK and the example provider pins in MODULE.bazel, and
+# the OpenTofu versions in toolchain/; Dependabot updates none of them.
+version: 2
+updates:
+  # bazel_dep versions in MODULE.bazel; Dependabot runs `bazel mod tidy` to
+  # update MODULE.bazel.lock.
+  - package-ecosystem: bazel
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: chore
+    ignore:
+      # The non-dev deps are floors for every downstream module: under
+      # Bazel's minimal version selection, bumping them here would force the
+      # same versions on users. Raise them only when rules_tofu needs to.
+      - dependency-name: platforms
+      - dependency-name: rules_go
+      - dependency-name: gazelle
+    groups:
+      bazel:
+        patterns: ["*"]
+
+  # go.mod: the .terraform.lock.hcl reader's dependencies.
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: chore
+    groups:
+      go:
+        patterns: ["*"]
+
+  # examples/lock's provider: versions.tf and the .terraform.lock.hcl beside
+  # it, which MODULE.bazel's tf_providers.from_lock reads. This exercises the
+  # update path the README documents. "opentofu", not "terraform", which
+  # can't read an OpenTofu lock. The locks under tests/ are fixtures and stay
+  # as they are.
+  - package-ecosystem: opentofu
+    directory: /examples/lock
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: chore
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: chore
+    groups:
+      github-actions:
+        patterns: ["*"]
