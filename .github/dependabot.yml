@@ -1,6 +1,4 @@
-# Weekly version updates. Each ecosystem waits a week before proposing a new
-# release, so a compromised or broken one is likely to have been caught
-# upstream first.
+# Weekly version updates.
 #
 # Not covered: .bazelversion (and its nested copies, which must stay
 # identical), the Go SDK and the example provider pins in MODULE.bazel, and
@@ -13,8 +11,6 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    cooldown:
-      default-days: 7
     commit-message:
       prefix: chore
     ignore:
@@ -33,8 +29,6 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    cooldown:
-      default-days: 7
     commit-message:
       prefix: chore
     groups:
@@ -50,8 +44,6 @@ updates:
     directory: /examples/lock
     schedule:
       interval: weekly
-    cooldown:
-      default-days: 7
     commit-message:
       prefix: chore
 
@@ -59,8 +51,6 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    cooldown:
-      default-days: 7
     commit-message:
       prefix: chore
     groups:
