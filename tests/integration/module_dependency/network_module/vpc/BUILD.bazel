@@ -1,0 +1,10 @@
+load("@rules_tofu//tf:defs.bzl", "tf_library")
+
+tf_library(
+    name = "vpc",
+    srcs = ["main.tf"],
+    fmt_test = False,
+    module_source = "git::https://example.com/acme/network.git//vpc?ref=v1.0.0",
+    visibility = ["//visibility:public"],
+    deps = ["@dns_module//:dns"],
+)

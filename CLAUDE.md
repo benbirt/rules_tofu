@@ -229,11 +229,31 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   jobs, because other Bazel versions rewrite `MODULE.bazel.lock` in their
   own format. Raising the floor means bumping `bazel_compatibility`, the CI
   matrix and the README together.
+- Modules are never fetched. Every rule writes
+  `.terraform/modules/modules.json` (tofu's own install record) with the
+  `//tf/private/cmd/modules` action, listing every module call from the root
+  down, local ones included, and both the validate action and the runner
+  copy it into place and run `tofu init -get=false`. Don't drop
+  `-get=false`: without it a call whose `version` rejects the manifest's is
+  silently re-downloaded, and local calls rely on the manifest too. A
+  non-local call resolves to the `tf_library` in `deps` (transitive) whose
+  `module_source` matches its `source`, optionally plus `//<subdir>`;
+  registry addresses are compared lower-cased with the default host added
+  (`NormalizeSource`), others verbatim. Version constraints are tofu's to
+  check, against `module_version`; don't reimplement them. The manifest
+  format is internal to tofu, so `module_dependency_<version>_test` runs for
+  every entry of `KNOWN_VERSIONS`. Files from other repositories sit at
+  `external/<canonical repo>/` in the work tree (`work_tree_path`); a
+  relative `source` may not cross into or out of one, since canonical names
+  are Bazel's to change. Rule paths (`work_tree_root`, `package_dir`, the
+  runner's runfiles paths) include `label.workspace_root`, so a library
+  in another repository builds on its own.
 - The `.bazelversion` copies (root, `e2e/smoke`,
   `tests/integration/broken_workspace`,
   `tests/integration/broken_module`,
   `tests/integration/lock_dependency`,
-  `tests/integration/lock_update`) must stay byte-identical: nested
+  `tests/integration/lock_update`,
+  `tests/integration/module_dependency`) must stay byte-identical: nested
   modules are separate bazelisk boundaries that never see the root pin.
   CI's lint job `cmp`s every nested copy against the root; bump them all
   together.

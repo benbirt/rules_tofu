@@ -1,0 +1,10 @@
+load("@rules_tofu//tf:defs.bzl", "tf_library")
+
+# A relative path into another Bazel repository's files, whose location in
+# the work tree depends on Bazel's canonical repository names. Such a module is
+# called by its module_source instead.
+tf_library(
+    name = "lib",
+    srcs = ["main.tf"],
+    fmt_test = False,
+)

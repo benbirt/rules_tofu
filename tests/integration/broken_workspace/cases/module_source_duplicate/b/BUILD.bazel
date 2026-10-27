@@ -1,0 +1,10 @@
+load("@rules_tofu//tf:defs.bzl", "tf_library")
+
+tf_library(
+    name = "b",
+    srcs = ["main.tf"],
+    fmt_test = False,
+    module_source = "Acme/Network/null",
+    module_version = "1.0.0",
+    visibility = ["//cases/module_source_duplicate:__pkg__"],
+)

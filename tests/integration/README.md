@@ -18,7 +18,7 @@ tests/integration/
 │       ├── conflicting_providers/{BUILD.bazel, main.tf}
 │       ├── duplicate_vars/{BUILD.bazel, main.tf, extra.tfvars.json}
 │       ├── ephemeral_state_refused/{BUILD.bazel, main.tf}
-│       ├── external_module_ref/{BUILD.bazel, main.tf}
+│       ├── module_*/            module_source misuses (see BUILD.bazel)
 │       ├── lock_file_smuggled/{BUILD.bazel, main.tf, .terraform.lock.hcl}
 │       ├── malformed_var_file/{BUILD.bazel, main.tf, bad.tfvars.json}
 │       ├── missing_provider/{BUILD.bazel, main.tf}
@@ -30,12 +30,20 @@ tests/integration/
         └── duplicate_root_version/{BUILD.bazel, main.tf}
 ```
 
-`lock_update/` and its driver `lock_update_test.sh` are the one positive
+`lock_update/` and its driver `lock_update_test.sh` are a positive
 test: a workspace's first `@tf_providers//:pin`, with the provider already
 named in a BUILD file, then a provider update made the way Dependabot or
 Renovate makes it (`versions.tf` and `.terraform.lock.hcl` only, from
 `bumped.lock.hcl`), which must build with `--lockfile_mode=error` and leave
 `MODULE.bazel.lock` unchanged.
+
+`module_dependency/` and its driver `module_dependency_test.sh` are the
+other: `//app` calls a `tf_library` from the `network_module` Bazel module
+by its `module_source`, and that library calls one from `dns_module` by
+its own. Everything must build, each external library on its own too, and
+`//app:app.plan` must plan. The generated module manifest is tofu's
+internal format, so there is one `module_dependency_<version>_test` per
+tofu version in `toolchain/versions.bzl`.
 
 `broken_workspace` shares one `MODULE.bazel` across all of its cases, so a
 case whose failure lives in the module graph cannot go there — it gets a

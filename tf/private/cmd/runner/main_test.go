@@ -13,6 +13,9 @@ import (
 
 var runnerBinPath = flag.String("runner", "", "path to the runner binary under test")
 
+// testManifest stands in for the module manifest tf_deploy generates.
+const testManifest = `{"Modules":[{"Key":"","Source":"","Dir":"."}]}`
+
 func runnerBin(t *testing.T) string {
 	t.Helper()
 	if *runnerBinPath == "" {
@@ -148,12 +151,17 @@ func setupPkg(t *testing.T, vars map[string]any, pkgDir string) (
 	}
 
 	pluginDir := filepath.Join(workTree, pkgDir, ".rules_tofu-plugins")
+	modulesManifest := filepath.Join(dir, "modules.json")
+	if err := os.WriteFile(modulesManifest, []byte(testManifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	cmd = exec.Command(bin,
 		"--tofu="+fakeTofuSh,
 		"--work-tree="+workTree,
 		"--package-dir="+pkgDir,
 		"--plugin-dir="+pluginDir,
+		"--modules-manifest="+modulesManifest,
 		"--state-dir="+filepath.Join(dir, "state"),
 		"--command=plan",
 	)
@@ -183,6 +191,13 @@ func TestRunner_NoVarFiles(t *testing.T) {
 	}
 	if !init.hasArgWithPrefix("-plugin-dir=") {
 		t.Errorf("init invocation missing -plugin-dir=, got args: %v", init.args)
+	}
+	if !init.hasArg("-get=false") {
+		t.Errorf("init invocation missing -get=false, got args: %v", init.args)
+	}
+	installed, err := os.ReadFile(filepath.Join(init.cwd, ".terraform", "modules", "modules.json"))
+	if err != nil || string(installed) != testManifest {
+		t.Errorf("module manifest not installed before init: %q, %v", installed, err)
 	}
 	plan := invs[1]
 	if !plan.hasArg("plan") {
@@ -563,6 +578,7 @@ func TestRunner_MissingRequiredFlags(t *testing.T) {
 		"--command",
 		"--state-dir",
 		"--plugin-dir",
+		"--modules-manifest",
 	}
 	for _, flagName := range requiredFlags {
 		flagName := flagName

@@ -15,11 +15,16 @@ When providers come from `tf_providers.from_lock`, the workspace's lock is
 copied next to the configuration (after the check that refuses a lock in
 `srcs`/`data`), so init fails when the configuration's version constraints
 no longer match it, and checks the vendored packages against its hashes.
+
+Modules are never fetched either: `.terraform/modules/modules.json` (from
+`modules_manifest` in work_tree.bzl) records where in the work tree each
+module call's files are, and `-get=false` makes init fail rather than fetch
+when a call's `source` or `version` no longer matches it.
 """
 
 load("//toolchain:toolchain.bzl", "TOOLCHAIN_TYPE")
 
-def tf_init_validate(ctx, work_tree_files, work_tree_root, package_dir, plugin_tree_root, lock = None):
+def tf_init_validate(ctx, work_tree_files, work_tree_root, package_dir, plugin_tree_root, modules_manifest, lock = None):
     """Emit a build-time `tofu init -backend=false` + `tofu validate` action.
 
     Args:
@@ -34,6 +39,8 @@ def tf_init_validate(ctx, work_tree_files, work_tree_root, package_dir, plugin_t
       plugin_tree_root: string, exec-root-relative path to the sibling plugin
           tree root, e.g. `<bin>/<pkg>/<name>.plugins`. Pinned via
           `-plugin-dir` so init runs offline.
+      modules_manifest: File, the `.terraform/modules/modules.json` recording
+          every module call (see `modules_manifest` in work_tree.bzl).
       lock: optional File, the `.terraform.lock.hcl` pinning the providers
           (see `provider_lock` in work_tree.bzl).
 
@@ -53,7 +60,7 @@ def tf_init_validate(ctx, work_tree_files, work_tree_root, package_dir, plugin_t
     # copied. Bazel cleans up the action's sandbox on exit, so the copy is
     # throwaway — no explicit `rm -rf` needed.
     ctx.actions.run_shell(
-        inputs = depset(direct = [tofu.binary] + ([lock] if lock else []), transitive = [work_tree_files]),
+        inputs = depset(direct = [tofu.binary, modules_manifest] + ([lock] if lock else []), transitive = [work_tree_files]),
         outputs = [stamp],
         command = """\
 set -euo pipefail
@@ -62,7 +69,8 @@ WORK_TREE_ROOT=$2
 PACKAGE_DIR=$3
 PLUGIN_TREE_ROOT=$4
 STAMP=$5
-LOCK=${6:-}
+MODULES=$6
+LOCK=${7:-}
 # Resolve the input plugin tree to an absolute path up front: tofu resolves a
 # relative -plugin-dir against the -chdir directory, and $PWD here is the
 # action's exec root. The script never cd's, so capturing $PWD inline is safe.
@@ -85,16 +93,25 @@ fi
 if [ -n "$LOCK" ]; then
     cp "$LOCK" "$CWD/.terraform.lock.hcl"
 fi
+# Every module call is already in the work tree; the manifest says where, and
+# -get=false makes init check the calls against it rather than fetch.
+mkdir -p "$CWD/.terraform/modules"
+cp "$MODULES" "$CWD/.terraform/modules/modules.json"
 # Redirect init stdout to suppress "Installing provider" progress spam.
 # Stderr is kept so error messages (e.g. "Failed to query available provider
 # packages") and the "Incomplete lock file" warning remain visible.
 # There is no flag to skip lockfile generation — the lockfile is written into
 # $SCRATCH and discarded with it. (Not -lockfile=readonly: that also fails on
 # lock entries this configuration doesn't use.)
-if ! "$TOFU" -chdir="$CWD" init -backend=false -input=false -plugin-dir="$PLUGIN_DIR" >/dev/null; then
+if ! "$TOFU" -chdir="$CWD" init -backend=false -input=false -get=false -plugin-dir="$PLUGIN_DIR" >/dev/null; then
     if [ -n "$LOCK" ]; then
         echo 'rules_tofu: if the provider versions in required_providers changed, run' \
              '`bazel run @tf_providers//:pin` to update the lock file.' 1>&2
+    fi
+    if grep -q '"Key":"[^"]' "$MODULES"; then
+        echo 'rules_tofu: modules are never fetched, so ignore any advice to run `tofu init`:' \
+             "each module call's source and version must match the tf_library in deps that provides it" \
+             '(its module_source and module_version).' 1>&2
     fi
     exit 1
 fi
@@ -107,6 +124,7 @@ touch "$STAMP"
             package_dir,
             plugin_tree_root,
             stamp.path,
+            modules_manifest.path,
         ] + ([lock.path] if lock else []),
         env = {"TF_IN_AUTOMATION": "1"},
         mnemonic = "TofuValidate",

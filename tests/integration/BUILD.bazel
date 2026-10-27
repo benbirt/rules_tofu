@@ -20,6 +20,7 @@ load(
     "integration_test_utils",
 )
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+load("//toolchain:versions.bzl", "KNOWN_VERSIONS")
 
 sh_binary(
     name = "assert_bazel_fails",
@@ -50,7 +51,11 @@ _CASES = [
     ("missing_provider", "broken_workspace", "//cases/missing_provider:missing", "Failed to query available provider packages"),
     ("lock_file_smuggled", "broken_workspace", "//cases/lock_file_smuggled:smuggled", "refusing to validate"),
     ("auto_tfvars_conflict", "broken_workspace", "//cases/auto_tfvars_conflict:deploy", "collides with the generated"),
-    ("external_module_ref", "broken_workspace", "//cases/external_module_ref:lib", "external Bazel module"),
+    ("module_source_missing", "broken_workspace", "//cases/module_source_missing:lib", "no dep provides source"),
+    ("module_dep_unused", "broken_workspace", "//cases/module_dep_unused:lib", "no module call uses"),
+    ("module_source_duplicate", "broken_workspace", "//cases/module_source_duplicate:lib", "both have module_source"),
+    ("module_version_mismatch", "broken_workspace", "//cases/module_version_mismatch:lib", "is no longer acceptable"),
+    ("module_local_external", "broken_workspace", "//cases/module_local_external:lib", "is in another Bazel repository"),
     ("malformed_var_file", "broken_workspace", "//cases/malformed_var_file:deploy", "parse:"),
     ("conflicting_providers", "broken_workspace", "//cases/conflicting_providers:lib", "conflicting versions"),
     ("registry_sha256_mismatch", "broken_workspace", "//cases/registry_sha256_mismatch:lib", "but the registry reports"),
@@ -117,7 +122,7 @@ _TAGS = [
     for (case_name, workspace, target, pattern) in _RUN_CASES
 ]
 
-# The one positive test: a workspace's first `pin`, then a provider update
+# A positive test: a workspace's first `pin`, then a provider update
 # as Dependabot or Renovate makes it (versions.tf and .terraform.lock.hcl
 # only), which must build with MODULE.bazel.lock untouched. See
 # lock_update_test.sh.
@@ -138,3 +143,30 @@ bazel_integration_test(
     ],
     workspace_path = "lock_update",
 )
+
+# The other positive test: a root module calls a tf_library from another
+# Bazel module by its module_source, which in turn calls one from a third,
+# and builds and plans offline. The module manifest this relies on is tofu's
+# internal format, so it runs with every tofu version rules_tofu pins. See
+# module_dependency_test.sh.
+sh_binary(
+    name = "module_dependency_driver",
+    srcs = ["module_dependency_test.sh"],
+)
+
+[
+    bazel_integration_test(
+        name = "module_dependency_{}_test".format(version.replace(".", "_")),
+        timeout = "moderate",
+        bazel_binaries = bazel_binaries,
+        bazel_version = bazel_binaries.versions.current,
+        env = {"TOFU_VERSION": version},
+        tags = _TAGS,
+        test_runner = ":module_dependency_driver",
+        workspace_files = integration_test_utils.glob_workspace_files("module_dependency") + [
+            "//:local_repository_files",
+        ],
+        workspace_path = "module_dependency",
+    )
+    for version in KNOWN_VERSIONS
+]

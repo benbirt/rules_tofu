@@ -29,13 +29,22 @@ TfProviderInfo = provider(
 )
 
 # An entry in `transitive_files` is a `struct(path, file)`, where `path` is
-# the workspace-relative path at which the file should appear in the
-# materialized working tree.
+# the path at which the file should appear in the materialized working tree:
+# workspace-relative for the main repository, `external/<repo>/...` for others
+# (see `work_tree_path`).
+#
+# A library with `module_source` is a module that HCL calls by that address
+# rather than by a relative path: `module` is then a
+# `struct(label, source, version, dir)`, where `dir` is the library's
+# directory in the work tree, and `modules` carries it to the roots that
+# write the call into their `.terraform/modules/modules.json`.
 TfLibraryInfo = provider(
     doc = "Carries the .tf and data files contributed by a tf_library and all its transitive library deps.",
     fields = {
         "transitive_files": "depset[struct(path, file)] of .tf and arbitrary data files across the dep graph.",
         "providers": "depset[TfProviderInfo]: providers contributed by this library and its transitive deps.",
+        "module": "struct(label, source, version, dir) or None: this library's `module_source`, if it sets one.",
+        "modules": "depset[struct(label, source, version, dir)]: `module` of this library and its transitive deps.",
     },
 )
 
@@ -51,6 +60,8 @@ TfDeployInfo = provider(
         "package_dir": "string: workspace-relative directory the runner cd's into before running tofu.",
         "var_file_relpaths": "list[string]: workspace-relative paths of -var-file inputs, in declaration order.",
         "lock": "File or None: the `.terraform.lock.hcl` to place next to the configuration before `tofu init`.",
+        "modules_manifest": "File: the `.terraform/modules/modules.json` to place next to the configuration " +
+                            "before `tofu init -get=false`.",
         "allow_ephemeral_state": "bool: whether this deploy opts in to local, disposable state. When False " +
                                  "(the default) the runner refuses `apply`/`destroy` unless the deploy declares " +
                                  "a `backend`/`cloud` block, because local state lives under bazel-bin and is " +

@@ -99,6 +99,8 @@ values and is not runnable on its own.
 | `deps`      | Dependency `tf_library` targets. |
 | `data`      | Extra files placed in the work tree for `file()` and `templatefile()`. |
 | `providers` | Providers the library's files require, as `@tf_providers//<namespace>/<name>`. |
+| `module_source` | The address by which other modules call this one, e.g. `git::https://example.com/acme/network.git?ref=v1.0.0`. See [Modules from other repositories](#modules-from-other-repositories). |
+| `module_version` | This module's version, required when `module_source` is a registry address. |
 | `fmt_test`  | Generate the `.fmt_check` test (default `True`). |
 
 ### `tf_deploy`
@@ -370,6 +372,55 @@ Terraform treats any `source` that doesn't start with `./` or `../` as a
 registry address. To reach across the tree, climb to the workspace root and
 back down, for example `../../infra/dns`.
 
+### Modules from other repositories
+
+A relative path can't reach a `tf_library` in another Bazel repository, such
+as one from a `bazel_dep`. Such a library sets `module_source`, the address
+that users outside Bazel would write, and callers use that address:
+
+```starlark
+# BUILD.bazel in the repository that ships the module
+tf_library(
+    name = "vpc",
+    srcs = glob(["**/*.tf"]),
+    module_source = "git::https://github.com/acme/infra.git//vpc?ref=v1.2.0",
+    visibility = ["//visibility:public"],
+)
+```
+
+```starlark
+# BUILD.bazel in the caller
+tf_library(
+    name = "network",
+    srcs = ["main.tf"],
+    deps = ["@acme_infra//vpc"],
+)
+```
+
+```hcl
+module "vpc" {
+  source = "git::https://github.com/acme/infra.git//vpc?ref=v1.2.0"
+}
+```
+
+A call matches a library in `deps` (direct or transitive) whose
+`module_source` is its `source`, or whose `module_source` plus `//<subdir>`
+is. For a registry address, also set `module_version`; a call's `version`
+constraint must accept it. Registry addresses match as OpenTofu compares
+them, ignoring case and the default `registry.opentofu.org/` host. Other
+addresses must match exactly, `?ref=` included.
+
+No module is ever fetched. rules_tofu records where each call's files are in
+`.terraform/modules/modules.json`, as `tofu init` does after installing
+modules, and runs `tofu init -get=false`. The build fails when:
+
+- a call's `source` matches no library in `deps`;
+- a library in `deps` with `module_source` matches no call;
+- two libraries have the same `module_source`;
+- a call's `version` constraint rejects the matching `module_version`.
+
+A `source` must be a literal string.
+
 ## How it works
 
 `tf_deploy` symlinks every transitive `.tf` file, plus `data` and
@@ -378,9 +429,13 @@ path, and writes `vars` to `rules_tofu.auto.tfvars.json` there. Building
 the target runs `tofu init -backend=false && tofu validate` over that tree
 as a cached action.
 
+Files from other Bazel repositories go under `external/<repository>/` in the
+work tree, and a generated `.terraform/modules/modules.json` records the
+directory of every module call.
+
 At run time a small Go launcher enters the work tree and runs
-`tofu init -input=false -plugin-dir=<vendored providers>`, which disables
-plugin auto-installation, then the requested command. `var_files` are
+`tofu init -input=false -get=false -plugin-dir=<vendored providers>`, which
+disables module and plugin installation, then the requested command. `var_files` are
 passed to every command with `-var-file`.
 
 ## Restrictions
@@ -388,9 +443,10 @@ passed to every command with `-var-file`.
 - `srcs` accepts `.tf`, `.tf.json`, `.tftpl` and `.hcl` only. Variable
   files are rejected there: values come through `vars` or `var_files`.
 - `apply` and `destroy` need a backend block or `allow_ephemeral_state`.
-- Files from other Bazel modules can't be part of a deploy. The runner has
-  no workspace-relative path for them that local module addressing can
-  reach.
+- A module call can't use a relative path to reach files in another Bazel
+  repository; it uses the library's `module_source`.
+- Registry modules and git or https sources are only usable through a
+  `tf_library` with that `module_source`; rules_tofu doesn't fetch them yet.
 
 ## Known gaps
 

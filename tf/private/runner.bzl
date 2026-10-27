@@ -22,33 +22,23 @@ def _tf_runner_impl(ctx):
     runner_rel = runfiles_path(workspace_name, runner_bin)
     tofu_rel = runfiles_path(workspace_name, tofu.binary)
 
-    # The work tree root in runfiles is `<workspace>/<pkg>/<name>.work`,
-    # because the deploy's outputs are declared at
-    # `<pkg>/<name>.work/<workspace-relative-path>`.
-    work_tree_root = "{ws}/{pkg}/{name}.work".format(
-        ws = workspace_name,
-        pkg = ctx.attr.deploy.label.package,
-        name = ctx.attr.deploy.label.name,
-    )
-
-    # The plugin tree is a sibling of the work tree, at
-    # `<workspace>/<pkg>/<name>.plugins`. Derived from the deploy's label the
-    # same way as the work tree root — the deploy doesn't need to carry it.
-    plugin_tree_root = "{ws}/{pkg}/{name}.plugins".format(
-        ws = workspace_name,
-        pkg = ctx.attr.deploy.label.package,
-        name = ctx.attr.deploy.label.name,
-    )
+    # The deploy's outputs are declared in its package, so the work tree root
+    # in runfiles is `<package in runfiles>/<name>.work` and the plugin tree
+    # its sibling `<name>.plugins`. The package's runfiles directory is the
+    # one holding the deploy's module manifest, `<name>.modules.json`, which
+    # also covers a deploy in another repository.
+    package_rel = runfiles_path(workspace_name, deploy.modules_manifest).rpartition("/")[0]
+    work_tree_root = "{}/{}.work".format(package_rel, ctx.attr.deploy.label.name)
+    plugin_tree_root = "{}/{}.plugins".format(package_rel, ctx.attr.deploy.label.name)
 
     # State lives at the deploy's `$(RULEDIR)/<name>.rules_tofu-state` —
     # i.e. `bazel-out/<config>/bin/<pkg>/<name>.rules_tofu-state`. That
     # path is already covered by the standard `bazel-*` gitignore and is
     # wiped by `bazel clean`. Bake the relative path here; the launcher
     # joins it with `$BUILD_WORKSPACE_DIRECTORY` at runtime.
-    state_dir_rel = "{bin}/{pkg}/{name}.rules_tofu-state".format(
-        bin = ctx.bin_dir.path,
-        pkg = ctx.attr.deploy.label.package,
-        name = ctx.attr.deploy.label.name,
+    state_dir_rel = "{}/{}.rules_tofu-state".format(
+        deploy.modules_manifest.dirname,
+        ctx.attr.deploy.label.name,
     )
 
     var_file_flags = "".join([
@@ -81,6 +71,7 @@ exec "$R/{runner}" \\
     --work-tree="$R/{work_tree}" \\
     --package-dir="{pkg}" \\
     --plugin-dir="$R/{plugin_tree}" \\
+    --modules-manifest="$R/{modules_manifest}" \\
     --state-dir="${{BUILD_WORKSPACE_DIRECTORY:?must be invoked via 'bazel run'}}/{state_dir_rel}" \\
     --command="{command}" \\
 {ephemeral_state_flag}{lock_flag}{var_file_flags}    -- "$@"
@@ -89,6 +80,7 @@ exec "$R/{runner}" \\
             tofu = tofu_rel,
             work_tree = work_tree_root,
             plugin_tree = plugin_tree_root,
+            modules_manifest = runfiles_path(workspace_name, deploy.modules_manifest),
             pkg = deploy.package_dir,
             state_dir_rel = state_dir_rel,
             command = ctx.attr.command,
@@ -99,7 +91,7 @@ exec "$R/{runner}" \\
     )
 
     runfiles = ctx.runfiles(
-        files = [tofu.binary] + ([deploy.lock] if deploy.lock else []) + deploy.work_tree_files.to_list(),
+        files = [tofu.binary, deploy.modules_manifest] + ([deploy.lock] if deploy.lock else []) + deploy.work_tree_files.to_list(),
     ).merge(ctx.attr._runner_bin[DefaultInfo].default_runfiles)
 
     return [DefaultInfo(executable = out, runfiles = runfiles)]

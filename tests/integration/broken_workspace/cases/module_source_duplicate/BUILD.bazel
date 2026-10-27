@@ -1,0 +1,13 @@
+load("@rules_tofu//tf:defs.bzl", "tf_library")
+
+# Two deps claiming one address (registry addresses ignore case), which would
+# leave the call ambiguous.
+tf_library(
+    name = "lib",
+    srcs = ["main.tf"],
+    fmt_test = False,
+    deps = [
+        "//cases/module_source_duplicate/a",
+        "//cases/module_source_duplicate/b",
+    ],
+)

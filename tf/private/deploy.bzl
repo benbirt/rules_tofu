@@ -34,16 +34,21 @@ load(":var_files_check.bzl", "DUPCHECK_BIN", _tf_check_var_files = "tf_check_var
 load(
     ":work_tree.bzl",
     "ALLOWED_SRC_EXTS",
+    "MODULES_BIN",
+    _files_entries = "files_entries",
     _materialize = "materialize",
     _materialize_plugin_tree = "materialize_plugin_tree",
+    _modules_manifest = "modules_manifest",
+    _package_dir = "package_dir",
     _plugin_tree_root = "plugin_tree_root",
     _provider_lock = "provider_lock",
+    _work_tree_path = "work_tree_path",
     _work_tree_root = "work_tree_root",
 )
 
 def _tf_deploy_impl(ctx):
-    direct = [struct(path = f.short_path, file = f) for f in ctx.files.srcs + ctx.files.data]
-    var_file_entries = [struct(path = f.short_path, file = f) for f in ctx.files.var_files]
+    direct = _files_entries(ctx.files.srcs + ctx.files.data)
+    var_file_entries = _files_entries(ctx.files.var_files)
     transitive = [d[TfLibraryInfo].transitive_files for d in ctx.attr.deps]
     entries = depset(direct = direct + var_file_entries, transitive = transitive).to_list()
 
@@ -53,6 +58,7 @@ def _tf_deploy_impl(ctx):
     )
 
     outputs = _materialize(ctx, entries, tfvars_content = tfvars_content)
+    modules_manifest = _modules_manifest(ctx, outputs, ctx.attr.deps)
 
     # Aggregate providers: direct + transitive via library deps.
     direct_providers = [p[TfProviderInfo] for p in ctx.attr.providers]
@@ -71,7 +77,8 @@ def _tf_deploy_impl(ctx):
         ctx,
         work_tree_files = work_tree_files,
         work_tree_root = _work_tree_root(ctx),
-        package_dir = ctx.label.package,
+        package_dir = _package_dir(ctx.label),
+        modules_manifest = modules_manifest,
         plugin_tree_root = _plugin_tree_root(ctx),
         lock = lock,
     )
@@ -90,8 +97,9 @@ def _tf_deploy_impl(ctx):
         DefaultInfo(files = depset(direct = default_files, transitive = [work_tree_files])),
         TfDeployInfo(
             work_tree_files = work_tree_files,
-            package_dir = ctx.label.package,
-            var_file_relpaths = [f.short_path for f in ctx.files.var_files],
+            package_dir = _package_dir(ctx.label),
+            modules_manifest = modules_manifest,
+            var_file_relpaths = [_work_tree_path(f) for f in ctx.files.var_files],
             allow_ephemeral_state = ctx.attr.allow_ephemeral_state,
             lock = lock,
         ),
@@ -141,6 +149,11 @@ tf_deploy_rule = rule(
         ),
         "_dupcheck_bin": attr.label(
             default = DUPCHECK_BIN,
+            executable = True,
+            cfg = "exec",
+        ),
+        "_modules_bin": attr.label(
+            default = MODULES_BIN,
             executable = True,
             cfg = "exec",
         ),
