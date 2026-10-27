@@ -30,6 +30,13 @@ tests/integration/
         └── duplicate_root_version/{BUILD.bazel, main.tf}
 ```
 
+`lock_update/` and its driver `lock_update_test.sh` are the one positive
+test: a workspace's first `@tf_providers//:pin`, with the provider already
+named in a BUILD file, then a provider update made the way Dependabot or
+Renovate makes it (`versions.tf` and `.terraform.lock.hcl` only, from
+`bumped.lock.hcl`), which must build with `--lockfile_mode=error` and leave
+`MODULE.bazel.lock` unchanged.
+
 `broken_workspace` shares one `MODULE.bazel` across all of its cases, so a
 case whose failure lives in the module graph cannot go there — it gets a
 sub-workspace of its own. `BUILD.bazel` names the workspace per case row

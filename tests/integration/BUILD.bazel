@@ -116,3 +116,25 @@ _TAGS = [
     )
     for (case_name, workspace, target, pattern) in _RUN_CASES
 ]
+
+# The one positive test: a workspace's first `pin`, then a provider update
+# as Dependabot or Renovate makes it (versions.tf and .terraform.lock.hcl
+# only), which must build with MODULE.bazel.lock untouched. See
+# lock_update_test.sh.
+sh_binary(
+    name = "lock_update_driver",
+    srcs = ["lock_update_test.sh"],
+)
+
+bazel_integration_test(
+    name = "lock_update_test",
+    timeout = "moderate",
+    bazel_binaries = bazel_binaries,
+    bazel_version = bazel_binaries.versions.current,
+    tags = _TAGS,
+    test_runner = ":lock_update_driver",
+    workspace_files = integration_test_utils.glob_workspace_files("lock_update") + [
+        "//:local_repository_files",
+    ],
+    workspace_path = "lock_update",
+)

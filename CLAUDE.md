@@ -71,12 +71,17 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   rules_tofu uses is the root module's `tf_providers.from_lock` file, which
   `@tf_providers//:pin` writes into the user's tree. Every provider download
   is gated on a per-platform
-  digest: the `sha256` pinned on its `tf_providers.provider(...)` tag, or,
-  for a tag that pins none and for a locked provider, the OpenTofu
-  registry's, recorded as a fact in
-  `MODULE.bazel.lock` (keyed `<source>@<version>`). A locked provider's
-  digest must also be one of the lock's `zh:` hashes (`lock_sha256s` in
-  `tf/providers/lock.bzl`), checked on every evaluation, facts or not. The table in
+  digest: the `sha256` pinned on its `tf_providers.provider(...)` tag; for
+  a tag that pins none, the OpenTofu registry's, recorded as a fact in
+  `MODULE.bazel.lock` (keyed `<source>@<version>`); for a locked provider,
+  the registry's, accepted only if it is one of the lock's `zh:` hashes
+  (`lock_sha256s` in `tf/providers/lock.bzl`). A locked provider's digests
+  are resolved and checked by its repository rule when fetched
+  (`_locked_downloads`), never in the extension, and are never facts: the
+  lock is the whole pin, so a bot that updates only `.terraform.lock.hcl`
+  (and `versions.tf`) leaves `MODULE.bazel.lock` valid.
+  `//tests/integration:lock_update_test` guards this; don't move the
+  lookup back into the extension. The table in
   `toolchain/versions.bzl` pins tofu itself. The repository cache keys on
   these digests. Both extensions declare `reproducible = True`, so their
   repo specs deliberately do *not* appear in `MODULE.bazel.lock`; the
@@ -117,7 +122,11 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
 - `pin` (`tf/private/cmd/pin`) locks against the `required_providers` of
   every `tf_library`/`tf_deploy` in the main repository, found with
   `bazel query` (run from inside `bazel run`; `$BAZEL` overrides the
-  binary). Only `.tf` files in those rules count, a `versions.tf` included:
+  binary). The query runs with `--keep_going` and accepts partial results
+  (exit 3): `deps()` follows `providers` into the hub, which has no package
+  for a provider until it is locked, so without it the first `pin` fails
+  wherever a BUILD file already names the provider (also covered by
+  `lock_update_test`). Only `.tf` files in those rules count, a `versions.tf` included:
   don't reintroduce a filesystem walk, which would have to duplicate
   Bazel's own `.bazelignore`/deleted-package/nested-workspace handling. A
   `versions.tf` beside the lock is strongly recommended but optional;
@@ -223,7 +232,8 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
 - The `.bazelversion` copies (root, `e2e/smoke`,
   `tests/integration/broken_workspace`,
   `tests/integration/broken_module`,
-  `tests/integration/lock_dependency`) must stay byte-identical: nested
+  `tests/integration/lock_dependency`,
+  `tests/integration/lock_update`) must stay byte-identical: nested
   modules are separate bazelisk boundaries that never see the root pin.
   CI's lint job `cmp`s every nested copy against the root; bump them all
   together.
