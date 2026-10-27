@@ -34,6 +34,14 @@ bazel_dep(name = "gazelle", version = "0.40.0")
 go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
 go_sdk.download(version = "1.26.3")
 
+# The host Go SDK, which compiles the .terraform.lock.hcl reader that
+# tf_providers.from_lock runs (see tf/providers/lock_reader.bzl).
+use_repo(go_sdk, "go_host_compatible_sdk_label")
+
+lock_reader = use_repo_rule("//tf/providers:lock_reader.bzl", "lock_reader")
+
+lock_reader(name = "rules_tofu_lock_reader")
+
 go_deps = use_extension("@gazelle//:extensions.bzl", "go_deps")
 go_deps.from_file(go_mod = "//:go.mod")
 use_repo(

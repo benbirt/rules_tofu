@@ -97,7 +97,7 @@ See `examples/aws/`, `examples/gcp/`, `examples/posthog/` and
 `examples/lock/` in-tree for full end-to-end uses.
 """
 
-load(":lock.bzl", "lock_sha256s", "parse_lock")
+load(":lock.bzl", "lock_entries", "lock_sha256s")
 load(
     ":source.bzl",
     "DEFAULT_HOST",
@@ -532,6 +532,17 @@ _from_lock_tag = tag_class(
     },
 )
 
+# Compiled by //tf/providers:lock_reader.bzl; see //tf/private/cmd/lockjson.
+_LOCK_READER = Label("@rules_tofu_lock_reader//:lockjson")
+
+def _decode_lock(module_ctx, path, label):
+    """The lock's provider entries, as `lockjson` decodes them."""
+    result = module_ctx.execute([module_ctx.path(_LOCK_READER), str(path)])
+    if result.return_code != 0:
+        fail(("{} could not be read:\n{}\nFix the file, or delete it and run " +
+              "`bazel run @tf_providers//:pin` to write a fresh one.").format(label, result.stderr.strip()))
+    return json.decode(result.stdout)["providers"]
+
 def _read_lock(module_ctx, mod):
     """The root module's `from_lock` tag, read: `struct(label, lock_dir, entries)`, or None."""
     tags = mod.tags.from_lock
@@ -552,7 +563,7 @@ def _read_lock(module_ctx, mod):
     module_ctx.watch(path)
     entries = []
     if path.exists:
-        parsed = parse_lock(module_ctx.read(path))
+        parsed = lock_entries(_decode_lock(module_ctx, path, label))
         if parsed.error:
             fail(("{}: {}\nFix the file, or delete it and run `bazel run @tf_providers//:pin` " +
                   "to write a fresh one.").format(label, parsed.error))

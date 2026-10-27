@@ -103,6 +103,17 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   with `error` set that fails when fetched, never a `fail()` in the
   extension: that would also break `@tf_providers//:pin`, the way to fix
   it. Only an unparseable file fails the extension.
+- The lock is parsed by `lockjson` (`tf/private/cmd/lockjson`, using
+  `hashicorp/hcl`'s `gohcl`), not in Starlark: don't reintroduce a
+  hand-written parser. An extension can't run Bazel-built tools, so
+  `tf/providers/lock_reader.bzl` compiles it with rules_go's host Go SDK
+  (`@go_host_compatible_sdk_label`), as Gazelle's `go_repository_tools`
+  does, into `@rules_tofu_lock_reader` (a non-dev `use_repo_rule` in
+  `MODULE.bazel`). Its Go module deps come through `GOPROXY`, checked
+  against `go.sum`, under `-mod=readonly`, so `go.mod` must stay tidy for
+  `lockjson` too. `lockjson` only parses; what an entry must contain
+  (host, `version`, `zh:` hashes, no duplicates) is `lock_entries` in
+  `tf/providers/lock.bzl`, unit-tested in Starlark.
 - `pin` (`tf/private/cmd/pin`) locks against the `required_providers` of
   every `tf_library`/`tf_deploy` in the main repository, found with
   `bazel query` (run from inside `bazel run`; `$BAZEL` overrides the

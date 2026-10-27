@@ -15,6 +15,7 @@ filegroup(
         "//tf/private:all_files",
         "//tf/private/cmd/dupcheck:all_files",
         "//tf/private/cmd/internal/flags:all_files",
+        "//tf/private/cmd/lockjson:all_files",
         "//tf/private/cmd/pin:all_files",
         "//tf/private/cmd/runner:all_files",
         "//tf/providers:all_files",
