@@ -1,0 +1,10 @@
+load("@rules_tofu//tf:defs.bzl", "tf_library")
+
+# Declares only a constraint, and leaves the version to the root module.
+tf_library(
+    name = "lib",
+    srcs = ["main.tf"],
+    fmt_test = False,
+    providers = ["@tf_providers//hashicorp/null"],
+    visibility = ["//visibility:public"],
+)

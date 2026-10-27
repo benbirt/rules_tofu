@@ -47,6 +47,7 @@ def _tf_provider_impl(ctx):
             version = ctx.attr.version,
             binaries = binaries,
             package_files = package_files,
+            lock = ctx.file.lock,
         ),
     ]
 
@@ -73,6 +74,11 @@ tf_provider = rule(
             allow_files = True,
             doc = "The rest of each platform's unpacked zip (LICENSE, README...) -> " +
                   "`<os>_<arch>` platform key, under `plugins/` like the binaries.",
+        ),
+        "lock": attr.label(
+            allow_single_file = True,
+            doc = "The `.terraform.lock.hcl` this provider was pinned by, if any. " +
+                  "Builds copy it next to the configuration before `tofu init`.",
         ),
     },
     provides = [TfProviderInfo],

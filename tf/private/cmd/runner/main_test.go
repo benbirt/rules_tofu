@@ -899,3 +899,48 @@ func TestRunner_EmptyPackageDir_RunsAtWorkTreeRoot(t *testing.T) {
 		}
 	}
 }
+
+// TestRunner_LockFile_CopiedBeforeInit verifies that --lock-file lands at
+// <cwd>/.terraform.lock.hcl, replacing a lock left by an earlier run (as tofu
+// leaves one in the runfiles tree), so init checks against the pinned lock.
+func TestRunner_LockFile_CopiedBeforeInit(t *testing.T) {
+	cmd, _, invocations := setup(t, map[string]any{})
+	cwd := filepath.Join(argValue(t, cmd, "--work-tree"), "mypkg")
+	stale := filepath.Join(cwd, ".terraform.lock.hcl")
+	if err := os.WriteFile(stale, []byte("# stale\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	lock := filepath.Join(t.TempDir(), ".terraform.lock.hcl")
+	const want = "provider \"registry.opentofu.org/hashicorp/null\" {\n  version = \"3.2.4\"\n}\n"
+	if err := os.WriteFile(lock, []byte(want), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	cmd.Args = append(cmd.Args, "--lock-file="+lock)
+
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
+	}
+	got, err := os.ReadFile(stale)
+	if err != nil {
+		t.Fatalf("read copied lock: %v", err)
+	}
+	if string(got) != want {
+		t.Errorf("lock in work tree = %q, want %q", got, want)
+	}
+	if invs := invocations(); len(invs) == 0 || !invs[0].hasArg("init") {
+		t.Errorf("expected init to run, got %+v", invs)
+	}
+}
+
+// TestRunner_NoLockFile_LeavesWorkTreeAlone verifies that without --lock-file
+// the runner writes no lock of its own.
+func TestRunner_NoLockFile_LeavesWorkTreeAlone(t *testing.T) {
+	cmd, _, _ := setup(t, map[string]any{})
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
+	}
+	lock := filepath.Join(argValue(t, cmd, "--work-tree"), "mypkg", ".terraform.lock.hcl")
+	if _, err := os.Stat(lock); !os.IsNotExist(err) {
+		t.Errorf("expected no lock at %s, got err=%v", lock, err)
+	}
+}

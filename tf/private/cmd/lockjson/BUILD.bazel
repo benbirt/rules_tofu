@@ -1,0 +1,34 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+
+# Built with Bazel only for its tests: the tf_providers extension can't run
+# Bazel-built tools, so //tf/providers:lock_reader.bzl compiles the same
+# source with the host Go SDK.
+go_library(
+    name = "lockjson_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/benbirt/rules_tofu/tf/private/cmd/lockjson",
+    visibility = ["//visibility:private"],
+    deps = [
+        "@com_github_hashicorp_hcl_v2//:hcl",
+        "@com_github_hashicorp_hcl_v2//gohcl",
+        "@com_github_hashicorp_hcl_v2//hclparse",
+    ],
+)
+
+go_binary(
+    name = "lockjson",
+    embed = [":lockjson_lib"],
+    visibility = ["//visibility:private"],
+)
+
+go_test(
+    name = "lockjson_test",
+    srcs = ["main_test.go"],
+    embed = [":lockjson_lib"],
+)
+
+filegroup(
+    name = "all_files",
+    srcs = glob(["*"]),
+    visibility = ["//:__subpackages__"],
+)

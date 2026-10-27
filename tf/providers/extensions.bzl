@@ -70,13 +70,38 @@ passed to `tf_library`/`tf_deploy` via their `providers` attribute. A digest, pi
 download, so the provider tree is reproducible and is fetched once per
 workspace.
 
-See `examples/aws/`, `examples/gcp/` and `examples/posthog/` in-tree for full
-end-to-end uses.
+The documented default is for the root module to take its pins from a
+`.terraform.lock.hcl` instead:
+
+    tf_providers.from_lock(lock = "//:.terraform.lock.hcl")
+    use_repo(tf_providers, "tf_providers")
+
+Only the root module's lock counts. A dependency's `from_lock` is ignored, as
+OpenTofu ignores a child module's lock: libraries constrain versions, and the
+root decides them.
+
+Each locked provider gets the same `tf_providers_<ns>_<name>` repo, with
+the version from the lock and, per platform, the registry's digest, which is
+accepted only if it is one of the lock's `zh:` hashes. A lock entry wins
+over tags from dependencies, as a root tag does; the root may not also tag it.
+The hub repo `@tf_providers`, always created, aliases
+`@tf_providers//<ns>/<name>` onto every resolved provider's repo, and `@tf_providers//:pin` rewrites the lock with
+`tofu providers lock`, against the `required_providers` of every
+`tf_library` and `tf_deploy` in the workspace (a `versions.tf` library
+beside the lock pins them). A locked provider's target carries the lock, which
+builds copy next to the configuration so `tofu init` checks against it.
+A lock entry that can't be used becomes a repo that fails when fetched, so
+that `pin` stays runnable.
+
+See `examples/aws/`, `examples/gcp/`, `examples/posthog/` and
+`examples/lock/` in-tree for full end-to-end uses.
 """
 
+load(":lock.bzl", "lock_entries", "lock_sha256s")
 load(
     ":source.bzl",
     "DEFAULT_HOST",
+    "DEFAULT_PLATFORMS",
     "check_url_template",
     "download_location",
     "is_provider_binary",
@@ -90,7 +115,8 @@ load(
     "valid_cached_sha256s",
 )
 
-# The hub repo: `@tf_providers//<namespace>/<name>` for every resolved provider.
+# The hub repo, always created: `@tf_providers//<namespace>/<name>` for every
+# resolved provider, and `@tf_providers//:pin` for the root module's lock.
 _HUB = "tf_providers"
 
 # (os/arch -> exe suffix). Keys must match the `sha256` map's platform keys.
@@ -189,10 +215,14 @@ def _download_json(module_ctx, url, output, context):
     return json.decode(module_ctx.read(output))
 
 def _registry_sha256s(module_ctx, namespace, name, version, fact_key):
-    """Each published default platform's SHA256, from the lockfile's facts or the registry."""
+    """Each published default platform's SHA256, from the lockfile's facts or the registry.
+
+    Returns `struct(sha256s, error)`. An unreachable registry still fails
+    outright; `error` is for answers that say the version can't be used.
+    """
     cached = module_ctx.facts.get(fact_key)
     if valid_cached_sha256s(cached):
-        return dict(cached)
+        return struct(sha256s = dict(cached), error = None)
 
     context = "{}/{}@{}".format(namespace, name, version)
     published = published_platforms(
@@ -206,7 +236,7 @@ def _registry_sha256s(module_ctx, namespace, name, version, fact_key):
         context,
     )
     if published.error:
-        fail(published.error)
+        return struct(sha256s = None, error = published.error)
 
     sha256s = {}
     for platform_key in published.platforms:
@@ -222,9 +252,9 @@ def _registry_sha256s(module_ctx, namespace, name, version, fact_key):
             platform_context,
         )
         if resolved.error:
-            fail(resolved.error)
+            return struct(sha256s = None, error = resolved.error)
         sha256s[platform_key] = resolved.sha256
-    return sha256s
+    return struct(sha256s = sha256s, error = None)
 
 def _files_under(path, prefix):
     """Every file below the directory `path`, as paths relative to it joined onto `prefix`."""
@@ -252,6 +282,15 @@ def _tf_provider_download_impl(repository_ctx):
     sha256 = repository_ctx.attr.sha256
     parsed = _parse_source_or_fail(source)
     namespace, name = parsed.namespace, parsed.name
+
+    # A lock entry the extension couldn't vouch for. Failing here rather than
+    # in the extension keeps `@tf_providers//:pin` runnable, so the lock can
+    # be regenerated.
+    if repository_ctx.attr.error:
+        fail("{}: {}\nRun `bazel run @tf_providers//:pin` to update the lock.".format(
+            repository_ctx.attr.lock_path,
+            repository_ctx.attr.error,
+        ))
 
     if not sha256:
         fail("tf_providers.provider `{}` must declare at least one platform in `sha256`".format(
@@ -333,9 +372,9 @@ def _tf_provider_download_impl(repository_ctx):
         binary_path = "{}/{}".format(extract_dir, binary_filename)
         entries.append((binary_path, platform_key))
 
-        # The rest of the zip (LICENSE, README and the like) is vendored too,
-        # so the plugin directory holds the package exactly as `tofu init`
-        # would install it: a lock file's `h1:` hash covers all of it.
+        # The rest of the zip (LICENSE, README and the like) is vendored too:
+        # tofu checks a lock's `h1:` hashes against the whole unpacked
+        # package, not just the binary.
         for path in _files_under(repository_ctx.path(extract_dir), extract_dir):
             if path != binary_path:
                 package_entries.append((path, platform_key))
@@ -365,7 +404,7 @@ tf_provider(
     address = "{address}",
     version = "{version}",
 {binaries}
-{package_files}
+{package_files}{lock}
     visibility = ["@{hub}//:__subpackages__"],
 )
 """.format(
@@ -374,6 +413,7 @@ tf_provider(
             version = version,
             binaries = _format_dict("binaries", entries),
             package_files = _format_dict("package_files", package_entries),
+            lock = "\n    lock = \"{}\",".format(repository_ctx.attr.lock) if repository_ctx.attr.lock else "",
             hub = _HUB,
         ),
         executable = False,
@@ -384,16 +424,48 @@ _tf_provider_download = repository_rule(
     attrs = {
         "source": attr.string(mandatory = True),
         "version": attr.string(mandatory = True),
-        "sha256": attr.string_dict(mandatory = True),
+        "sha256": attr.string_dict(),
         "url_template": attr.string(),
+        # Set for a provider pinned by `from_lock`: the label of the lock's
+        # copy in the hub repo, which builds copy into each work tree.
+        "lock": attr.string(),
+        "lock_path": attr.string(),
+        "error": attr.string(),
     },
 )
 
 def _tf_providers_hub_impl(repository_ctx):
+    content = ""
+    if repository_ctx.attr.lock:
+        lock = repository_ctx.path(repository_ctx.attr.lock)
+        repository_ctx.watch(lock)
+        if lock.exists:
+            content = repository_ctx.read(lock)
+
     repository_ctx.file("WORKSPACE", "")
+    repository_ctx.file(".terraform.lock.hcl", content, executable = False)
     repository_ctx.file(
         "BUILD.bazel",
-        content = "# Each provider's alias is in its `<namespace>/<name>` package.\n",
+        content = """\
+load("@rules_tofu//tf/private:pin.bzl", "tf_pin")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files([".terraform.lock.hcl"])
+
+tf_pin(
+    name = "pin",
+    has_lock = {has_lock},
+    lock_dir = "{lock_dir}",
+    platforms = {platforms},
+    exclude_sources = {tagged},
+)
+""".format(
+            lock_dir = repository_ctx.attr.lock_dir,
+            platforms = repr(DEFAULT_PLATFORMS),
+            tagged = repr(repository_ctx.attr.tagged),
+            has_lock = repr(bool(repository_ctx.attr.lock)),
+        ),
         executable = False,
     )
 
@@ -414,8 +486,14 @@ alias(
 _tf_providers_hub = repository_rule(
     implementation = _tf_providers_hub_impl,
     attrs = {
+        # The root module's `from_lock` file, if it uses one.
+        "lock": attr.label(),
+        "lock_dir": attr.string(),
         # `<namespace>/<name>` -> the repo vendoring that provider.
         "providers": attr.string_dict(),
+        # `<namespace>/<name>` of the root module's tags, which `pin` leaves
+        # out of the lock.
+        "tagged": attr.string_list(),
     },
 )
 
@@ -445,6 +523,58 @@ _provider_tag = tag_class(
     },
 )
 
+_from_lock_tag = tag_class(
+    attrs = {
+        "lock": attr.label(
+            doc = "The workspace's `.terraform.lock.hcl`. Defaults to `//:.terraform.lock.hcl`. " +
+                  "The file need not exist yet: `bazel run @tf_providers//:pin` writes it.",
+        ),
+    },
+)
+
+# Compiled by //tf/providers:lock_reader.bzl; see //tf/private/cmd/lockjson.
+_LOCK_READER = Label("@rules_tofu_lock_reader//:lockjson")
+
+def _decode_lock(module_ctx, path, label):
+    """The lock's provider entries, as `lockjson` decodes them."""
+    result = module_ctx.execute([module_ctx.path(_LOCK_READER), str(path)])
+    if result.return_code != 0:
+        fail(("{} could not be read:\n{}\nFix the file, or delete it and run " +
+              "`bazel run @tf_providers//:pin` to write a fresh one.").format(label, result.stderr.strip()))
+    return json.decode(result.stdout)["providers"]
+
+def _read_lock(module_ctx, mod):
+    """The root module's `from_lock` tag, read: `struct(label, lock_dir, entries)`, or None."""
+    tags = mod.tags.from_lock
+    if not tags:
+        return None
+    if len(tags) > 1:
+        fail("tf_providers.from_lock is used more than once; the workspace has one lock file")
+
+    label = tags[0].lock or Label("@@//:.terraform.lock.hcl")
+    if label.repo_name != "":
+        fail("tf_providers.from_lock: the lock must be in the main repository, got {}".format(label))
+    lock_dir, _, basename = (label.package + "/" + label.name).lstrip("/").rpartition("/")
+    if basename != ".terraform.lock.hcl":
+        fail("tf_providers.from_lock: the lock must be named `.terraform.lock.hcl` (as tofu writes it), got {}".format(label))
+
+    # A missing lock is an empty one, so a new workspace can `pin` its first.
+    path = module_ctx.path(label)
+    module_ctx.watch(path)
+    entries = []
+    if path.exists:
+        parsed = lock_entries(_decode_lock(module_ctx, path, label))
+        if parsed.error:
+            fail(("{}: {}\nFix the file, or delete it and run `bazel run @tf_providers//:pin` " +
+                  "to write a fresh one.").format(label, parsed.error))
+        entries = parsed.entries
+    return struct(
+        label = label,
+        lock_path = (lock_dir + "/" if lock_dir else "") + basename,
+        lock_dir = lock_dir,
+        entries = entries,
+    )
+
 def _tf_providers_extension_impl(module_ctx):
     # Phase 1: Collect all provider tags into a flat list of structs,
     # then group by normalized source, so `PostHog/posthog` and
@@ -454,9 +584,15 @@ def _tf_providers_extension_impl(module_ctx):
     # The repos the root is expected to `use_repo`: just the hub. The
     # per-provider repos behind it are private implementation details.
     root_repos = []
+    lock = None
     for mod in module_ctx.modules:
+        # Only the root module's lock counts, as in OpenTofu, where a child
+        # module's lock is ignored: the root decides versions, and libraries
+        # only constrain them. A dependency's `from_lock` (from developing it
+        # as a root module of its own) is ignored, not an error.
         if mod.is_root:
             root_repos.append(_HUB)
+            lock = _read_lock(module_ctx, mod)
         for tag in mod.tags.provider:
             parsed = _parse_source_or_fail(tag.source)
             if tag.url_template:
@@ -482,8 +618,26 @@ def _tf_providers_extension_impl(module_ctx):
             by_source[t.source] = []
         by_source[t.source].append(t)
 
+    # Providers pinned by the lock. Like a root tag, a lock entry wins over
+    # whatever dependencies ask for.
+    locked = {}
+    if lock:
+        for entry in lock.entries:
+            if [t for t in by_source.get(entry.source, []) if t.is_root]:
+                fail(("Provider `{}` is pinned both by a tf_providers.provider tag and by {}. " +
+                      "Declare it one way.").format(entry.source, lock.label))
+            locked[entry.source] = entry
+            if entry.source not in by_source:
+                by_source[entry.source] = []
+
     # Phase 2: Resolve each provider to a single (version, sha256) pair.
     for source, tags in by_source.items():
+        namespace, name = source.split("/")
+        entry = locked.get(source)
+        if entry:
+            _lock_provider_repo(module_ctx, lock, entry, facts)
+            continue
+
         # Validate: at most one root declaration per provider.
         root_tags = [t for t in tags if t.is_root]
         if len(root_tags) > 1:
@@ -533,8 +687,6 @@ def _tf_providers_extension_impl(module_ctx):
                 ", ".join(["`{}` from `{}`".format(u, m) for u, m in url_templates.items()]),
             ))
 
-        namespace, name = source.split("/")
-
         # No module pinned the winning version: trust the registry's digests,
         # recorded as facts so they're asked for once per lockfile.
         if not merged_sha256:
@@ -545,7 +697,10 @@ def _tf_providers_extension_impl(module_ctx):
                     resolved_version,
                 ))
             fact_key = "{}@{}".format(source, resolved_version)
-            merged_sha256 = _registry_sha256s(module_ctx, namespace, name, resolved_version, fact_key)
+            resolved = _registry_sha256s(module_ctx, namespace, name, resolved_version, fact_key)
+            if resolved.error:
+                fail(resolved.error)
+            merged_sha256 = resolved.sha256s
             facts[fact_key] = merged_sha256
 
         # Phase 3: Create the repository.
@@ -558,17 +713,20 @@ def _tf_providers_extension_impl(module_ctx):
         )
 
     # Always created, so that BUILD files in any module can name providers as
-    # `@tf_providers//<namespace>/<name>`.
+    # `@tf_providers//<namespace>/<name>` however the root pins them.
     _tf_providers_hub(
         name = _HUB,
+        lock = lock.label if lock else None,
+        lock_dir = lock.lock_dir if lock else "",
         providers = {source: repo_name(*source.split("/")) for source in by_source},
+        tagged = sorted({t.source: True for t in all_tags if t.is_root}.keys()),
     )
 
     # `reproducible = True`: every download is gated by a sha256, either pinned
     # on a tag or recorded in `facts`, so the repos are a pure function of the
-    # module graph and the facts, and a lockfile copy of the repo specs would pin
-    # nothing they don't. Returning only this evaluation's facts drops ones for
-    # versions no longer used.
+    # module graph, the lock file and the facts, and a lockfile copy of the
+    # repo specs would pin nothing they don't. Returning only this
+    # evaluation's facts drops ones for versions no longer used.
     non_dev = module_ctx.root_module_has_non_dev_dependency
     return module_ctx.extension_metadata(
         root_module_direct_deps = root_repos if non_dev else [],
@@ -577,7 +735,41 @@ def _tf_providers_extension_impl(module_ctx):
         facts = facts,
     )
 
+def _lock_provider_repo(module_ctx, lock, entry, facts):
+    """Create the repo for a provider pinned by the lock.
+
+    The registry's digests are recorded as facts exactly as for an unpinned
+    tag; on top of that, each must be one of the lock's `zh:` hashes. A lock
+    entry that can't be used yields a repo that fails when fetched, naming
+    the problem, rather than failing the extension: that would also take
+    down `@tf_providers//:pin`, the way to fix the lock.
+    """
+    context = "{}@{}".format(entry.source, entry.version)
+    error = entry.error
+    sha256s = {}
+    if not error:
+        resolved = _registry_sha256s(module_ctx, entry.namespace, entry.name, entry.version, context)
+        error = resolved.error
+        if not error:
+            facts[context] = resolved.sha256s
+            vouched = lock_sha256s(resolved.sha256s, entry.zh, context)
+            error = vouched.error
+            sha256s = vouched.sha256s or {}
+
+    _tf_provider_download(
+        name = repo_name(entry.namespace, entry.name),
+        source = entry.source,
+        version = entry.version,
+        sha256 = sha256s,
+        lock = "@{}//:.terraform.lock.hcl".format(_HUB),
+        lock_path = lock.lock_path,
+        error = error or "",
+    )
+
 tf_providers = module_extension(
     implementation = _tf_providers_extension_impl,
-    tag_classes = {"provider": _provider_tag},
+    tag_classes = {
+        "provider": _provider_tag,
+        "from_lock": _from_lock_tag,
+    },
 )

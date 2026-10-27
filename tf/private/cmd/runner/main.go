@@ -7,7 +7,8 @@
 //   - Refuse apply/destroy when the deploy declares no state backend and has
 //     not opted in via --allow-ephemeral-state, since local state under
 //     bazel-bin does not survive `bazel clean`.
-//   - Run `tofu init` inside the pre-materialized work tree.
+//   - Run `tofu init` inside the pre-materialized work tree, after copying in
+//     the provider lock when providers come from tf_providers.from_lock.
 //   - For plan: emit a plan artifact and stop.
 //   - For apply/destroy: delegate to tofu, passing through any extra args.
 //
@@ -27,27 +28,17 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/benbirt/rules_tofu/tf/private/cmd/internal/flags"
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclparse"
 )
-
-// stringList is a repeatable string flag (e.g. --var-file can appear multiple times).
-type stringList []string
-
-func (s *stringList) String() string     { return strings.Join(*s, ",") }
-func (s *stringList) Set(v string) error { *s = append(*s, v); return nil }
-
-func stringListFlag(name, usage string) *stringList {
-	sl := new(stringList)
-	flag.Var(sl, name, usage)
-	return sl
-}
 
 var (
 	workTree   = flag.String("work-tree", "", "path to the materialized work tree root")
 	packageDir = flag.String("package-dir", "", "workspace-relative dir to cd into within the work tree")
 	pluginDir  = flag.String("plugin-dir", "", "absolute path to the vendored provider plugin tree, passed to tofu init via -plugin-dir")
-	varFiles   = stringListFlag("var-file", "path to a .tfvars.json file passed to tofu via -var-file (repeatable)")
+	varFiles   = flags.StringList("var-file", "path to a .tfvars.json file passed to tofu via -var-file (repeatable)")
+	lockFile   = flag.String("lock-file", "", "optional .terraform.lock.hcl pinning the providers (tf_providers.from_lock), copied next to the configuration before tofu init")
 
 	stateDir = flag.String("state-dir", "", "absolute path to the per-deploy state directory")
 
@@ -141,7 +132,15 @@ func run() error {
 	if err := os.MkdirAll(*pluginDir, 0o755); err != nil {
 		return fmt.Errorf("create plugin dir %s: %w", *pluginDir, err)
 	}
+	if *lockFile != "" {
+		if err := installLockFile(*lockFile, cwd); err != nil {
+			return err
+		}
+	}
 	if err := runTofu(env, cwd, "init", "-input=false", "-plugin-dir="+*pluginDir); err != nil {
+		if *lockFile != "" {
+			log.Print("if the provider versions in required_providers changed, run `bazel run @tf_providers//:pin` to update the lock file.")
+		}
 		return fmt.Errorf("tofu init: %w", err)
 	}
 	stateArgs := []string{"-state=" + stateFile, "-state-out=" + stateFile}
@@ -176,6 +175,25 @@ func run() error {
 		if err := runTofu(env, cwd, destroyArgs...); err != nil {
 			return fmt.Errorf("tofu destroy: %w", err)
 		}
+	}
+	return nil
+}
+
+// installLockFile copies the provider lock to cwd/.terraform.lock.hcl, so
+// init checks the configuration's constraints and the vendored packages
+// against it. Whatever is there already (a lock tofu wrote on an earlier run
+// in this runfiles tree) is replaced, never written through.
+func installLockFile(src, cwd string) error {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return fmt.Errorf("read lock file: %w", err)
+	}
+	dst := filepath.Join(cwd, ".terraform.lock.hcl")
+	if err := os.Remove(dst); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("replace %s: %w", dst, err)
+	}
+	if err := os.WriteFile(dst, data, 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", dst, err)
 	}
 	return nil
 }

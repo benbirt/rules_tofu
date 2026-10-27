@@ -1,0 +1,19 @@
+load("@rules_tofu//tf:defs.bzl", "tf_deploy", "tf_library")
+
+package(default_visibility = ["//visibility:public"])
+
+# The provider comes from the lock: BUILD files name it, never its version.
+tf_library(
+    name = "greeting_lib",
+    srcs = ["main.tf"],
+    providers = ["@tf_providers//hashicorp/null"],
+)
+
+# This is a demo whose state is disposable, so it opts in to local state under
+# bazel-bin rather than declaring a remote backend.
+tf_deploy(
+    name = "greeting",
+    allow_ephemeral_state = True,
+    vars = {"name": "rules_tofu"},
+    deps = [":greeting_lib"],
+)

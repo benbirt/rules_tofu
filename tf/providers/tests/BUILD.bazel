@@ -1,3 +1,6 @@
+load(":lock_test.bzl", "lock_test_suite")
 load(":source_test.bzl", "source_test_suite")
+
+lock_test_suite(name = "lock_test")
 
 source_test_suite(name = "source_test")

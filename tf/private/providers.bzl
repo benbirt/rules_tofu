@@ -24,6 +24,7 @@ TfProviderInfo = provider(
         "binaries": "dict[string -> File]: provider binary keyed by `<os>_<arch>` platform key.",
         "package_files": "dict[string -> list[struct(path, file)]]: the rest of each platform's unpacked zip, " +
                          "keyed like `binaries`; `path` is relative to the `<os>_<arch>` directory.",
+        "lock": "File or None: the `.terraform.lock.hcl` the provider was pinned by (`tf_providers.from_lock`).",
     },
 )
 
@@ -49,6 +50,7 @@ TfDeployInfo = provider(
                            "(so runfiles include them).",
         "package_dir": "string: workspace-relative directory the runner cd's into before running tofu.",
         "var_file_relpaths": "list[string]: workspace-relative paths of -var-file inputs, in declaration order.",
+        "lock": "File or None: the `.terraform.lock.hcl` to place next to the configuration before `tofu init`.",
         "allow_ephemeral_state": "bool: whether this deploy opts in to local, disposable state. When False " +
                                  "(the default) the runner refuses `apply`/`destroy` unless the deploy declares " +
                                  "a `backend`/`cloud` block, because local state lives under bazel-bin and is " +
