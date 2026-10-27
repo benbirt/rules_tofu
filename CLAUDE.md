@@ -244,11 +244,17 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   `e2e/smoke`). Rerun it after adding/removing nested packages; don't
   hand-edit the lists or add separate one-off lines.
 - The release tarball (`release_prep.sh`) excludes `examples/`, `tests/`,
-  `toolchain/tests/` and `tf/providers/tests/` but must keep `e2e/` and `.bcr/` — BCR presubmit
+  `toolchain/tests/`, `tf/providers/tests/` and `docs/` but must keep `e2e/` and `.bcr/` — BCR presubmit
   reads the test module and templates from the extracted archive. The
   pathspecs are prefix-anchored, so a package named `tests` nested under a
   shipped directory needs its own exclusion; anything loading a
   `dev_dependency` must not ship.
+- `//docs` holds a `starlark_doc_extract` per public `.bzl` file;
+  `release_prep.sh` ships their `.binaryproto`s as
+  `rules_tofu-<tag>.docs.tar.gz`, the BCR entry's `docs_url`, which
+  registry.bazel.build renders. A new public `.bzl` entry point needs a
+  target there. Its `deps` are the `all_files` filegroups, not
+  `bzl_library`, so shipped packages stay free of dev-only repos.
 
 ## Branch / PR conventions
 
