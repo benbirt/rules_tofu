@@ -170,8 +170,10 @@ tf_library(
 )
 ```
 
-Run `pin` after changing a pin. Each upgrade is then a reviewable one-line
-change, which the bots below make for you.
+Run `pin` after changing a pin. Each upgrade is then a reviewable change: one
+line in `versions.tf`, plus the matching lock update. It is the same change
+that Renovate or Dependabot make when configured on your repository (see
+[Keeping the lock up to date](#keeping-the-lock-up-to-date)).
 
 **Without a `versions.tf`**, `pin` locks the newest version that every
 library accepts. The lock is then the only record of which version is in
@@ -183,7 +185,7 @@ after a pin or a floor is raised without re-running `pin`), building that
 library fails with a message to run `pin`. `examples/lock/` is a full
 end-to-end example.
 
-Keeping the lock up to date:
+##### Keeping the lock up to date
 
 - **Renovate** works with its default `terraform` manager. With a
   `versions.tf`, it updates the pin and the lock in one PR. Without one, it
@@ -262,8 +264,6 @@ Either way, providers are downloaded from the
 their checksums differ from those on releases.hashicorp.com. Provider
 sources are case-insensitive, as in OpenTofu, and are named in lower case
 (`PostHog/posthog` → `@tf_providers//posthog/posthog`).
-
-A `tf_deploy` vendors its own `providers` plus those of its library `deps`.
 
 The checks that `tofu init` and `tofu validate` would normally make online,
 against the registry, run offline as part of `bazel build` and `bazel test`,
