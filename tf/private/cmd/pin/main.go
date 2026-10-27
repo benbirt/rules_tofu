@@ -198,15 +198,29 @@ func hasPlatformArg(args []string) bool {
 // including those reached through filegroups and library deps.
 const configQuery = `filter("\.tf(\.json)?$", kind("source file", deps(kind("^(_tf_library|tf_deploy_rule) rule$", //...))))`
 
+// queryPartialExitCode is Bazel's exit code for a --keep_going command that
+// produced results despite errors.
+const queryPartialExitCode = 3
+
 // queryConfigFiles asks Bazel for the configuration files of every tf_library
 // and tf_deploy in the main repository, grouped by workspace-relative
 // directory ("" for the workspace root).
+//
+// The query runs with --keep_going because `deps()` also follows each
+// rule's `providers` into @tf_providers, which can't load before they are
+// locked: before the first pin, `@tf_providers//<ns>/<name>` has no package,
+// and a lock entry that can't be used makes its provider's repo fail when
+// fetched. Neither has .tf files to find, and pin is how both are fixed.
 func queryConfigFiles(bazel, workspace string, log io.Writer) (map[string][]string, error) {
-	cmd := exec.Command(bazel, "query", "--noimplicit_deps", "--notool_deps", "--output=label", configQuery)
+	cmd := exec.Command(bazel, "query", "--keep_going", "--noimplicit_deps", "--notool_deps", "--output=label", configQuery)
 	cmd.Dir = workspace
 	cmd.Stderr = log
 	out, err := cmd.Output()
-	if err != nil {
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == queryPartialExitCode {
+		fmt.Fprintln(log, "rules_tofu: bazel query couldn't load everything (above); locking against the configuration it could. "+
+			"Providers that aren't locked yet are expected among the errors.")
+	} else if err != nil {
 		return nil, fmt.Errorf("bazel query: %w", err)
 	}
 	return groupByDir(string(out)), nil

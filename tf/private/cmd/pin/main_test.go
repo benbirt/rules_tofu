@@ -286,6 +286,38 @@ func TestRun_QueryFailure(t *testing.T) {
 	}
 }
 
+// Before the first pin, the providers the rules name have no package in the
+// hub, so the query only partly succeeds. Its results still count.
+func TestRun_PartialQuery(t *testing.T) {
+	ws := t.TempDir()
+	writeFile(t, filepath.Join(ws, "main.tf"), `terraform {
+  required_providers {
+    null = { source = "hashicorp/null", version = "3.2.4" }
+  }
+}
+`)
+	bazel := filepath.Join(t.TempDir(), "bazel")
+	writeFile(t, bazel, "#!/bin/sh\necho \"ERROR: no such package '@@tf_providers//hashicorp/null'\" >&2\necho '//:main.tf'\nexit 3\n")
+	if err := os.Chmod(bazel, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tofu, _ := fakeTofu(t)
+	var log strings.Builder
+	if err := run(ws, "", tofu, bazel, nil, nil, nil, &log); err != nil {
+		t.Fatalf("run: %v\n%s", err, log.String())
+	}
+	lock, err := os.ReadFile(filepath.Join(ws, ".terraform.lock.hcl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, children := lockedModules(t, lock); len(children) != 1 || children[0]["null"] == nil {
+		t.Errorf("expected the lock to cover hashicorp/null, got %v", children)
+	}
+	if !strings.Contains(log.String(), "couldn't load everything") {
+		t.Errorf("expected a note about the partial query, got\n%s", log.String())
+	}
+}
+
 func TestRun_ExcludesTaggedProviders(t *testing.T) {
 	ws := t.TempDir()
 	writeFile(t, filepath.Join(ws, "lib/main.tf"), `terraform {
