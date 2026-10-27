@@ -169,17 +169,16 @@ def tf_deploy(name, srcs = None, deps = None, vars = None, var_files = None, dat
       srcs: optional deploy-local .tf files (e.g. provider/backend config).
       deps: `tf_library` targets to compose.
       vars: dict of variable name -> value, rendered to rules_tofu.auto.tfvars.json.
-      var_files: Labels producing .tfvars.json or .tfvars files passed to tofu via -var-file.
-          Accepts any Bazel Label (e.g. a genrule output). Keys must not overlap
-          with vars or other var_files entries; duplicate keys fail at
-          `bazel build` time via a dedicated check action.
+      var_files: `.tfvars.json` or `.tfvars` files passed to tofu with `-var-file`.
+          Any label works, e.g. a genrule output. Keys must not overlap with
+          `vars` or other `var_files` entries; a duplicate key fails
+          `bazel build`.
       data: arbitrary files to include in the work tree, enabling `file()` calls
           in Terraform configs.
       providers: providers (`@tf_providers//<namespace>/<name>`, from the
           `tf_providers` extension in MODULE.bazel) declared at the deploy
-          level. Unioned with providers transitively contributed by `deps`. The exec
-          platform binary is symlinked into a sibling plugin tree; `tofu init`
-          runs offline against it.
+          level, in addition to those its `deps` bring in. `tofu init` runs
+          offline against them.
       allow_ephemeral_state: allow `:<name>.apply` and `:<name>.destroy` to run
           against local state. A deploy with no `backend "..." {}` or `cloud {}`
           block keeps its state at

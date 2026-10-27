@@ -1,0 +1,33 @@
+# API docs for the Bazel Central Registry. release_prep.sh builds every
+# starlark_doc_extract target here and attaches the .binaryproto outputs to
+# the release as rules_tofu-<tag>.docs.tar.gz, which .bcr/source.template.json
+# names as the module's `docs_url`; registry.bazel.build renders them.
+#
+# The `deps` are the packages' `all_files` filegroups rather than bzl_library
+# targets: those packages are loaded by downstream modules and can't reference
+# dev-only bazel_skylib. `render_main_repo_name` makes the docs name files and
+# labels as downstream users load them (`@rules_tofu//tf:defs.bzl`).
+
+starlark_doc_extract(
+    name = "defs",
+    src = "//tf:defs.bzl",
+    render_main_repo_name = True,
+    deps = [
+        "//tf/private:all_files",
+        "//toolchain:all_files",
+    ],
+)
+
+starlark_doc_extract(
+    name = "toolchain_extensions",
+    src = "//toolchain:extensions.bzl",
+    render_main_repo_name = True,
+    deps = ["//toolchain:all_files"],
+)
+
+starlark_doc_extract(
+    name = "providers_extensions",
+    src = "//tf/providers:extensions.bzl",
+    render_main_repo_name = True,
+    deps = ["//tf/providers:all_files"],
+)
