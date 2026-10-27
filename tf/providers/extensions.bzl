@@ -82,7 +82,10 @@ root decides them.
 
 Each locked provider gets the same `tf_providers_<ns>_<name>` repo, with
 the version from the lock and, per platform, the registry's digest, which is
-accepted only if it is one of the lock's `zh:` hashes. A lock entry wins
+accepted only if it is one of the lock's `zh:` hashes. The repo checks that
+when it is fetched, so locked providers record no facts: MODULE.bazel.lock
+doesn't change when the lock does, and a bot's lock update is complete
+without it. A lock entry wins
 over tags from dependencies, as a root tag does; the root may not also tag it.
 The hub repo `@tf_providers`, always created, aliases
 `@tf_providers//<ns>/<name>` onto every resolved provider's repo, and `@tf_providers//:pin` rewrites the lock with
@@ -208,26 +211,26 @@ def _resolve_via_registry(repository_ctx, registry_url, pinned_sha256, context):
         fail(resolved.error)
     return resolved.url
 
-def _download_json(module_ctx, url, output, context):
-    result = module_ctx.download(url = url, output = output, allow_fail = True)
+def _download_json(ctx, url, output, context):
+    result = ctx.download(url = url, output = output, allow_fail = True)
     if not result.success:
         fail("Could not query the provider registry for {} at {}.".format(context, url))
-    return json.decode(module_ctx.read(output))
+    return json.decode(ctx.read(output))
 
-def _registry_sha256s(module_ctx, namespace, name, version, fact_key):
-    """Each published default platform's SHA256, from the lockfile's facts or the registry.
+def _registry_downloads(ctx, namespace, name, version):
+    """Each published default platform's zip, as the registry describes it.
 
-    Returns `struct(sha256s, error)`. An unreachable registry still fails
-    outright; `error` is for answers that say the version can't be used.
+    `ctx` is a `module_ctx` or a `repository_ctx`; the registry's responses
+    are written under `registry/`.
+
+    Returns `struct(downloads, error)`: `downloads` maps each platform key to
+    `struct(sha256, url)`. An unreachable registry still fails outright;
+    `error` is for answers that say the version can't be used.
     """
-    cached = module_ctx.facts.get(fact_key)
-    if valid_cached_sha256s(cached):
-        return struct(sha256s = dict(cached), error = None)
-
     context = "{}/{}@{}".format(namespace, name, version)
     published = published_platforms(
         _download_json(
-            module_ctx,
+            ctx,
             registry_versions_endpoint(namespace, name),
             "registry/{}_{}_versions.json".format(namespace, name),
             context,
@@ -236,25 +239,73 @@ def _registry_sha256s(module_ctx, namespace, name, version, fact_key):
         context,
     )
     if published.error:
-        return struct(sha256s = None, error = published.error)
+        return struct(downloads = None, error = published.error)
 
-    sha256s = {}
+    downloads = {}
     for platform_key in published.platforms:
         os_name, arch = _split_platform_key(platform_key)
         platform_context = "{} on {}".format(context, platform_key)
-        resolved = registry_shasum(
-            _download_json(
-                module_ctx,
-                registry_download_endpoint(namespace, name, version, os_name, arch),
-                "registry/{}_{}_{}_{}.json".format(namespace, name, version, platform_key),
-                platform_context,
-            ),
+        response = _download_json(
+            ctx,
+            registry_download_endpoint(namespace, name, version, os_name, arch),
+            "registry/{}_{}_{}_{}.json".format(namespace, name, version, platform_key),
             platform_context,
         )
+        resolved = registry_shasum(response, platform_context)
         if resolved.error:
-            return struct(sha256s = None, error = resolved.error)
-        sha256s[platform_key] = resolved.sha256
-    return struct(sha256s = sha256s, error = None)
+            return struct(downloads = None, error = resolved.error)
+        located = registry_download_url(response, resolved.sha256, platform_context)
+        if located.error:
+            return struct(downloads = None, error = located.error)
+        downloads[platform_key] = struct(sha256 = resolved.sha256, url = located.url)
+    return struct(downloads = downloads, error = None)
+
+def _registry_sha256s(module_ctx, namespace, name, version, fact_key):
+    """Each published default platform's SHA256, from the lockfile's facts or the registry.
+
+    Returns `struct(sha256s, error)`, with `error` as for `_registry_downloads`.
+    """
+    cached = module_ctx.facts.get(fact_key)
+    if valid_cached_sha256s(cached):
+        return struct(sha256s = dict(cached), error = None)
+
+    resolved = _registry_downloads(module_ctx, namespace, name, version)
+    if resolved.error:
+        return struct(sha256s = None, error = resolved.error)
+    return struct(sha256s = {p: d.sha256 for p, d in resolved.downloads.items()}, error = None)
+
+def _locked_downloads(repository_ctx, namespace, name, version):
+    """A locked provider's zips: the registry's, each vouched for by a `zh:` hash in the lock.
+
+    Resolved by the repository rule rather than the extension, so nothing
+    about a locked version is recorded in MODULE.bazel.lock: the lock alone
+    pins it, and a bot that updates only the lock makes a complete change.
+
+    Returns `struct(sha256s, urls, error)`.
+    """
+    resolved = _registry_downloads(repository_ctx, namespace, name, version)
+    repository_ctx.delete("registry")
+    if resolved.error:
+        return struct(sha256s = None, urls = None, error = resolved.error)
+    vouched = lock_sha256s(
+        {p: d.sha256 for p, d in resolved.downloads.items()},
+        repository_ctx.attr.zh,
+        "{}/{}@{}".format(namespace, name, version),
+    )
+    if vouched.error:
+        return struct(sha256s = None, urls = None, error = vouched.error)
+    return struct(
+        sha256s = vouched.sha256s,
+        urls = {p: d.url for p, d in resolved.downloads.items()},
+        error = None,
+    )
+
+def _fail_lock(repository_ctx, error):
+    """Fail the fetch of a locked provider, pointing at the lock and `pin`."""
+    fail("{}: {}\nRun `bazel run @tf_providers//:pin` to update the lock.".format(
+        repository_ctx.attr.lock_path,
+        error,
+    ))
 
 def _files_under(path, prefix):
     """Every file below the directory `path`, as paths relative to it joined onto `prefix`."""
@@ -283,14 +334,19 @@ def _tf_provider_download_impl(repository_ctx):
     parsed = _parse_source_or_fail(source)
     namespace, name = parsed.namespace, parsed.name
 
-    # A lock entry the extension couldn't vouch for. Failing here rather than
-    # in the extension keeps `@tf_providers//:pin` runnable, so the lock can
-    # be regenerated.
+    # A lock entry that can't be used. Failing here rather than in the
+    # extension keeps `@tf_providers//:pin` runnable, so the lock can be
+    # regenerated.
     if repository_ctx.attr.error:
-        fail("{}: {}\nRun `bazel run @tf_providers//:pin` to update the lock.".format(
-            repository_ctx.attr.lock_path,
-            repository_ctx.attr.error,
-        ))
+        _fail_lock(repository_ctx, repository_ctx.attr.error)
+
+    urls = {}
+    if repository_ctx.attr.zh:
+        locked = _locked_downloads(repository_ctx, namespace, name, version)
+        if locked.error:
+            _fail_lock(repository_ctx, locked.error)
+        sha256 = locked.sha256s
+        urls = locked.urls
 
     if not sha256:
         fail("tf_providers.provider `{}` must declare at least one platform in `sha256`".format(
@@ -326,7 +382,9 @@ def _tf_provider_download_impl(repository_ctx):
         if location.error:
             fail("tf_providers.provider `{}`: {}".format(source, location.error))
         url = location.url
-        if location.registry_url:
+        if platform_key in urls:
+            url = urls[platform_key]
+        elif location.registry_url:
             url = _resolve_via_registry(
                 repository_ctx,
                 location.registry_url,
@@ -430,6 +488,10 @@ _tf_provider_download = repository_rule(
         # copy in the hub repo, which builds copy into each work tree.
         "lock": attr.string(),
         "lock_path": attr.string(),
+        # Also for `from_lock`: the lock entry's `zh:` hashes. The registry's
+        # digests are then resolved when the repo is fetched, and each must
+        # be one of them; `sha256` is left empty.
+        "zh": attr.string_list(),
         "error": attr.string(),
     },
 )
@@ -635,7 +697,7 @@ def _tf_providers_extension_impl(module_ctx):
         namespace, name = source.split("/")
         entry = locked.get(source)
         if entry:
-            _lock_provider_repo(module_ctx, lock, entry, facts)
+            _lock_provider_repo(lock, entry)
             continue
 
         # Validate: at most one root declaration per provider.
@@ -723,8 +785,9 @@ def _tf_providers_extension_impl(module_ctx):
     )
 
     # `reproducible = True`: every download is gated by a sha256, either pinned
-    # on a tag or recorded in `facts`, so the repos are a pure function of the
-    # module graph, the lock file and the facts, and a lockfile copy of the
+    # on a tag, recorded in `facts`, or one of the lock's `zh:` hashes, so the
+    # repos are a pure function of the module graph, the lock file and the
+    # facts, and a lockfile copy of the
     # repo specs would pin nothing they don't. Returning only this
     # evaluation's facts drops ones for versions no longer used.
     non_dev = module_ctx.root_module_has_non_dev_dependency
@@ -735,35 +798,24 @@ def _tf_providers_extension_impl(module_ctx):
         facts = facts,
     )
 
-def _lock_provider_repo(module_ctx, lock, entry, facts):
+def _lock_provider_repo(lock, entry):
     """Create the repo for a provider pinned by the lock.
 
-    The registry's digests are recorded as facts exactly as for an unpinned
-    tag; on top of that, each must be one of the lock's `zh:` hashes. A lock
-    entry that can't be used yields a repo that fails when fetched, naming
-    the problem, rather than failing the extension: that would also take
-    down `@tf_providers//:pin`, the way to fix the lock.
+    The repo, not the extension, asks the registry for the digests and checks
+    each against the lock's `zh:` hashes (see `_locked_downloads`), so a
+    locked provider records no facts: the lock is the whole pin. A lock entry
+    that can't be used yields a repo that fails when fetched, naming the
+    problem, rather than failing the extension: that would also take down
+    `@tf_providers//:pin`, the way to fix the lock.
     """
-    context = "{}@{}".format(entry.source, entry.version)
-    error = entry.error
-    sha256s = {}
-    if not error:
-        resolved = _registry_sha256s(module_ctx, entry.namespace, entry.name, entry.version, context)
-        error = resolved.error
-        if not error:
-            facts[context] = resolved.sha256s
-            vouched = lock_sha256s(resolved.sha256s, entry.zh, context)
-            error = vouched.error
-            sha256s = vouched.sha256s or {}
-
     _tf_provider_download(
         name = repo_name(entry.namespace, entry.name),
         source = entry.source,
         version = entry.version,
-        sha256 = sha256s,
         lock = "@{}//:.terraform.lock.hcl".format(_HUB),
         lock_path = lock.lock_path,
-        error = error or "",
+        zh = [] if entry.error else entry.zh,
+        error = entry.error or "",
     )
 
 tf_providers = module_extension(

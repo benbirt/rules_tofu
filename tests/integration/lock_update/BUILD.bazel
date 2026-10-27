@@ -1,0 +1,9 @@
+load("@rules_tofu//tf:defs.bzl", "tf_library")
+
+# Names its provider before any lock exists, as the README's quick start does.
+tf_library(
+    name = "versions",
+    srcs = ["versions.tf"],
+    fmt_test = False,
+    providers = ["@tf_providers//hashicorp/null"],
+)

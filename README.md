@@ -195,6 +195,9 @@ end-to-end example.
   that directory, so without a `versions.tf` it needs another file there that
   declares each provider; a floor is enough.
 
+Locked providers record nothing in `MODULE.bazel.lock`, so these updates are
+complete as they are, and pass with `--lockfile_mode=error`.
+
 #### Pinning with tags
 
 Use a `tf_providers.provider` tag for a provider that needs something a lock
