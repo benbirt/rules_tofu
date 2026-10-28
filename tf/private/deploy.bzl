@@ -150,7 +150,7 @@ tf_deploy_rule = rule(
 )
 
 def tf_deploy(name, srcs = None, deps = None, vars = None, var_files = None, data = None, providers = None, allow_ephemeral_state = False, fmt_test = True, **kwargs):
-    """A root Terraform/OpenTofu invocation.
+    """A root OpenTofu/Terraform configuration, with targets to plan, apply and destroy it.
 
     Always generates:
       - `:<name>`         — data target. Building it materializes the work tree
