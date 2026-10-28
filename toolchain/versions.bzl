@@ -1,7 +1,7 @@
 """Pinned OpenTofu release metadata.
 
-To pin a new release, run `toolchain/update_versions.sh <version>` (add
-`--default` to make it DEFAULT_VERSION too). It verifies the release's
+To pin a new release, run `bazel run //tools:update_versions -- <version>`
+(add `--default` to make it DEFAULT_VERSION too). It verifies the release's
 SHA256SUMS against its cosign signature before copying the digests here.
 
 rules_tofu downloads OpenTofu's release binaries rather than building them

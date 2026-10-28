@@ -298,9 +298,8 @@ against the digest pinned in
 [`toolchain/versions.bzl`](toolchain/versions.bzl), and registers it as a
 toolchain. Those digests are copied from each release's `SHA256SUMS` only
 after its cosign signature has been verified, by
-[`toolchain/update_versions.sh`](toolchain/update_versions.sh). To use a
-release that isn't pinned yet, open a PR that runs the script, or bring your
-own binary.
+`bazel run //tools:update_versions`. To use a release that isn't pinned yet,
+open a PR that runs it, or bring your own binary.
 
 ### Bringing your own binary
 

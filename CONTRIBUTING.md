@@ -27,7 +27,8 @@ bazel test //...
 | `tf/private/` | Internal rule implementations |
 | `tf/private/cmd/runner/` | Go binary: wraps `tofu` at runtime |
 | `tf/private/cmd/dupcheck/` | Go binary: duplicate-variable-key check |
-| `toolchain/` | OpenTofu binary download + toolchain registration; `update_versions.sh` pins a release |
+| `toolchain/` | OpenTofu binary download + toolchain registration |
+| `tools/` | Maintainer tools (dev-only, not in the release tarball): `update_versions` pins an OpenTofu release |
 | `tests/integration/` | Bazel-in-Bazel negative integration tests |
 | `examples/` | End-to-end usage examples |
 | `e2e/smoke/` | Standalone downstream module; the BCR presubmit test module |
@@ -80,16 +81,16 @@ CI enforces this; PRs with formatting violations will fail.
 ## Pinning a new OpenTofu release
 
 ```sh
-toolchain/update_versions.sh 1.12.1            # add it to KNOWN_VERSIONS
-toolchain/update_versions.sh --default 1.12.1  # ...and make it the default
+bazel run //tools:update_versions -- 1.12.1            # add it to KNOWN_VERSIONS
+bazel run //tools:update_versions -- --default 1.12.1  # ...and make it the default
 ```
 
-The script needs `curl` and
-[`cosign`](https://docs.sigstore.dev/cosign/system_config/installation/). It
-downloads the release's `SHA256SUMS`, verifies its cosign signature against
-the OpenTofu release workflow's identity, and copies the five platform digests
-into [`toolchain/versions.bzl`](toolchain/versions.bzl). Don't paste digests
-in by hand. Build `//examples/hello:hello` afterwards to check the new binary
+The tool downloads the release's `SHA256SUMS` with the host's `curl`, verifies
+its cosign signature against the OpenTofu release workflow's identity with the
+[cosign](https://github.com/sigstore/cosign) release pinned in `MODULE.bazel`,
+and copies the five platform digests into
+[`toolchain/versions.bzl`](toolchain/versions.bzl). Don't paste digests in by
+hand. Build `//examples/hello:hello` afterwards to check the new binary
 downloads, and run the Starlark tests under `//toolchain/tests`.
 
 ## Releasing

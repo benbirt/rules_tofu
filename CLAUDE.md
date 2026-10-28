@@ -82,12 +82,12 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   (and `versions.tf`) leaves `MODULE.bazel.lock` valid.
   `//tests/integration:lock_update_test` guards this; don't move the
   lookup back into the extension. The table in
-  `toolchain/versions.bzl` pins tofu itself; `toolchain/update_versions.sh`
-  writes it after verifying the release's cosign signature, so don't paste
-  digests in by hand. The repository cache keys on
-  these digests. Both extensions declare `reproducible = True`, so their
-  repo specs deliberately do *not* appear in `MODULE.bazel.lock`; the
-  provider extension's facts do. Facts are validated on read
+  `toolchain/versions.bzl` pins tofu itself; `bazel run //tools:update_versions`
+  writes it after verifying the release's cosign signature (cosign is a
+  dev-only `http_file` in MODULE.bazel), so don't paste digests in by hand.
+  The repository cache keys on these digests. Both extensions declare
+  `reproducible = True`, so their repo specs deliberately do *not* appear in
+  `MODULE.bazel.lock`; the provider extension's facts do. Facts are validated on read
   (`valid_cached_sha256s`) and treated as a miss if malformed, never
   trusted blindly, and only the facts in use are returned, so stale ones
   drop out.
@@ -246,7 +246,7 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   `e2e/smoke`). Rerun it after adding/removing nested packages; don't
   hand-edit the lists or add separate one-off lines.
 - The release tarball (`release_prep.sh`) excludes `examples/`, `tests/`,
-  `toolchain/tests/`, `tf/providers/tests/` and `docs/` but must keep `e2e/` and `.bcr/` — BCR presubmit
+  `tools/`, `toolchain/tests/`, `tf/providers/tests/` and `docs/` but must keep `e2e/` and `.bcr/` — BCR presubmit
   reads the test module and templates from the extracted archive. The
   pathspecs are prefix-anchored, so a package named `tests` nested under a
   shipped directory needs its own exclusion; anything loading a
