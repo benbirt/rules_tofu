@@ -1,0 +1,32 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+
+# Built for tests here; the tf_modules repository rule runs the copy that
+# //tf/private:host_tools.bzl compiles with the host Go SDK.
+go_library(
+    name = "modscan_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/benbirt/rules_tofu/tf/private/cmd/modscan",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//tf/private/cmd/internal/flags",
+        "//tf/private/cmd/internal/tfconfig",
+    ],
+)
+
+go_binary(
+    name = "modscan",
+    embed = [":modscan_lib"],
+    visibility = ["//visibility:private"],
+)
+
+go_test(
+    name = "modscan_test",
+    srcs = ["main_test.go"],
+    embed = [":modscan_lib"],
+)
+
+filegroup(
+    name = "all_files",
+    srcs = glob(["*"]),
+    visibility = ["//:__subpackages__"],
+)

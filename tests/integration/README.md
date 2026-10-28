@@ -45,6 +45,15 @@ its own. Everything must build, each external library on its own too, and
 internal format, so there is one `module_dependency_<version>_test` per
 tofu version in `toolchain/versions.bzl`.
 
+`tf_modules/` and its driver `tf_modules_test.sh` cover the `tf_modules`
+extension: the driver turns `fixtures/network` into a git repository and
+`fixtures/dns` into an archive, so both are fetched offline, beside
+`cloudposse/label/null` from the OpenTofu registry. `//app` plans with all
+three and a submodule, without naming the provider the git module requires;
+the commits are recorded in `MODULE.bazel.lock`; moving the git tag changes
+nothing, even after `bazel clean --expunge`; and a module calling an
+undeclared one fails when fetched, naming the tag to add.
+
 `broken_workspace` shares one `MODULE.bazel` across all of its cases, so a
 case whose failure lives in the module graph cannot go there — it gets a
 sub-workspace of its own. `BUILD.bazel` names the workspace per case row

@@ -170,3 +170,24 @@ sh_binary(
     )
     for version in KNOWN_VERSIONS
 ]
+
+# tf_modules.module: git, archive and registry modules, fetched and pinned by
+# commit or digest, with the providers a module requires carried to its
+# callers. See tf_modules_test.sh.
+sh_binary(
+    name = "tf_modules_driver",
+    srcs = ["tf_modules_test.sh"],
+)
+
+bazel_integration_test(
+    name = "tf_modules_test",
+    timeout = "moderate",
+    bazel_binaries = bazel_binaries,
+    bazel_version = bazel_binaries.versions.current,
+    tags = _TAGS,
+    test_runner = ":tf_modules_driver",
+    workspace_files = integration_test_utils.glob_workspace_files("tf_modules") + [
+        "//:local_repository_files",
+    ],
+    workspace_path = "tf_modules",
+)

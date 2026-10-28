@@ -552,8 +552,8 @@ _from_lock_tag = tag_class(
     },
 )
 
-# Compiled by //tf/providers:lock_reader.bzl; see //tf/private/cmd/lockjson.
-_LOCK_READER = Label("@rules_tofu_lock_reader//:lockjson")
+# Compiled by //tf/private:host_tools.bzl; see //tf/private/cmd/lockjson.
+_LOCK_READER = Label("@rules_tofu_host_tools//:bin/lockjson")
 
 def _decode_lock(module_ctx, path, label):
     """The lock's provider entries, as `lockjson` decodes them."""

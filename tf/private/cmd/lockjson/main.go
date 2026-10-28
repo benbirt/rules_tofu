@@ -3,7 +3,7 @@
 //
 // A module extension can't run anything Bazel builds, so this is compiled
 // with rules_go's host Go SDK by the repository rule in
-// //tf/providers:lock_reader.bzl, as Gazelle builds its own helpers. It only
+// //tf/private:host_tools.bzl, as Gazelle builds its own helpers. It only
 // parses: what an entry must contain to be usable is decided by
 // //tf/providers:lock.bzl, where it can be unit-tested.
 //

@@ -1,7 +1,7 @@
 load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 
 # Built with Bazel only for its tests: the tf_providers extension can't run
-# Bazel-built tools, so //tf/providers:lock_reader.bzl compiles the same
+# Bazel-built tools, so //tf/private:host_tools.bzl compiles the same
 # source with the host Go SDK.
 go_library(
     name = "lockjson_lib",

@@ -5,9 +5,9 @@
 #
 # Archive exclusions live HERE (not in .gitattributes) so that ordinary
 # `git archive` runs are unaffected. We drop `examples/`, `tests/`,
-# `toolchain/tests/` and `tf/providers/tests/`: they are not needed by
-# consumers and reference repos that are dev-only or otherwise unavailable
-# when rules_tofu is consumed as a dependency. `docs/` only feeds the docs
+# `toolchain/tests/`, `tf/providers/tests/` and `tf/modules/tests/`: they are
+# not needed by consumers and reference repos that are dev-only or otherwise
+# unavailable when rules_tofu is consumed as a dependency. `docs/` only feeds the docs
 # archive below. Note the pathspecs are prefix-anchored, so a tests package
 # nested under a shipped directory needs its own exclusion. Everything
 # else is kept -- crucially `e2e/` and `.bcr/`, which BCR reads from the
@@ -23,7 +23,7 @@ PREFIX="rules_tofu-${TAG:1}"
 ARCHIVE="rules_tofu-$TAG.tar.gz"
 
 git archive --format=tar --prefix="${PREFIX}/" "${TAG}" \
-    -- . ':(exclude)examples' ':(exclude)tests' ':(exclude)toolchain/tests' ':(exclude)tf/providers/tests' ':(exclude)docs' | gzip > "$ARCHIVE"
+    -- . ':(exclude)examples' ':(exclude)tests' ':(exclude)toolchain/tests' ':(exclude)tf/providers/tests' ':(exclude)tf/modules/tests' ':(exclude)docs' | gzip > "$ARCHIVE"
 
 # API docs for registry.bazel.build, which renders every .binaryproto in the
 # archive named by `docs_url` in .bcr/source.template.json (see

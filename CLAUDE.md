@@ -111,9 +111,9 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
 - The lock is parsed by `lockjson` (`tf/private/cmd/lockjson`, using
   `hashicorp/hcl`'s `gohcl`), not in Starlark: don't reintroduce a
   hand-written parser. An extension can't run Bazel-built tools, so
-  `tf/providers/lock_reader.bzl` compiles it with rules_go's host Go SDK
+  `tf/private/host_tools.bzl` compiles it with rules_go's host Go SDK
   (`@go_host_compatible_sdk_label`), as Gazelle's `go_repository_tools`
-  does, into `@rules_tofu_lock_reader` (a non-dev `use_repo_rule` in
+  does, into `@rules_tofu_host_tools` (a non-dev `use_repo_rule` in
   `MODULE.bazel`). Its Go module deps come through `GOPROXY`, checked
   against `go.sum`, under `-mod=readonly`, so `go.mod` must stay tidy for
   `lockjson` too. `lockjson` only parses; what an entry must contain
@@ -217,10 +217,11 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   so a parenthesis in an in-block comment corrupts the BCR entry (this
   broke 0.1.1's BCR submission).
 - `bazel_skylib` is a `dev_dependency`, so the Starlark unit tests that
-  load it live in the `//toolchain/tests` and `//tf/providers/tests`
-  subpackages: `toolchain/BUILD.bazel` (it holds `:toolchain_type`) and
-  `tf/providers/BUILD.bazel` are loaded by downstream modules and must
-  never reference a dev-only repo.
+  load it live in the `//toolchain/tests`, `//tf/providers/tests` and
+  `//tf/modules/tests` subpackages: `toolchain/BUILD.bazel` (it holds
+  `:toolchain_type`), `tf/providers/BUILD.bazel` and
+  `tf/modules/BUILD.bazel` are loaded by downstream modules and must never
+  reference a dev-only repo.
 - `bazel_compatibility = [">=8.5.0"]` in `module()` is the supported
   floor: 8.5 is the first Bazel with extension facts, so
   `tf/providers/extensions.bzl` uses `module_ctx.facts` unconditionally
@@ -248,12 +249,36 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   are Bazel's to change. Rule paths (`work_tree_root`, `package_dir`, the
   runner's runfiles paths) include `label.workspace_root`, so a library
   in another repository builds on its own.
+- `tf_modules` (`tf/modules/extensions.bzl`) gives each module one
+  `tf_library` (`:module`, in the module's directory, the rest of the files
+  as data via `//:files`), aliased by the hub as `@tf_modules//<path>`;
+  submodules are reached with `//<subdir>` against it, never with targets of
+  their own, because the hub can't list a module's directories without
+  fetching every module. The per-module `tf_modules_<path>` repos are
+  private, like the provider repos. Every fetch is pinned: git by commit
+  (`commit`, or the `?ref=` resolved with `git ls-remote` and recorded as a
+  fact keyed by the source), registry modules by the registry's location
+  plus its commit or digest (a fact keyed `<path>@<version>`), archives by a
+  required `sha256`. Don't fetch by tag at repository time: tags move.
+  Facts are validated on read (`valid_fact`). The repository rule deletes
+  upstream Bazel files, then runs `modscan` (compiled with `lockjson` by
+  `tf/private/host_tools.bzl` into `@rules_tofu_host_tools`, so its watched
+  sources include `tfconfig` and `flags`) to find the providers and calls of
+  the module's root, its `modules/**` and what they reach locally; matching
+  calls to declared modules is `tfconfig.Match` in Go, shared with the
+  manifest tool, not reimplemented in Starlark. An undeclared call fails the
+  fetch naming the tag to add. Generated libraries name providers as
+  `@tf_providers//...`, which they can only see because rules_tofu's
+  MODULE.bazel imports the hub through a non-dev `use_extension`; keep that.
+  `//tests/integration:tf_modules_test` covers git (with a moved tag),
+  archive and registry modules offline but for the registry itself.
 - The `.bazelversion` copies (root, `e2e/smoke`,
   `tests/integration/broken_workspace`,
   `tests/integration/broken_module`,
   `tests/integration/lock_dependency`,
   `tests/integration/lock_update`,
-  `tests/integration/module_dependency`) must stay byte-identical: nested
+  `tests/integration/module_dependency`,
+  `tests/integration/tf_modules`) must stay byte-identical: nested
   modules are separate bazelisk boundaries that never see the root pin.
   CI's lint job `cmp`s every nested copy against the root; bump them all
   together.
@@ -264,7 +289,8 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   `e2e/smoke`). Rerun it after adding/removing nested packages; don't
   hand-edit the lists or add separate one-off lines.
 - The release tarball (`release_prep.sh`) excludes `examples/`, `tests/`,
-  `toolchain/tests/`, `tf/providers/tests/` and `docs/` but must keep `e2e/` and `.bcr/` — BCR presubmit
+  `toolchain/tests/`, `tf/providers/tests/`, `tf/modules/tests/` and
+  `docs/` but must keep `e2e/` and `.bcr/` — BCR presubmit
   reads the test module and templates from the extracted archive. The
   pathspecs are prefix-anchored, so a package named `tests` nested under a
   shipped directory needs its own exclusion; anything loading a

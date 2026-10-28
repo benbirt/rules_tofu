@@ -16,9 +16,9 @@ Bazel.
 
 - **Build = validate.** `bazel build //...` runs `tofu init` and
   `tofu validate` over every library and deploy, offline and cached.
-- **Hermetic and reproducible.** Bazel downloads the `tofu` binary and
-  every provider plugin, checked against pinned digests. No `tofu init`
-  hitting the network, no `.terraform/` directories.
+- **Hermetic and reproducible.** Bazel downloads the `tofu` binary, every
+  provider plugin and every module, each pinned by a digest or commit. No
+  `tofu init` hitting the network, no `.terraform/` directories.
 - **Composable.** `tf_library` is to `.tf` files what `cc_library` is to
   C++: reusable, dependency-aware, and not runnable on its own. `tf_deploy`
   is the root that binds variables and runs.
@@ -99,7 +99,7 @@ values and is not runnable on its own.
 | `deps`      | Dependency `tf_library` targets. |
 | `data`      | Extra files placed in the work tree for `file()` and `templatefile()`. |
 | `providers` | Providers the library's files require, as `@tf_providers//<namespace>/<name>`. |
-| `module_source` | The address by which other modules call this one, e.g. `git::https://example.com/acme/network.git?ref=v1.0.0`. See [Modules from other repositories](#modules-from-other-repositories). |
+| `module_source` | The address by which other modules call this one, e.g. `git::https://example.com/acme/network.git?ref=v1.0.0`. See [Modules](#modules-). |
 | `module_version` | This module's version, required when `module_source` is a registry address. |
 | `fmt_test`  | Generate the `.fmt_check` test (default `True`). |
 
@@ -356,7 +356,14 @@ hold real state. For the bootstrap case, add the backend block once the
 bucket exists, migrate with `tofu init -migrate-state`, then drop the
 attribute.
 
-## Module source paths
+## Modules 🧩
+
+`tofu init` never fetches a module. Every module a configuration calls is a
+`tf_library` in `deps`, and rules_tofu records where each call's files are in
+`.terraform/modules/modules.json`, as `tofu init` does after installing
+modules, then runs `tofu init -get=false`.
+
+### In the workspace
 
 Every `.tf` file is materialised at its workspace-relative path, so
 same-package files see each other bare and sibling packages are a relative
@@ -372,11 +379,82 @@ Terraform treats any `source` that doesn't start with `./` or `../` as a
 registry address. To reach across the tree, climb to the workspace root and
 back down, for example `../../infra/dns`.
 
-### Modules from other repositories
+### From a registry, git or an archive
 
-A relative path can't reach a `tf_library` in another Bazel repository, such
-as one from a `bazel_dep`. Such a library sets `module_source`, the address
-that users outside Bazel would write, and callers use that address:
+Declare each module in `MODULE.bazel`, and call it from HCL by the same
+`source`:
+
+```python
+# MODULE.bazel
+tf_modules = use_extension("@rules_tofu//tf/modules:extensions.bzl", "tf_modules")
+tf_modules.module(source = "terraform-aws-modules/vpc/aws", version = "5.8.1")
+tf_modules.module(
+    name = "acme_vpc",
+    source = "git::https://github.com/acme/infra.git//vpc?ref=v1.2.0",
+)
+tf_modules.module(
+    name = "acme_dns",
+    source = "https://example.com/dns-1.0.0.tar.gz",
+    sha256 = "...",
+)
+use_repo(tf_modules, "tf_modules")
+```
+
+```starlark
+# BUILD.bazel
+tf_library(
+    name = "network",
+    srcs = ["main.tf"],
+    deps = [
+        "@tf_modules//terraform-aws-modules/vpc/aws",
+        "@tf_modules//acme_vpc",
+    ],
+)
+```
+
+```hcl
+module "vpc" {
+  source  = "terraform-aws-modules/vpc/aws"
+  version = "~> 5.8"
+}
+
+module "endpoints" {
+  source = "terraform-aws-modules/vpc/aws//modules/vpc-endpoints"
+}
+
+module "acme_vpc" {
+  source = "git::https://github.com/acme/infra.git//vpc?ref=v1.2.0"
+}
+```
+
+A registry module is labelled `@tf_modules//<namespace>/<name>/<system>`,
+and needs an exact `version`, which a call's `version` constraint must
+accept. A git or archive module is labelled by its `name`. Submodules are
+called with `//<subdir>` and come with the module's label.
+
+Each module is pinned, so a tag that moves later changes nothing:
+
+| Source | Pinned by |
+|--------|-----------|
+| Registry address | The commit (or archive digest) the registry gives for the version, recorded in `MODULE.bazel.lock`. |
+| `git::<url>` or `github.com/<owner>/<repo>` | `commit`, or the commit that `?ref=` names when first fetched, recorded in `MODULE.bazel.lock`. |
+| Archive URL | `sha256`, which is required. |
+
+git sources are fetched with `git`, which must be on the `PATH`.
+
+A module's `tf_library` carries the providers its `required_providers`
+name, so callers don't list them; the root module still pins them, by its
+lock or by tags. A module that calls other modules by address needs them
+declared too: fetching it fails otherwise, naming the `tf_modules.module`
+to add. Each module has one version per build. For a registry module the
+root module's tag wins, else the highest version requested.
+
+### From other Bazel repositories
+
+A `tf_library` that another Bazel repository ships, for example through a
+`bazel_dep`, can't be reached by a relative path. Such a library sets
+`module_source`, the address that users outside Bazel would write, and
+callers use that address:
 
 ```starlark
 # BUILD.bazel in the repository that ships the module
@@ -397,29 +475,24 @@ tf_library(
 )
 ```
 
-```hcl
-module "vpc" {
-  source = "git::https://github.com/acme/infra.git//vpc?ref=v1.2.0"
-}
-```
+For a registry address, also set `module_version`. The library's directory
+is its package, so give each such library a package of its own.
 
-A call matches a library in `deps` (direct or transitive) whose
-`module_source` is its `source`, or whose `module_source` plus `//<subdir>`
-is. For a registry address, also set `module_version`; a call's `version`
-constraint must accept it. Registry addresses match as OpenTofu compares
-them, ignoring case and the default `registry.opentofu.org/` host. Other
-addresses must match exactly, `?ref=` included.
+### How calls are matched
 
-No module is ever fetched. rules_tofu records where each call's files are in
-`.terraform/modules/modules.json`, as `tofu init` does after installing
-modules, and runs `tofu init -get=false`. The build fails when:
+A call matches the library in `deps` (direct or transitive) whose
+`module_source` is its `source`, or the one whose `module_source` plus
+`//<subdir>` is, the longest such. `tf_modules` sets `module_source` to the
+tag's `source`. Registry addresses match as OpenTofu compares them, ignoring
+case and the default `registry.opentofu.org/` host. Other addresses must
+match exactly, `?ref=` included. A `source` must be a literal string.
+
+The build fails when:
 
 - a call's `source` matches no library in `deps`;
 - a library in `deps` with `module_source` matches no call;
 - two libraries have the same `module_source`;
-- a call's `version` constraint rejects the matching `module_version`.
-
-A `source` must be a literal string.
+- a call's `version` constraint rejects the matching version.
 
 ## How it works
 
@@ -435,8 +508,8 @@ directory of every module call.
 
 At run time a small Go launcher enters the work tree and runs
 `tofu init -input=false -get=false -plugin-dir=<vendored providers>`, which
-disables module and plugin installation, then the requested command. `var_files` are
-passed to every command with `-var-file`.
+disables module and plugin installation, then the requested command.
+`var_files` are passed to every command with `-var-file`.
 
 ## Restrictions
 
@@ -445,8 +518,6 @@ passed to every command with `-var-file`.
 - `apply` and `destroy` need a backend block or `allow_ephemeral_state`.
 - A module call can't use a relative path to reach files in another Bazel
   repository; it uses the library's `module_source`.
-- Registry modules and git or https sources are only usable through a
-  `tf_library` with that `module_source`; rules_tofu doesn't fetch them yet.
 
 ## Known gaps
 

@@ -112,12 +112,12 @@ func TestBuild_Errors(t *testing.T) {
 		{
 			name:  "registry source with no dep",
 			files: map[string]string{"app/main.tf": `module "vpc" { source = "terraform-aws-modules/vpc/aws//modules/x" }`},
-			want:  `no dep provides source "terraform-aws-modules/vpc/aws//modules/x". Declare it with tf_modules.module(source = "terraform-aws-modules/vpc/aws"`,
+			want:  `Declare it in MODULE.bazel with tf_modules.module(source = "terraform-aws-modules/vpc/aws", version = ...) and add "@tf_modules//terraform-aws-modules/vpc/aws" to deps`,
 		},
 		{
 			name:  "git source with no dep",
 			files: map[string]string{"app/main.tf": `module "g" { source = "git::https://x/y.git" }`},
-			want:  `Add a tf_library with module_source = "git::https://x/y.git" to deps`,
+			want:  `or add a tf_library with module_source = "git::https://x/y.git"`,
 		},
 		{
 			name:  "git ref differs",
@@ -192,37 +192,32 @@ func TestBuild_Errors(t *testing.T) {
 	}
 }
 
-func TestNormalizeSource(t *testing.T) {
-	for in, want := range map[string]string{
-		"Acme/Net/AWS":                              "registry.opentofu.org/acme/net/aws",
-		"acme/net/aws//Modules/X":                   "registry.opentofu.org/acme/net/aws//Modules/X",
-		"Registry.Terraform.io/acme/net/aws":        "registry.terraform.io/acme/net/aws",
-		"github.com/acme/net":                       "github.com/acme/net",
-		"github.com/acme/net/aws":                   "github.com/acme/net/aws",
-		"github.com/a/b/c":                          "github.com/a/b/c",
-		"git::https://example.com/x.git//d?ref=v1":  "git::https://example.com/x.git//d?ref=v1",
-		"https://example.com/x.tar.gz":              "https://example.com/x.tar.gz",
-		"./local":                                   "./local",
-		"a/b":                                       "a/b",
-		"s3::https://s3.amazonaws.com/bucket/x.zip": "s3::https://s3.amazonaws.com/bucket/x.zip",
-	} {
-		if got := NormalizeSource(in); got != want {
-			t.Errorf("NormalizeSource(%q) = %q, want %q", in, got, want)
-		}
+// A dep for a submodule wins over the dep for the module containing it, and
+// a call deeper than either module_source uses the rest as a subdirectory.
+func TestBuild_LongestMatch(t *testing.T) {
+	tree := writeTree(t, map[string]string{
+		"app/main.tf":                   `module "m" { source = "acme/n/aws//modules/x/y" }`,
+		"external/whole+/main.tf":       ``,
+		"external/sub+/x/y/main.tf":     ``,
+		"external/whole+/modules/x/y/z": ``,
+	})
+	deps := []dep{
+		{Label: "@whole", Source: "acme/n/aws", Version: "1.0.0", Dir: "external/whole+", Direct: true},
+		{Label: "@sub", Source: "acme/n/aws//modules", Version: "1.0.0", Dir: "external/sub+", Direct: true},
 	}
-}
-
-func TestSplitSubdir(t *testing.T) {
-	for in, want := range map[string][2]string{
-		"acme/net/aws":                           {"acme/net/aws", ""},
-		"acme/net/aws//modules/x":                {"acme/net/aws", "modules/x"},
-		"git::https://e.com/x.git//vpc?ref=v1.0": {"git::https://e.com/x.git?ref=v1.0", "vpc"},
-		"https://e.com/x.tar.gz//sub/":           {"https://e.com/x.tar.gz", "sub"},
-		"https://e.com/x.tar.gz":                 {"https://e.com/x.tar.gz", ""},
-	} {
-		base, subdir := splitSubdir(in)
-		if base != want[0] || subdir != want[1] {
-			t.Errorf("splitSubdir(%q) = (%q, %q), want %q", in, base, subdir, want)
-		}
+	_, err := build(tree, "app", "//app", deps)
+	if err == nil || !strings.Contains(err.Error(), "no module call uses @whole") {
+		t.Fatalf("expected @whole to go unused, got %v", err)
+	}
+	got, err := build(tree, "app", "//app", deps[1:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Record{
+		{Key: "", Source: "", Dir: "."},
+		{Key: "m", Source: "acme/n/aws//modules/x/y", Version: "1.0.0", Dir: "../external/sub+/x/y"},
+	}
+	if !reflect.DeepEqual(got.Modules, want) {
+		t.Errorf("got %+v, want %+v", got.Modules, want)
 	}
 }

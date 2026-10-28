@@ -1,7 +1,7 @@
 """What `tf_providers.from_lock` accepts from a `.terraform.lock.hcl`.
 
 The file itself is parsed by `lockjson` (//tf/private/cmd/lockjson, built by
-`lock_reader.bzl`) with the standard HCL library. These pure functions decide
+`//tf/private:host_tools.bzl`) with the standard HCL library. These pure functions decide
 what rules_tofu makes of its entries, so //tf/providers/tests can exercise
 them without a module graph. Errors are returned, not raised: the extension
 decides which ones abort evaluation and which become a repository that fails
