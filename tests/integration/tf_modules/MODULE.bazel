@@ -1,0 +1,55 @@
+"""Module declaration for the nested Bazel invocation that fetches modules
+with the tf_modules extension.
+
+tf_modules_test.sh fills in @FIXTURES@: it turns fixtures/network into a git
+repository and fixtures/dns into an archive, so that both kinds of source are
+fetched offline. cloudposse/label/null comes from the OpenTofu registry.
+"""
+
+module(
+    name = "rules_tofu_tf_modules_tests",
+    version = "0.0.0",
+)
+
+# Version is irrelevant: `local_path_override` below always wins (same
+# pattern as broken_workspace and e2e/smoke).
+bazel_dep(name = "rules_tofu", version = "0.0.0")
+local_path_override(
+    module_name = "rules_tofu",
+    path = "../../..",
+)
+
+bazel_dep(name = "platforms", version = "1.0.0")
+bazel_dep(name = "rules_go", version = "0.60.0")
+
+go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
+go_sdk.download(version = "1.26.3")
+
+tofu = use_extension("@rules_tofu//toolchain:extensions.bzl", "tofu")
+use_repo(tofu, "tofu_toolchains")
+
+register_toolchains("@tofu_toolchains//:all")
+
+# The network module requires hashicorp/null; nothing in //app names it.
+tf_providers = use_extension("@rules_tofu//tf/providers:extensions.bzl", "tf_providers")
+tf_providers.provider(
+    source = "hashicorp/null",
+    version = "3.2.4",
+)
+use_repo(tf_providers, "tf_providers")
+
+tf_modules = use_extension("@rules_tofu//tf/modules:extensions.bzl", "tf_modules")
+tf_modules.module(
+    name = "network",
+    source = "git::file://@FIXTURES@/network.git//vpc?ref=v1.0.0",
+)
+tf_modules.module(
+    name = "dns",
+    sha256 = "@DNS_SHA256@",
+    source = "file://@FIXTURES@/dns.tar.gz",
+)
+tf_modules.module(
+    source = "cloudposse/label/null",
+    version = "0.25.0",
+)
+use_repo(tf_modules, "tf_modules")
