@@ -168,7 +168,8 @@ bazel run @tf_providers//:pin
 ```
 
 `pin` locks every provider that any `tf_library` or `tf_deploy` in the
-workspace requires, for `linux_amd64`, `linux_arm64`, `darwin_amd64`,
+workspace requires, or any module they call (from `tf_modules` or another
+Bazel repository), for `linux_amd64`, `linux_arm64`, `darwin_amd64`,
 `darwin_arm64` and `windows_amd64` (`-platform=<os>_<arch>` chooses others).
 Each provider is locked at the newest version that satisfies every
 `required_providers` constraint in the workspace. If the constraints
@@ -443,11 +444,48 @@ Each module is pinned, so a tag that moves later changes nothing:
 git sources are fetched with `git`, which must be on the `PATH`.
 
 A module's `tf_library` carries the providers its `required_providers`
-name, so callers don't list them; the root module still pins them, by its
-lock or by tags. A module that calls other modules by address needs them
-declared too: fetching it fails otherwise, naming the `tf_modules.module`
-to add. Each module has one version per build. For a registry module the
-root module's tag wins, else the highest version requested.
+name, so callers don't list them. The root module still pins them, with
+tags or in its lock, which `pin` writes to cover them. A module that calls
+other modules by address needs them declared too: fetching it fails
+otherwise, naming the `tf_modules.module` to add. Each module has one
+version per build. For a registry module the root module's tag wins, else
+the highest version requested.
+
+#### Keeping modules up to date 🤖
+
+Renovate updates registry modules with a regex manager for `MODULE.bazel`.
+Grouping it with Renovate's own `terraform` manager, which updates the
+`version` in HCL, puts both in one PR:
+
+```json
+{
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/(^|/)MODULE\\.bazel$/"],
+      "matchStrings": [
+        "tf_modules\\.module\\(\\s*source\\s*=\\s*\"(?<depName>[^\"/]+/[^\"/]+/[^\"/]+)\",\\s*version\\s*=\\s*\"(?<currentValue>[^\"]+)\"",
+        "tf_modules\\.module\\(\\s*version\\s*=\\s*\"(?<currentValue>[^\"]+)\",\\s*source\\s*=\\s*\"(?<depName>[^\"/]+/[^\"/]+/[^\"/]+)\""
+      ],
+      "datasourceTemplate": "terraform-module",
+      "registryUrlTemplate": "https://registry.opentofu.org"
+    }
+  ],
+  "packageRules": [
+    {
+      "matchDatasources": ["terraform-module"],
+      "groupName": "OpenTofu modules",
+      "registryUrls": ["https://registry.opentofu.org"]
+    }
+  ]
+}
+```
+
+A new version's commit is recorded in `MODULE.bazel.lock`, so the PR is
+complete only once `bazel mod deps --lockfile_mode=update` has run, and a
+build with `--lockfile_mode=error` fails until then. Self-hosted Renovate
+can run it as a `postUpgradeTasks` command; otherwise, run it on the PR's
+branch. Dependabot doesn't update `tf_modules.module` tags.
 
 ### From other Bazel repositories
 

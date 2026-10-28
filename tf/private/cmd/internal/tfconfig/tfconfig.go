@@ -5,7 +5,9 @@ package tfconfig
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -341,4 +343,70 @@ func LiteralString(expr hcl.Expression) (string, bool) {
 		return "", false
 	}
 	return v.AsString(), true
+}
+
+// ModuleDirs lists the directories that a module's library serves, relative
+// to repo: the module's own (moduleDir, relative to repo, "" for its root),
+// every directory below its `modules/` (the standard place for submodules)
+// that holds configuration, and every directory those reach with local
+// `source` paths that stay inside repo. Examples and tests are left out
+// unless something calls them. The result is sorted.
+func ModuleDirs(repo, moduleDir string) ([]string, error) {
+	moduleDir = strings.Trim(moduleDir, "/")
+	if !HasConfig(filepath.Join(repo, filepath.FromSlash(moduleDir))) {
+		return nil, fmt.Errorf("%q holds no .tf or .tf.json files", "/"+moduleDir)
+	}
+	pending := []string{moduleDir}
+	submodules := filepath.Join(repo, filepath.FromSlash(path.Join(moduleDir, "modules")))
+	err := filepath.WalkDir(submodules, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if os.IsNotExist(err) {
+				return filepath.SkipAll
+			}
+			return err
+		}
+		if d.IsDir() && HasConfig(p) {
+			rel, err := filepath.Rel(repo, p)
+			if err != nil {
+				return err
+			}
+			pending = append(pending, filepath.ToSlash(rel))
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	seen := map[string]bool{}
+	for len(pending) > 0 {
+		dir := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		if dir == "." {
+			dir = ""
+		}
+		if seen[dir] {
+			continue
+		}
+		seen[dir] = true
+		calls, err := ReadCalls(filepath.Join(repo, filepath.FromSlash(dir)))
+		if err != nil {
+			return nil, err
+		}
+		for _, c := range calls {
+			if !IsLocal(c.Source) {
+				continue
+			}
+			// A path out of the repository fails in tofu; it isn't ours to report.
+			if child := path.Join(dir, c.Source); child != ".." && !strings.HasPrefix(child, "../") {
+				pending = append(pending, child)
+			}
+		}
+	}
+	dirs := make([]string, 0, len(seen))
+	for d := range seen {
+		dirs = append(dirs, d)
+	}
+	sort.Strings(dirs)
+	return dirs, nil
 }

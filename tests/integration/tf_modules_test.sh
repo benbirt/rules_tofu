@@ -12,7 +12,9 @@
 #   4. v1.0.0 is moved to a new commit. After `bazel clean --expunge`, //app
 #      still plans the old commit's content, and the build passes with
 #      --lockfile_mode=error.
-#   5. A module that calls an undeclared one fails when fetched, naming the
+#   5. With the provider locked rather than tagged, `@tf_providers//:pin`
+#      covers what the git module requires, but not what its examples do.
+#   6. A module that calls an undeclared one fails when fetched, naming the
 #      tag to add.
 
 set -euo pipefail
@@ -85,7 +87,30 @@ bazel clean --expunge >&2
 plan "app-v1 10.0.0.0/24"
 bazel build --lockfile_mode=error //app >&2 || fail "the build with --lockfile_mode=error failed"
 
-echo "--- 5. an undeclared module ---" >&2
+echo "--- 5. pin ---" >&2
+# The root pins hashicorp/null with a lock instead of a tag. Nothing in the
+# main repository requires it: only the git module does.
+sed -i.bak '/^tf_providers.provider($/,/^)$/d' MODULE.bazel
+rm MODULE.bazel.bak
+sed -i.bak 's|^use_repo(tf_providers, "tf_providers")$|tf_providers.from_lock()\nuse_repo(tf_providers, "tf_providers")|' MODULE.bazel
+rm MODULE.bazel.bak
+grep -q '^tf_providers.from_lock()$' MODULE.bazel || fail "couldn't switch MODULE.bazel to from_lock"
+BAZEL="${_TMPDIR}/bazel"
+cat >"${BAZEL}" <<EOF
+#!/usr/bin/env bash
+exec "${BIT_BAZEL_BINARY}" --output_base="${NESTED_OUTPUT_BASE}" "\$@"
+EOF
+chmod +x "${BAZEL}"
+BAZEL="${BAZEL}" bazel run @tf_providers//:pin >&2 || fail "pin failed"
+cat .terraform.lock.hcl >&2
+grep -q 'provider "registry.opentofu.org/hashicorp/null"' .terraform.lock.hcl ||
+  fail "the lock doesn't cover hashicorp/null, which the git module requires"
+if grep -q 'hashicorp/random' .terraform.lock.hcl; then
+  fail "the lock covers hashicorp/random, which only the git module's examples require"
+fi
+plan "app-v1 10.0.0.0/24"
+
+echo "--- 6. an undeclared module ---" >&2
 cat >>MODULE.bazel <<EOF
 tf_modules.module(
     name = "caller",

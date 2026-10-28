@@ -126,7 +126,13 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   (exit 3): `deps()` follows `providers` into the hub, which has no package
   for a provider until it is locked, so without it the first `pin` fails
   wherever a BUILD file already names the provider (also covered by
-  `lock_update_test`). Only `.tf` files in those rules count, a `versions.tf` included:
+  `lock_update_test`). It is one query (`--output=location`, for absolute
+  paths in any repository) for the files and, unioned, the `_tf_library`
+  rules with `module_source` among the deps. Files from other repositories
+  count only in the directories `tfconfig.ModuleDirs` gives for such a
+  library, the same ones `modscan` reads, so a fetched module's examples
+  never reach the lock (`tf_modules_test` covers this). Only `.tf` files
+  in those rules count, a `versions.tf` included:
   don't reintroduce a filesystem walk, which would have to duplicate
   Bazel's own `.bazelignore`/deleted-package/nested-workspace handling. A
   `versions.tf` beside the lock is strongly recommended but optional;
@@ -264,14 +270,19 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   upstream Bazel files, then runs `modscan` (compiled with `lockjson` by
   `tf/private/host_tools.bzl` into `@rules_tofu_host_tools`, so its watched
   sources include `tfconfig` and `flags`) to find the providers and calls of
-  the module's root, its `modules/**` and what they reach locally; matching
+  the directories `tfconfig.ModuleDirs` gives (the module's own, its
+  `modules/**` and what they reach locally; `pin` uses the same); matching
   calls to declared modules is `tfconfig.Match` in Go, shared with the
   manifest tool, not reimplemented in Starlark. An undeclared call fails the
   fetch naming the tag to add. Generated libraries name providers as
   `@tf_providers//...`, which they can only see because rules_tofu's
   MODULE.bazel imports the hub through a non-dev `use_extension`; keep that.
   `//tests/integration:tf_modules_test` covers git (with a moved tag),
-  archive and registry modules offline but for the registry itself.
+  archive and registry modules offline but for the registry itself. Unlike
+  a provider lock update, a module version bump changes MODULE.bazel.lock
+  (a new fact), so a bot's PR needs `bazel mod deps --lockfile_mode=update`;
+  the README says so. That is the price of pinning commits on first use:
+  tofu has no module lock to carry them instead.
 - The `.bazelversion` copies (root, `e2e/smoke`,
   `tests/integration/broken_workspace`,
   `tests/integration/broken_module`,
