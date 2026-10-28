@@ -9,11 +9,11 @@
 // where <module dir> is relative to the repository ("" for its root), and
 // each --module is a declared tf_modules.module: its label and source. The
 // module's library serves the module and its submodules, which callers reach
-// with `//<subdir>`, so modscan scans the module directory, each directory
-// below its `modules/` (the standard place for submodules) that holds
-// configuration, and every directory those reach with local `source` paths.
-// Examples and tests are left out unless something calls them. It prints, as
-// JSON:
+// with `//<subdir>`, so modscan scans the directories tfconfig.ModuleDirs
+// lists: the module directory, each directory below its `modules/` (the
+// standard place for submodules) that holds configuration, and every
+// directory those reach with local `source` paths. Examples and tests are
+// left out unless something calls them. It prints, as JSON:
 //
 //   - providers: every required provider, as `<host>/<namespace>/<name>`;
 //   - deps: the label of each declared module that a call uses (see
@@ -26,9 +26,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io/fs"
 	"os"
-	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -85,45 +83,13 @@ func main() {
 }
 
 func scan(repo, moduleDir string, modules []Module) (*Result, error) {
-	moduleDir = strings.Trim(moduleDir, "/")
-	if !tfconfig.HasConfig(filepath.Join(repo, filepath.FromSlash(moduleDir))) {
-		return nil, fmt.Errorf("%q holds no .tf or .tf.json files", "/"+moduleDir)
-	}
-	pending := []string{moduleDir}
-	submodules := path.Join(moduleDir, "modules")
-	err := filepath.WalkDir(filepath.Join(repo, filepath.FromSlash(submodules)), func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			if os.IsNotExist(err) {
-				return filepath.SkipAll
-			}
-			return err
-		}
-		if d.IsDir() && tfconfig.HasConfig(p) {
-			rel, err := filepath.Rel(repo, p)
-			if err != nil {
-				return err
-			}
-			pending = append(pending, filepath.ToSlash(rel))
-		}
-		return nil
-	})
+	dirs, err := tfconfig.ModuleDirs(repo, moduleDir)
 	if err != nil {
 		return nil, err
 	}
-
 	providers := map[string]bool{}
 	calls := map[string]Call{}
-	seen := map[string]bool{}
-	for len(pending) > 0 {
-		dir := pending[len(pending)-1]
-		pending = pending[:len(pending)-1]
-		if dir == "." {
-			dir = ""
-		}
-		if seen[dir] {
-			continue
-		}
-		seen[dir] = true
+	for _, dir := range dirs {
 		abs := filepath.Join(repo, filepath.FromSlash(dir))
 		required, err := tfconfig.RequiredProviders(abs)
 		if err != nil {
@@ -138,11 +104,6 @@ func scan(repo, moduleDir string, modules []Module) (*Result, error) {
 		}
 		for _, c := range found {
 			if tfconfig.IsLocal(c.Source) {
-				child := path.Join(dir, c.Source)
-				// A path out of the repository fails in tofu; it isn't ours to report.
-				if child != ".." && !strings.HasPrefix(child, "../") {
-					pending = append(pending, child)
-				}
 				continue
 			}
 			where := c.Range.Filename
