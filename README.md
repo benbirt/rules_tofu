@@ -3,6 +3,7 @@
 [![CI](https://github.com/benbirt/rules_tofu/actions/workflows/ci.yml/badge.svg)](https://github.com/benbirt/rules_tofu/actions/workflows/ci.yml)
 [![BCR](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fbcr.bazel.build%2Fmodules%2Frules_tofu%2Fmetadata.json&query=%24.versions%5B-1%3A%5D&label=BCR&color=43a047&logo=bazel)](https://registry.bazel.build/modules/rules_tofu)
 [![Release](https://img.shields.io/github/v/release/benbirt/rules_tofu?logo=github)](https://github.com/benbirt/rules_tofu/releases)
+[![API docs](https://img.shields.io/badge/docs-API-43a047?logo=bazel)](https://registry.bazel.build/modules/rules_tofu/latest/docs)
 [![Bazel ≥ 8.5](https://img.shields.io/badge/bazel-%E2%89%A5%208.5-43a047)](https://bazel.build)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -86,7 +87,9 @@ providers. To use providers, continue with [Providers](#providers).
 
 ## The rules
 
-Both rules load from `@rules_tofu//tf:defs.bzl`.
+Both rules load from `@rules_tofu//tf:defs.bzl`. The full API reference,
+including the module extensions' tags, is on the
+[Bazel Central Registry](https://registry.bazel.build/modules/rules_tofu/latest/docs).
 
 ### `tf_library`
 
@@ -147,7 +150,8 @@ Versions come from one of two places:
   digests you pin yourself or a download mirror.
 
 The two can be mixed, but a provider can't be both tagged in the root module
-and locked.
+and locked. Every tag and attribute is described in the
+[`tf_providers` reference](https://registry.bazel.build/modules/rules_tofu/latest/docs/tf/providers/extensions.bzl).
 
 ### Pinning with a lock file
 

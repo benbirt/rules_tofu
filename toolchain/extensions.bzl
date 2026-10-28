@@ -1,4 +1,4 @@
-"""The `tofu` module extension: the OpenTofu binary rules_tofu runs.
+"""The tofu module extension, which provides the OpenTofu binary rules_tofu runs.
 
 Downloads a pinned OpenTofu release for each supported platform and
 registers it as the toolchain every rules_tofu target uses:

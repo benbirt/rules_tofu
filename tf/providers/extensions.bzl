@@ -1,4 +1,4 @@
-"""The `tf_providers` module extension: the providers rules_tofu vendors.
+"""The tf_providers module extension, which vendors OpenTofu/Terraform providers.
 
 Downloads OpenTofu/Terraform provider plugins, pinned by a
 `.terraform.lock.hcl` or by tags, for `tf_library` and `tf_deploy` to use
@@ -777,7 +777,7 @@ def _lock_provider_repo(lock, entry):
     )
 
 tf_providers = module_extension(
-    doc = """Downloads OpenTofu/Terraform providers for `tf_library` and `tf_deploy`.
+    doc = """Downloads OpenTofu/Terraform providers for tf_library and tf_deploy targets.
 
 BUILD files name each provider as `@tf_providers//<namespace>/<name>`, in lower
 case and never with a version, in the `providers` of the targets that use it.
