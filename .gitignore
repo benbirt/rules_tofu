@@ -5,6 +5,5 @@ bazel-*
 # under BCR presubmit); don't commit them.
 /e2e/*/MODULE.bazel.lock
 /tests/integration/broken_module/MODULE.bazel.lock
-/tests/integration/custom_toolchain/MODULE.bazel.lock
 /tests/integration/broken_workspace/MODULE.bazel.lock
 /tests/integration/lock_dependency/MODULE.bazel.lock

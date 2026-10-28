@@ -47,10 +47,5 @@ opentofu_toolchain = rule(
                   "pick the matching `tf_provider` binary.",
         ),
     },
-    doc = """Bundles an OpenTofu binary for use by rules_tofu rules.
-
-The `tofu` module extension declares one per downloaded release. A root module
-may declare its own, wrapping any `tofu` executable, and `register_toolchains`
-it to take the place of the download; see "The `tofu` binary" in the README.
-""",
+    doc = "Bundles an OpenTofu binary for use by rules_tofu rules.",
 )
