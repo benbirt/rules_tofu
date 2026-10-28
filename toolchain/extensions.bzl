@@ -192,7 +192,9 @@ one, or the build fails naming them. With no tags at all, the default pinned
 in rules_tofu is used.
 
 Only `tofu_toolchains` needs a `use_repo`, and the toolchain is registered
-for you.
+for you. A root module that wants another `tofu` binary, patched or built from
+source, registers its own `opentofu_toolchain` instead; see "The `tofu` binary"
+in the README.
 """,
     implementation = _tofu_extension_impl,
     tag_classes = {"version": _version_tag},

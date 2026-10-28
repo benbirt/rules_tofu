@@ -1,0 +1,35 @@
+"""Module declaration for the nested Bazel invocation that checks a root
+module can bring its own `tofu` binary.
+
+The README documents this escape hatch: wrap any `tofu` executable in
+`opentofu_toolchain`, declare a `toolchain()` for it, and
+`register_toolchains` it from the root module, which Bazel consults before
+the toolchains rules_tofu registers for its downloads. Here the "binary" is a
+script that fails with a distinctive message, so the nested build failing
+with that message proves the root's toolchain was the one selected.
+"""
+
+module(
+    name = "rules_tofu_custom_toolchain_tests",
+    version = "0.0.0",
+)
+
+# Version is irrelevant: `local_path_override` below always wins (same
+# pattern as broken_workspace and e2e/smoke).
+bazel_dep(name = "rules_tofu", version = "0.0.0")
+local_path_override(
+    module_name = "rules_tofu",
+    path = "../../..",
+)
+
+bazel_dep(name = "platforms", version = "1.0.0")
+bazel_dep(name = "rules_go", version = "0.60.0")
+
+go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
+go_sdk.download(version = "1.26.3")
+
+tofu = use_extension("@rules_tofu//toolchain:extensions.bzl", "tofu")
+use_repo(tofu, "tofu_toolchains")
+
+# The root's own toolchain, registered ahead of rules_tofu's downloads.
+register_toolchains("//:custom_toolchain")
