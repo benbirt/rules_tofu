@@ -1,0 +1,39 @@
+# Maintainer tools. Dev-only: this package references dev dependencies
+# (rules_shell, the cosign downloads) and is excluded from the release
+# tarball by release_prep.sh.
+
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+
+# cosign for the host, from the sigstore/cosign release pinned in MODULE.bazel.
+alias(
+    name = "cosign",
+    actual = select({
+        ":linux_amd64": "@cosign_linux_amd64//file",
+        ":linux_arm64": "@cosign_linux_arm64//file",
+        ":darwin_amd64": "@cosign_darwin_amd64//file",
+        ":darwin_arm64": "@cosign_darwin_arm64//file",
+    }, no_match_error = "cosign is pinned for Linux and macOS on amd64/arm64 only; add the platform to MODULE.bazel and tools/BUILD.bazel"),
+)
+
+[
+    config_setting(
+        name = name,
+        constraint_values = [os, cpu],
+    )
+    for name, os, cpu in [
+        ("linux_amd64", "@platforms//os:linux", "@platforms//cpu:x86_64"),
+        ("linux_arm64", "@platforms//os:linux", "@platforms//cpu:aarch64"),
+        ("darwin_amd64", "@platforms//os:macos", "@platforms//cpu:x86_64"),
+        ("darwin_arm64", "@platforms//os:macos", "@platforms//cpu:aarch64"),
+    ]
+]
+
+# Pins a new OpenTofu release in //toolchain:versions.bzl from its signed
+# SHA256SUMS: `bazel run //tools:update_versions -- [--default] <version>`.
+sh_binary(
+    name = "update_versions",
+    srcs = ["update_versions.sh"],
+    data = [":cosign"],
+    env = {"COSIGN": "$(rlocationpath :cosign)"},
+    deps = ["@bazel_tools//tools/bash/runfiles"],
+)

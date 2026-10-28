@@ -1,12 +1,17 @@
 """Pinned OpenTofu release metadata.
 
-To update, fetch the desired release's SHA256SUMS from
-https://github.com/opentofu/opentofu/releases and replace both DEFAULT_VERSION
-and KNOWN_VERSIONS below.
+To pin a new release, run `bazel run //tools:update_versions -- <version>`
+(add `--default` to make it DEFAULT_VERSION too). It verifies the release's
+SHA256SUMS against its cosign signature before copying the digests here.
 
-TODO(rules_tofu): generate this file from SHA256SUMS rather than maintaining by hand.
-TODO(rules_tofu): replace download with a `rules_go` build-from-source so the
-toolchain is fully hermetic and cross-compilable.
+rules_tofu downloads OpenTofu's release binaries rather than building them
+from source, and that is deliberate. The pinned download is already hermetic:
+content-addressed, cached by Bazel and offline after the first fetch. A source
+build would pull OpenTofu's ~300 Go modules into every downstream module graph
+through `go_deps`, where rules_tofu, never the root module, could not apply
+OpenTofu's `replace` of hashicorp/hcl. A root module that wants a source build
+can register its own toolchain; the README's "The tofu binary" section shows
+how.
 """
 
 DEFAULT_VERSION = "1.12.0"

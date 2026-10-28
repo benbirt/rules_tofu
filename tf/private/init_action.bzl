@@ -58,6 +58,9 @@ def tf_init_validate(ctx, work_tree_files, work_tree_root, package_dir, plugin_t
         command = """\
 set -euo pipefail
 TOFU=$1
+# A binary in the root package has a bare path like `tofu.sh`, which bash would
+# look up in PATH instead of the exec root. Make it relative to here.
+case "$TOFU" in */*) ;; *) TOFU="./$TOFU" ;; esac
 WORK_TREE_ROOT=$2
 PACKAGE_DIR=$3
 PLUGIN_TREE_ROOT=$4

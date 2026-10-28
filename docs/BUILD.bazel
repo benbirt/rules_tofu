@@ -31,3 +31,10 @@ starlark_doc_extract(
     render_main_repo_name = True,
     deps = ["//tf/providers:all_files"],
 )
+
+starlark_doc_extract(
+    name = "toolchain",
+    src = "//toolchain:toolchain.bzl",
+    render_main_repo_name = True,
+    deps = ["//toolchain:all_files"],
+)
