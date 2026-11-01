@@ -295,6 +295,58 @@ vendored plugins too, though the providers themselves still talk to their
 own APIs. A `.terraform.lock.hcl` in `srcs` or `data` is rejected; use
 `from_lock`.
 
+## The `tofu` binary
+
+Bazel downloads the OpenTofu release for the machine it runs on, checked
+against the digest pinned in
+[`toolchain/versions.bzl`](toolchain/versions.bzl), and registers it as a
+toolchain. Those digests are copied from each release's `SHA256SUMS` only
+after its cosign signature has been verified, by
+`bazel run //tools:update_versions`. To use a release that isn't pinned yet,
+open a PR that runs it, or bring your own binary.
+
+### Bringing your own binary
+
+`opentofu_toolchain` wraps any `tofu` executable: one you vendor, one you
+patched, or one built from source with `rules_go`. Bazel consults the root
+module's `register_toolchains` before those of its dependencies, so a
+toolchain registered there is the one every rule uses:
+
+```python
+# BUILD.bazel
+load("@rules_tofu//toolchain:toolchain.bzl", "opentofu_toolchain")
+
+opentofu_toolchain(
+    name = "tofu_impl",
+    binary = ":tofu",              # a file, a go_binary, any executable
+    version = "1.12.0",
+    platform_key = "linux_amd64",  # <os>_<arch> of the provider builds it runs
+)
+
+toolchain(
+    name = "tofu_toolchain",
+    toolchain = ":tofu_impl",
+    toolchain_type = "@rules_tofu//toolchain:toolchain_type",
+)
+```
+
+```python
+# MODULE.bazel
+register_toolchains("//:tofu_toolchain")
+```
+
+For a source build, a `go_binary` of `github.com/opentofu/opentofu/cmd/tofu`
+needs `pure = "on"` and
+`x_defs = {"github.com/opentofu/opentofu/version.dev": "no"}`; without the
+latter `tofu version` reports a `-dev` prerelease, which fails
+`required_version` constraints. Expect OpenTofu's three hundred Go modules
+to join your module graph, and its `replace` of `hashicorp/hcl/v2` with
+`opentofu/hcl/v2` to need repeating in your own `go.mod`.
+
+rules_tofu itself deliberately ships the download rather than a source
+build. The pinned download is already hermetic, and a bundled source build
+would put those modules and that `replace` into every downstream build.
+
 ## Variables and data files
 
 `vars` is the common case. `var_files` adds `.tfvars` or `.tfvars.json`
@@ -396,13 +448,26 @@ passed to every command with `-var-file`.
   no workspace-relative path for them that local module addressing can
   reach.
 
+## Non-goals
+
+- **Running Terraform.** rules_tofu runs OpenTofu only. The vast majority
+  of Terraform configuration runs under OpenTofu unchanged, providers and
+  modules included, so for a `.tf` tree this rarely matters; OpenTofu's
+  [migration guide](https://opentofu.org/docs/intro/migration/) lists the
+  exceptions, mostly features tied to HashiCorp's own services such as HCP
+  Terraform and Stacks. Driving the `terraform` binary is not planned: the
+  two tools expand provider addresses to different registry hostnames, which
+  rules_tofu bakes into the vendored plugin tree and the
+  `.terraform.lock.hcl` it writes, so swapping the binary would be the
+  smallest part of the work. Registering a `terraform` binary as described
+  above is untested and breaks at the provider mirror.
+- **Building OpenTofu from source.** See [The `tofu` binary](#the-tofu-binary).
+
 ## Known gaps
 
 - The build host must match the run host: validation and the launcher both
   use the exec-platform provider binaries.
 - Windows: downloads work, but the launcher is bash-only.
-- OpenTofu is a downloaded binary, not built from source.
-- No generated API docs on releases yet.
 
 ## Contributing
 

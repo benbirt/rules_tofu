@@ -23,7 +23,7 @@ PREFIX="rules_tofu-${TAG:1}"
 ARCHIVE="rules_tofu-$TAG.tar.gz"
 
 git archive --format=tar --prefix="${PREFIX}/" "${TAG}" \
-    -- . ':(exclude)examples' ':(exclude)tests' ':(exclude)toolchain/tests' ':(exclude)tf/providers/tests' ':(exclude)docs' | gzip > "$ARCHIVE"
+    -- . ':(exclude)examples' ':(exclude)tests' ':(exclude)tools' ':(exclude)toolchain/tests' ':(exclude)tf/providers/tests' ':(exclude)docs' | gzip > "$ARCHIVE"
 
 # API docs for registry.bazel.build, which renders every .binaryproto in the
 # archive named by `docs_url` in .bcr/source.template.json (see

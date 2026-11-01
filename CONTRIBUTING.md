@@ -28,6 +28,7 @@ bazel test //...
 | `tf/private/cmd/runner/` | Go binary: wraps `tofu` at runtime |
 | `tf/private/cmd/dupcheck/` | Go binary: duplicate-variable-key check |
 | `toolchain/` | OpenTofu binary download + toolchain registration |
+| `tools/` | Maintainer tools (dev-only, not in the release tarball): `update_versions` pins an OpenTofu release |
 | `tests/integration/` | Bazel-in-Bazel negative integration tests |
 | `examples/` | End-to-end usage examples |
 | `e2e/smoke/` | Standalone downstream module; the BCR presubmit test module |
@@ -76,6 +77,21 @@ CI enforces this; PRs with formatting violations will fail.
 2. Make your changes and ensure `bazel build //...` and `bazel test //...` both pass.
 3. Run `bazel run @buildifier_prebuilt//:buildifier -- -r .` and commit any formatting changes.
 4. Open a PR against `main` with a clear description of what changed and why.
+
+## Pinning a new OpenTofu release
+
+```sh
+bazel run //tools:update_versions -- 1.12.1            # add it to KNOWN_VERSIONS
+bazel run //tools:update_versions -- --default 1.12.1  # ...and make it the default
+```
+
+The tool downloads the release's `SHA256SUMS` with the host's `curl`, verifies
+its cosign signature against the OpenTofu release workflow's identity with the
+[cosign](https://github.com/sigstore/cosign) release pinned in `MODULE.bazel`,
+and copies the five platform digests into
+[`toolchain/versions.bzl`](toolchain/versions.bzl). Don't paste digests in by
+hand. Build `//examples/hello:hello` afterwards to check the new binary
+downloads, and run the Starlark tests under `//toolchain/tests`.
 
 ## Releasing
 

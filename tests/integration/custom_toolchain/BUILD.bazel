@@ -1,0 +1,26 @@
+load("@rules_tofu//tf:defs.bzl", "tf_library")
+load("@rules_tofu//toolchain:toolchain.bzl", "opentofu_toolchain")
+
+# A stand-in for a `tofu` the root module built or vendored itself. It only
+# announces itself and fails, which is how the test tells it was selected.
+opentofu_toolchain(
+    name = "custom_toolchain_impl",
+    binary = "tofu.sh",
+    # Unused here: the key only selects provider binaries, and there are none.
+    platform_key = "linux_amd64",
+    version = "0.0.0",
+)
+
+toolchain(
+    name = "custom_toolchain",
+    toolchain = ":custom_toolchain_impl",
+    toolchain_type = "@rules_tofu//toolchain:toolchain_type",
+)
+
+# Nothing is wrong with this library. Validating it runs the selected
+# `tofu`, which is what the test checks.
+tf_library(
+    name = "lib",
+    srcs = ["main.tf"],
+    fmt_test = False,
+)

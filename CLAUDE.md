@@ -82,10 +82,12 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   (and `versions.tf`) leaves `MODULE.bazel.lock` valid.
   `//tests/integration:lock_update_test` guards this; don't move the
   lookup back into the extension. The table in
-  `toolchain/versions.bzl` pins tofu itself. The repository cache keys on
-  these digests. Both extensions declare `reproducible = True`, so their
-  repo specs deliberately do *not* appear in `MODULE.bazel.lock`; the
-  provider extension's facts do. Facts are validated on read
+  `toolchain/versions.bzl` pins tofu itself; `bazel run //tools:update_versions`
+  writes it after verifying the release's cosign signature (cosign is a
+  dev-only `http_file` in MODULE.bazel), so don't paste digests in by hand.
+  The repository cache keys on these digests. Both extensions declare
+  `reproducible = True`, so their repo specs deliberately do *not* appear in
+  `MODULE.bazel.lock`; the provider extension's facts do. Facts are validated on read
   (`valid_cached_sha256s`) and treated as a miss if malformed, never
   trusted blindly, and only the facts in use are returned, so stale ones
   drop out.
@@ -244,7 +246,7 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   `e2e/smoke`). Rerun it after adding/removing nested packages; don't
   hand-edit the lists or add separate one-off lines.
 - The release tarball (`release_prep.sh`) excludes `examples/`, `tests/`,
-  `toolchain/tests/`, `tf/providers/tests/` and `docs/` but must keep `e2e/` and `.bcr/` — BCR presubmit
+  `tools/`, `toolchain/tests/`, `tf/providers/tests/` and `docs/` but must keep `e2e/` and `.bcr/` — BCR presubmit
   reads the test module and templates from the extracted archive. The
   pathspecs are prefix-anchored, so a package named `tests` nested under a
   shipped directory needs its own exclusion; anything loading a
@@ -255,6 +257,17 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   registry.bazel.build renders. A new public `.bzl` entry point needs a
   target there. Its `deps` are the `all_files` filegroups, not
   `bzl_library`, so shipped packages stay free of dev-only repos.
+- OpenTofu is downloaded, not built from source, and that is a decision,
+  not a gap (the `versions.bzl` docstring has the reasoning: a bundled
+  `go_deps` build would push OpenTofu's ~300 modules and its `hcl`
+  `replace` into every downstream module graph). Don't reintroduce a
+  from-source TODO. The escape hatch is a root module registering its own
+  `opentofu_toolchain` (README, "The `tofu` binary"), which
+  `//tests/integration:custom_toolchain_test` guards: root registrations
+  must keep winning over the extension's. Running the `terraform` binary is
+  a documented non-goal (the registry hostname is baked into the plugin
+  tree and the lock), not a feature to add on request without redesigning
+  `tf/providers/source.bzl`.
 
 ## Branch / PR conventions
 

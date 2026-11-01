@@ -23,11 +23,17 @@ tests/integration/
 │       ├── malformed_var_file/{BUILD.bazel, main.tf, bad.tfvars.json}
 │       ├── missing_provider/{BUILD.bazel, main.tf}
 │       └── validate_fails/{BUILD.bazel, main.tf}
-└── broken_module/           second sub-workspace: the break is the
-    ├── MODULE.bazel         module graph itself (two root tofu.version
-    ├── .bazelversion        tags), so it needs its own declaration
-    └── cases/
-        └── duplicate_root_version/{BUILD.bazel, main.tf}
+├── broken_module/           second sub-workspace: the break is the
+│   ├── MODULE.bazel         module graph itself (two root tofu.version
+│   ├── .bazelversion        tags), so it needs its own declaration
+│   └── cases/
+│       └── duplicate_root_version/{BUILD.bazel, main.tf}
+└── custom_toolchain/        the root module registers its own `tofu`
+    ├── MODULE.bazel         toolchain; its stand-in binary fails with a
+    ├── .bazelversion        message that proves it was selected
+    ├── BUILD.bazel
+    ├── tofu.sh
+    └── main.tf
 ```
 
 `lock_update/` and its driver `lock_update_test.sh` are the one positive
