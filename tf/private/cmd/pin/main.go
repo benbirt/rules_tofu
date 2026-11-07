@@ -44,8 +44,6 @@ import (
 
 	"github.com/benbirt/rules_tofu/tf/private/cmd/internal/flags"
 	"github.com/benbirt/rules_tofu/tf/private/cmd/internal/tfconfig"
-	"github.com/hashicorp/hcl/v2"
-	"github.com/hashicorp/hcl/v2/hclparse"
 )
 
 var (
@@ -72,16 +70,10 @@ func main() {
 	}
 }
 
-// requirement is one `required_providers` entry.
-type requirement struct {
-	Source  string `json:"source"`
-	Version string `json:"version,omitempty"`
-}
-
 // module is the requirements found in one directory.
 type module struct {
 	Dir  string // workspace-relative ("" for the workspace root), or `@<repo>//<dir>`
-	Reqs map[string]requirement
+	Reqs map[string]tfconfig.Requirement
 }
 
 // bazelCommand is the Bazel to query with: $BAZEL, else bazel or bazelisk
@@ -111,7 +103,7 @@ func run(workspace, lockDir, tofu, bazel string, defaultPlatforms, excludedSourc
 
 	var modules []module
 	for _, dir := range dirs {
-		reqs, err := parseFiles(byDir[dir])
+		reqs, err := tfconfig.ReadRequiredProviders(byDir[dir])
 		if err != nil {
 			return err
 		}
@@ -166,15 +158,16 @@ func run(workspace, lockDir, tofu, bazel string, defaultPlatforms, excludedSourc
 // withoutSources drops the requirements on the given `<namespace>/<name>`
 // sources. Sources compare as tofu does: case-insensitively, with the default
 // registry host optional.
-func withoutSources(reqs map[string]requirement, sources []string) map[string]requirement {
+func withoutSources(reqs map[string]tfconfig.Requirement, sources []string) map[string]tfconfig.Requirement {
 	drop := map[string]bool{}
 	for _, s := range sources {
-		drop[strings.ToLower(s)] = true
+		if normalized, err := tfconfig.NormalizeProvider(s); err == nil {
+			drop[normalized] = true
+		}
 	}
-	kept := map[string]requirement{}
+	kept := map[string]tfconfig.Requirement{}
 	for name, req := range reqs {
-		source := strings.TrimPrefix(strings.ToLower(req.Source), "registry.opentofu.org/")
-		if !drop[source] {
+		if !drop[req.Source] {
 			kept[name] = req
 		}
 	}
@@ -326,106 +319,6 @@ func parseLocations(out string) []target {
 		targets = append(targets, target{Kind: m[2], Label: label, Repo: repo, Package: pkg, Name: name, Path: m[1]})
 	}
 	return targets
-}
-
-var (
-	terraformSchema = &hcl.BodySchema{Blocks: []hcl.BlockHeaderSchema{{Type: "terraform"}}}
-	requiredSchema  = &hcl.BodySchema{Blocks: []hcl.BlockHeaderSchema{{Type: "required_providers"}}}
-)
-
-// parseFiles returns the required_providers entries declared in the given
-// files, which share a directory, keyed by local name.
-func parseFiles(files []string) (map[string]requirement, error) {
-	parser := hclparse.NewParser()
-	reqs := map[string]requirement{}
-	where := map[string]string{}
-	sort.Strings(files)
-	for _, path := range files {
-		src, err := os.ReadFile(path)
-		if err != nil {
-			return nil, err
-		}
-		var file *hcl.File
-		var diags hcl.Diagnostics
-		if strings.HasSuffix(path, ".json") {
-			file, diags = parser.ParseJSON(src, path)
-		} else {
-			file, diags = parser.ParseHCL(src, path)
-		}
-		if diags.HasErrors() {
-			return nil, diags
-		}
-		content, _, diags := file.Body.PartialContent(terraformSchema)
-		if diags.HasErrors() {
-			return nil, diags
-		}
-		for _, tf := range content.Blocks {
-			inner, _, diags := tf.Body.PartialContent(requiredSchema)
-			if diags.HasErrors() {
-				return nil, diags
-			}
-			for _, block := range inner.Blocks {
-				attrs, diags := block.Body.JustAttributes()
-				if diags.HasErrors() {
-					return nil, diags
-				}
-				for name, attr := range attrs {
-					req, err := parseRequirement(name, attr.Expr)
-					if err != nil {
-						return nil, fmt.Errorf("%s: %w", attr.Range, err)
-					}
-					if prior, ok := where[name]; ok {
-						return nil, fmt.Errorf("%s: provider %q is already required in %s", attr.Range, name, prior)
-					}
-					where[name] = attr.Range.String()
-					reqs[name] = req
-				}
-			}
-		}
-	}
-	return reqs, nil
-}
-
-// parseRequirement reads one entry: `{ source = ..., version = ... }`, or the
-// legacy bare version string (with the source implied, as tofu does).
-// Other keys, like configuration_aliases, are references that can't be
-// evaluated here and don't affect locking, so they're skipped.
-func parseRequirement(name string, expr hcl.Expression) (requirement, error) {
-	req := requirement{Source: "hashicorp/" + name}
-	pairs, diags := hcl.ExprMap(expr)
-	if diags.HasErrors() {
-		version, ok := literalString(expr)
-		if !ok {
-			return req, fmt.Errorf("required_providers entry %q is neither an object nor a version string", name)
-		}
-		req.Version = version
-		return req, nil
-	}
-	for _, pair := range pairs {
-		key, ok := literalString(pair.Key)
-		if !ok || (key != "source" && key != "version") {
-			continue
-		}
-		value, ok := literalString(pair.Value)
-		if !ok {
-			return req, fmt.Errorf("`%s` of required_providers entry %q must be a literal string", key, name)
-		}
-		if key == "source" {
-			req.Source = value
-		} else {
-			req.Version = value
-		}
-	}
-	return req, nil
-}
-
-// literalString evaluates expr with no variables in scope, as a string.
-func literalString(expr hcl.Expression) (string, bool) {
-	v, diags := expr.Value(nil)
-	if diags.HasErrors() || v.IsNull() || !v.IsKnown() || v.Type().FriendlyName() != "string" {
-		return "", false
-	}
-	return v.AsString(), true
 }
 
 // moduleNames gives each child module a unique, valid module name derived

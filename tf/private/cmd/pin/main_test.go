@@ -44,54 +44,6 @@ not a location line
 	}
 }
 
-func TestParseFiles_Forms(t *testing.T) {
-	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "main.tf"), `
-terraform {
-  required_version = ">= 1.6"
-  required_providers {
-    aws = {
-      source                = "hashicorp/aws"
-      version               = ">= 6.0"
-      configuration_aliases = [aws.east]
-    }
-    google = "~> 7.0" # legacy form: source implied
-    ph = { source = "PostHog/posthog" }
-  }
-}
-
-resource "null_resource" "x" {
-  triggers = { a = var.undeclared }
-}
-`)
-	writeFile(t, filepath.Join(dir, "extra.tf.json"), `{"terraform": {"required_providers": {"random": {"source": "hashicorp/random", "version": "3.6.0"}}}}`)
-
-	writeFile(t, filepath.Join(dir, "unlisted.tf"), nullFloor)
-
-	got, err := parseFiles([]string{filepath.Join(dir, "main.tf"), filepath.Join(dir, "extra.tf.json")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := map[string]requirement{
-		"aws":    {Source: "hashicorp/aws", Version: ">= 6.0"},
-		"google": {Source: "hashicorp/google", Version: "~> 7.0"},
-		"ph":     {Source: "PostHog/posthog"},
-		"random": {Source: "hashicorp/random", Version: "3.6.0"},
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("parseDir = %+v, want %+v", got, want)
-	}
-}
-
-func TestParseFiles_DuplicateLocalName(t *testing.T) {
-	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "a.tf"), nullFloor)
-	writeFile(t, filepath.Join(dir, "b.tf"), nullFloor)
-	if _, err := parseFiles([]string{filepath.Join(dir, "a.tf"), filepath.Join(dir, "b.tf")}); err == nil || !strings.Contains(err.Error(), "already required") {
-		t.Errorf("expected a duplicate error, got %v", err)
-	}
-}
-
 func TestModuleNames(t *testing.T) {
 	got := moduleNames([]module{{Dir: "examples/lock/greeting"}, {Dir: "1st"}, {Dir: "examples/lock.greeting"}})
 	want := []string{"examples_lock_greeting", "m_1st", "examples_lock_greeting_2"}

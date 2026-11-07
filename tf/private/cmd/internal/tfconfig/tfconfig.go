@@ -43,8 +43,7 @@ func configFiles(dir string) (primary, overrides []string, err error) {
 		if e.IsDir() || !(strings.HasSuffix(name, ".tf") || strings.HasSuffix(name, ".tf.json")) {
 			continue
 		}
-		stem := strings.TrimSuffix(strings.TrimSuffix(name, ".json"), ".tf")
-		if stem == "override" || strings.HasSuffix(stem, "_override") {
+		if isOverride(name) {
 			overrides = append(overrides, filepath.Join(dir, name))
 		} else {
 			primary = append(primary, filepath.Join(dir, name))
@@ -152,59 +151,28 @@ func parseCalls(parser *hclparse.Parser, file string) ([]Call, error) {
 	return calls, nil
 }
 
-// RequiredProviders returns the `source` of every required_providers entry in
-// dir's .tf and .tf.json files, normalised as `<host>/<namespace>/<name>` in
-// lower case, sorted. An entry without a source is `hashicorp/<name>`, as tofu
-// implies it.
+// Requirement is a required_providers entry.
+type Requirement struct {
+	// Source is the provider's address, normalised (NormalizeProvider). An
+	// entry without one is `hashicorp/<local name>`, as tofu implies it.
+	Source  string `json:"source"`
+	Version string `json:"version,omitempty"`
+}
+
+// RequiredProviders returns the normalised `source` of every
+// required_providers entry in dir's .tf and .tf.json files, sorted.
 func RequiredProviders(dir string) ([]string, error) {
 	primary, overrides, err := configFiles(dir)
 	if err != nil {
 		return nil, err
 	}
-	parser := hclparse.NewParser()
+	reqs, err := ReadRequiredProviders(append(primary, overrides...))
+	if err != nil {
+		return nil, err
+	}
 	seen := map[string]bool{}
-	for _, file := range append(primary, overrides...) {
-		f, err := parse(parser, file)
-		if err != nil {
-			return nil, err
-		}
-		content, _, diags := f.Body.PartialContent(terraformSchema)
-		if diags.HasErrors() {
-			return nil, diags
-		}
-		for _, tf := range content.Blocks {
-			inner, _, diags := tf.Body.PartialContent(requiredSchema)
-			if diags.HasErrors() {
-				return nil, diags
-			}
-			for _, block := range inner.Blocks {
-				attrs, diags := block.Body.JustAttributes()
-				if diags.HasErrors() {
-					return nil, diags
-				}
-				for name, attr := range attrs {
-					source := "hashicorp/" + name
-					if pairs, diags := hcl.ExprMap(attr.Expr); !diags.HasErrors() {
-						for _, pair := range pairs {
-							key, ok := LiteralString(pair.Key)
-							if !ok {
-								key = hcl.ExprAsKeyword(pair.Key)
-							}
-							if key == "source" {
-								if value, ok := LiteralString(pair.Value); ok {
-									source = value
-								}
-							}
-						}
-					}
-					normalized, err := NormalizeProvider(source)
-					if err != nil {
-						return nil, fmt.Errorf("%s: provider %q: %w", attr.Range, name, err)
-					}
-					seen[normalized] = true
-				}
-			}
-		}
+	for _, r := range reqs {
+		seen[r.Source] = true
 	}
 	sources := make([]string, 0, len(seen))
 	for s := range seen {
@@ -212,6 +180,100 @@ func RequiredProviders(dir string) ([]string, error) {
 	}
 	sort.Strings(sources)
 	return sources, nil
+}
+
+// ReadRequiredProviders returns the required_providers entries in files,
+// which share a module directory, keyed by local name. An entry in an
+// `_override` file replaces the primary files' entry of that name, as tofu
+// merges it; two primary entries of one name are an error, as in tofu.
+//
+// An entry is `{ source = ..., version = ... }`, or the legacy bare version
+// string. Other keys, like configuration_aliases, are references that can't
+// be evaluated here and don't name a provider, so they're skipped.
+func ReadRequiredProviders(files []string) (map[string]Requirement, error) {
+	var primary, overrides []string
+	for _, f := range files {
+		if isOverride(filepath.Base(f)) {
+			overrides = append(overrides, f)
+		} else {
+			primary = append(primary, f)
+		}
+	}
+	sort.Strings(primary)
+	sort.Strings(overrides)
+
+	parser := hclparse.NewParser()
+	reqs := map[string]Requirement{}
+	where := map[string]string{}
+	for pass, group := range [][]string{primary, overrides} {
+		for _, file := range group {
+			f, err := parse(parser, file)
+			if err != nil {
+				return nil, err
+			}
+			content, _, diags := f.Body.PartialContent(terraformSchema)
+			if diags.HasErrors() {
+				return nil, diags
+			}
+			for _, tf := range content.Blocks {
+				inner, _, diags := tf.Body.PartialContent(requiredSchema)
+				if diags.HasErrors() {
+					return nil, diags
+				}
+				for _, block := range inner.Blocks {
+					attrs, diags := block.Body.JustAttributes()
+					if diags.HasErrors() {
+						return nil, diags
+					}
+					for name, attr := range attrs {
+						req, err := readRequirement(name, attr.Expr)
+						if err != nil {
+							return nil, fmt.Errorf("%s: %w", attr.Range, err)
+						}
+						if prior, ok := where[name]; ok && pass == 0 {
+							return nil, fmt.Errorf("%s: provider %q is already required in %s", attr.Range, name, prior)
+						}
+						where[name] = attr.Range.String()
+						reqs[name] = req
+					}
+				}
+			}
+		}
+	}
+	return reqs, nil
+}
+
+func readRequirement(name string, expr hcl.Expression) (Requirement, error) {
+	source := "hashicorp/" + name
+	var version string
+	if pairs, diags := hcl.ExprMap(expr); diags.HasErrors() {
+		v, ok := LiteralString(expr)
+		if !ok {
+			return Requirement{}, fmt.Errorf("required_providers entry %q is neither an object nor a version string", name)
+		}
+		version = v
+	} else {
+		for _, pair := range pairs {
+			key, ok := LiteralString(pair.Key)
+			if !ok || (key != "source" && key != "version") {
+				continue
+			}
+			value, ok := LiteralString(pair.Value)
+			if !ok {
+				return Requirement{}, fmt.Errorf("`%s` of required_providers entry %q must be a literal string", key, name)
+			}
+			if key == "source" {
+				source = value
+			} else {
+				version = value
+			}
+		}
+	}
+	normalized, err := NormalizeProvider(source)
+	if err != nil {
+		return Requirement{}, fmt.Errorf("provider %q: %w", name, err)
+	}
+	return Requirement{Source: normalized, Version: version}, nil
 }
 
 // NormalizeProvider gives a provider source address in the canonical form
@@ -298,4 +360,11 @@ func ModuleDirs(repo, moduleDir string) ([]string, error) {
 	}
 	sort.Strings(dirs)
 	return dirs, nil
+}
+
+// isOverride reports whether a configuration file is an override file, which
+// tofu merges over the others.
+func isOverride(name string) bool {
+	stem := strings.TrimSuffix(strings.TrimSuffix(name, ".json"), ".tf")
+	return stem == "override" || strings.HasSuffix(stem, "_override")
 }
