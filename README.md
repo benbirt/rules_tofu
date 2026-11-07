@@ -103,7 +103,7 @@ values and is not runnable on its own.
 | `data`      | Extra files placed in the work tree for `file()` and `templatefile()`. |
 | `providers` | Providers the library's files require, as `@tf_providers//<namespace>/<name>`. |
 | `module_source` | The address by which other modules call this one, e.g. `git::https://example.com/acme/network.git?ref=v1.0.0`. See [Modules from other repositories](#modules-from-other-repositories). |
-| `module_version` | This module's version, required when `module_source` is a registry address. |
+| `module_version` | This module's version, required when `module_source` is a registry address. Defaults to the version of the Bazel module that holds the library. |
 | `fmt_test`  | Generate the `.fmt_check` test (default `True`). |
 
 ### `tf_deploy`
@@ -461,8 +461,10 @@ module "vpc" {
 
 A call matches a library in `deps` (direct or transitive) whose
 `module_source` is its `source`, or whose `module_source` plus `//<subdir>`
-is. For a registry address, also set `module_version`; a call's `version`
-constraint must accept it. Registry addresses match as OpenTofu compares
+is. A registry address also needs a version, which a call's `version`
+constraint must accept: `module_version`, which defaults to the version of
+the Bazel module that holds the library, so a module released to the BCR
+needn't repeat it. Registry addresses match as OpenTofu compares
 them, ignoring case and the default `registry.opentofu.org/` host. Other
 addresses must match exactly, `?ref=` included.
 

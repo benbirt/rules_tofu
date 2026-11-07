@@ -111,7 +111,9 @@ _tf_library = rule(
         ),
         "module_version": attr.string(
             doc = "The version of this module, required when `module_source` is a module " +
-                  "registry address. A caller's `version` constraint must accept it.",
+                  "registry address. A caller's `version` constraint must accept it. The " +
+                  "`tf_library` macro defaults it to the version of the Bazel module that " +
+                  "holds the library.",
         ),
         "_modules_bin": attr.label(
             default = MODULES_BIN,
@@ -173,8 +175,12 @@ def tf_library(name, srcs = None, deps = None, data = None, providers = None, mo
           as users outside Bazel would write it in `source`. Callers with this
           library in `deps` use its files for a `module` block with that
           `source` (or that plus `//<subdir>`).
-      module_version: this module's version. Required when `module_source` is
-          a module registry address.
+      module_version: this module's version, which a caller's `version`
+          constraint must accept. Required when `module_source` is a module
+          registry address. Defaults to the version of the Bazel module that
+          holds this library (`native.module_version()`), so a module released
+          to a Bazel registry needn't repeat its version here. Pass "" to set
+          none.
       fmt_test: whether to emit a `:<name>.fmt_check` test target. Only emitted
           when True (the default) and `srcs` is non-empty.
       **kwargs: forwarded to the underlying rule (visibility, tags, testonly).
@@ -184,6 +190,11 @@ def tf_library(name, srcs = None, deps = None, data = None, providers = None, mo
         if forwarded in kwargs:
             common_kwargs[forwarded] = kwargs.pop(forwarded)
 
+    # A registry module's version is normally its Bazel module's version, which
+    # its publisher already bumps on every release.
+    if module_version == None:
+        module_version = (native.module_version() or "") if module_source else ""
+
     _tf_library(
         name = name,
         srcs = srcs or [],
@@ -191,7 +202,7 @@ def tf_library(name, srcs = None, deps = None, data = None, providers = None, mo
         data = data or [],
         providers = providers or [],
         module_source = module_source or "",
-        module_version = module_version or "",
+        module_version = module_version,
         **dict(common_kwargs, **kwargs)
     )
 

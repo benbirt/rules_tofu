@@ -6,4 +6,4 @@ module(
 )
 
 bazel_dep(name = "rules_tofu", version = "0.0.0")
-bazel_dep(name = "dns_module", version = "0.0.0")
+bazel_dep(name = "dns_module", version = "1.2.3")
