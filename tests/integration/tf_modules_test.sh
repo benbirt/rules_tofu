@@ -44,7 +44,12 @@ git_ commit -q -m v1
 git_ tag -a -m v1.0.0 v1.0.0
 first_commit="$(git_ rev-parse HEAD)"
 tar -czf "${FIXTURES}/dns.tar.gz" -C "${FIXTURES}/dns" .
-dns_sha256="$(sha256sum "${FIXTURES}/dns.tar.gz" | cut -d' ' -f1)"
+# macOS has shasum but not sha256sum; some Linux PATHs have only sha256sum.
+if command -v sha256sum >/dev/null; then
+  dns_sha256="$(sha256sum "${FIXTURES}/dns.tar.gz" | cut -d' ' -f1)"
+else
+  dns_sha256="$(shasum -a 256 "${FIXTURES}/dns.tar.gz" | cut -d' ' -f1)"
+fi
 for f in MODULE.bazel app/main.tf bad/main.tf; do
   sed -i.bak \
     -e "s|path = \"../../..\"|path = \"${RULES_TOFU}\"|" \
