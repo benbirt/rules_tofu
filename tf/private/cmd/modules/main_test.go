@@ -132,6 +132,12 @@ func TestBuild_Errors(t *testing.T) {
 			want:  `no module call uses @y//:y (module_source "git::https://x/y.git")`,
 		},
 		{
+			name:  "unused direct registry dep",
+			files: map[string]string{"app/main.tf": ``, "external/y/main.tf": ``},
+			deps:  []dep{{Label: "@y//:y", Source: "acme/net/aws", Version: "1.0.0", Dir: "external/y", Direct: true}},
+			want:  `no module call uses @y//:y (module_source "acme/net/aws")`,
+		},
+		{
 			name:  "duplicate source",
 			files: map[string]string{"app/main.tf": ``},
 			deps: []dep{
