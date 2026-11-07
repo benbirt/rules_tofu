@@ -97,7 +97,9 @@ echo "--- 5. pin ---" >&2
 # main repository requires it: only the git module does.
 sed -i.bak '/^tf_providers.provider($/,/^)$/d' MODULE.bazel
 rm MODULE.bazel.bak
-sed -i.bak 's|^use_repo(tf_providers, "tf_providers")$|tf_providers.from_lock()\nuse_repo(tf_providers, "tf_providers")|' MODULE.bazel
+# A backslash-newline, not `\n`, which BSD sed doesn't read as a newline.
+sed -i.bak 's|^use_repo(tf_providers, "tf_providers")$|tf_providers.from_lock()\
+use_repo(tf_providers, "tf_providers")|' MODULE.bazel
 rm MODULE.bazel.bak
 grep -q '^tf_providers.from_lock()$' MODULE.bazel || fail "couldn't switch MODULE.bazel to from_lock"
 BAZEL="${_TMPDIR}/bazel"
