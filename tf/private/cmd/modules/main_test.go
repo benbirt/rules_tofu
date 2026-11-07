@@ -29,7 +29,7 @@ func TestBuild(t *testing.T) {
 	tree := writeTree(t, map[string]string{
 		"app/main.tf": `
 module "net" {
-  source  = "Acme/Network/AWS"
+  source  = "Acme/Network/aws"
   version = "~> 1.2"
 }
 module "sub" { source = "acme/network/aws//modules/subnet" }
@@ -60,7 +60,7 @@ module "local" { source = "../shared" }
 		{Key: "git.x", Source: "acme/dns/aws", Version: "0.1.0", Dir: "../external/dns+"},
 		{Key: "local", Source: "../shared", Dir: "../shared"},
 		{Key: "local.inner", Source: "./inner", Dir: "../shared/inner"},
-		{Key: "net", Source: "Acme/Network/AWS", Version: "1.2.3", Dir: "../external/net+"},
+		{Key: "net", Source: "Acme/Network/aws", Version: "1.2.3", Dir: "../external/net+"},
 		{Key: "net.helper", Source: "./helper", Dir: "../external/net+/helper"},
 		{Key: "sub", Source: "acme/network/aws//modules/subnet", Version: "1.2.3", Dir: "../external/net+/modules/subnet"},
 	}

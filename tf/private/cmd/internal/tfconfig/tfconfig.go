@@ -12,6 +12,7 @@ import (
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclparse"
+	regaddr "github.com/opentofu/registry-address/v2"
 )
 
 // Call is a `module` block.
@@ -19,123 +20,6 @@ type Call struct {
 	Name   string
 	Source string
 	Range  hcl.Range
-}
-
-// IsLocal reports whether tofu reads source as a local path.
-func IsLocal(source string) bool {
-	return strings.HasPrefix(source, "./") || strings.HasPrefix(source, "../")
-}
-
-// SplitSubdir splits off a source's `//<subdir>`, the way tofu does: the
-// first `//` that isn't part of a `scheme://`. A query string (`?ref=`) stays
-// with the base address.
-func SplitSubdir(source string) (string, string) {
-	rest := source
-	offset := 0
-	if i := strings.Index(rest, "://"); i >= 0 {
-		offset = i + 3
-		rest = rest[offset:]
-	}
-	i := strings.Index(rest, "//")
-	if i < 0 {
-		return source, ""
-	}
-	base := source[:offset+i]
-	subdir := rest[i+2:]
-	if q := strings.Index(subdir, "?"); q >= 0 {
-		base += subdir[q:]
-		subdir = subdir[:q]
-	}
-	return base, strings.Trim(subdir, "/")
-}
-
-// DefaultRegistryHost is the registry a module or provider address may leave
-// out.
-const DefaultRegistryHost = "registry.opentofu.org"
-
-// IsRegistry reports whether tofu reads source as a module registry address:
-// `[<host>/]<namespace>/<name>/<system>[//<subdir>]`, and nothing go-getter
-// would claim first.
-func IsRegistry(source string) bool {
-	_, ok := RegistryParts(source)
-	return ok
-}
-
-// RegistryParts returns a registry address's host, namespace, name and
-// system, the host filled in if the address leaves it out. ok is false if
-// source isn't a registry address.
-func RegistryParts(source string) (parts []string, ok bool) {
-	if IsLocal(source) || strings.Contains(source, "::") || strings.Contains(source, "://") {
-		return nil, false
-	}
-	base, _ := SplitSubdir(source)
-	if strings.Contains(base, "?") {
-		return nil, false
-	}
-	parts = strings.Split(base, "/")
-	switch len(parts) {
-	case 3:
-		// A namespace has no dots; `github.com/<owner>/<repo>` is a shorthand.
-		if strings.Contains(parts[0], ".") {
-			return nil, false
-		}
-		parts = append([]string{DefaultRegistryHost}, parts...)
-	case 4:
-		if !strings.Contains(parts[0], ".") {
-			return nil, false
-		}
-		// go-getter's shorthands for these hosts win over the registry.
-		switch strings.ToLower(parts[0]) {
-		case "github.com", "bitbucket.org":
-			return nil, false
-		}
-	default:
-		return nil, false
-	}
-	for _, p := range parts {
-		if p == "" {
-			return nil, false
-		}
-	}
-	return parts, true
-}
-
-// NormalizeSource is the form in which two sources are compared: registry
-// addresses gain the default host and are lower-cased, as tofu treats them,
-// with the subdir kept as written. Other sources are compared as written.
-func NormalizeSource(source string) string {
-	parts, ok := RegistryParts(source)
-	if !ok {
-		return source
-	}
-	normalized := strings.ToLower(strings.Join(parts, "/"))
-	if _, subdir := SplitSubdir(source); subdir != "" {
-		normalized += "//" + subdir
-	}
-	return normalized
-}
-
-// Match reports whether a module whose address is provider supplies a call
-// to source, and in which subdirectory of provider's directory: source must
-// be provider, or provider with a deeper `//<subdir>`.
-func Match(provider, source string) (subdir string, ok bool) {
-	if NormalizeSource(provider) == NormalizeSource(source) {
-		return "", true
-	}
-	pBase, pSub := SplitSubdir(provider)
-	sBase, sSub := SplitSubdir(source)
-	if NormalizeSource(pBase) != NormalizeSource(sBase) {
-		return "", false
-	}
-	switch {
-	case pSub == sSub:
-		return "", true
-	case pSub == "":
-		return sSub, true
-	case strings.HasPrefix(sSub, pSub+"/"):
-		return sSub[len(pSub)+1:], true
-	}
-	return "", false
 }
 
 var (
@@ -311,7 +195,11 @@ func RequiredProviders(dir string) ([]string, error) {
 							}
 						}
 					}
-					seen[NormalizeProvider(source)] = true
+					normalized, err := NormalizeProvider(source)
+					if err != nil {
+						return nil, fmt.Errorf("%s: provider %q: %w", attr.Range, name, err)
+					}
+					seen[normalized] = true
 				}
 			}
 		}
@@ -324,14 +212,15 @@ func RequiredProviders(dir string) ([]string, error) {
 	return sources, nil
 }
 
-// NormalizeProvider gives a provider source address its host, lower-cased:
-// `hashicorp/aws` is `registry.opentofu.org/hashicorp/aws`.
-func NormalizeProvider(source string) string {
-	source = strings.ToLower(source)
-	if strings.Count(source, "/") == 1 {
-		source = DefaultRegistryHost + "/" + source
+// NormalizeProvider gives a provider source address in the canonical form
+// OpenTofu uses for it, `<host>/<namespace>/<name>` in lower case:
+// `HashiCorp/aws` is `registry.opentofu.org/hashicorp/aws`.
+func NormalizeProvider(source string) (string, error) {
+	p, err := regaddr.ParseProviderSource(source)
+	if err != nil {
+		return "", err
 	}
-	return source
+	return p.String(), nil
 }
 
 // LiteralString evaluates expr with no variables in scope, as a string.

@@ -60,7 +60,7 @@ terraform {
 		Deps:      []string{"@tf_modules//acme/dns/aws"},
 		Undeclared: []Call{
 
-			{Source: "git::https://e.com/label.git?ref=v1", Where: "shared/main.tf:1"},
+			{Source: "git::https://e.com/label.git?ref=v1", Where: "shared/main.tf:1", Tag: `tf_modules.module(name = "...", source = "git::https://e.com/label.git?ref=v1")`},
 		},
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -84,5 +84,16 @@ func TestScan_NoConfig(t *testing.T) {
 	_, err := scan(repo, "vpc", nil)
 	if err == nil || !strings.Contains(err.Error(), `"/vpc" holds no .tf`) {
 		t.Errorf("got %v", err)
+	}
+}
+
+func TestTagFor(t *testing.T) {
+	for in, want := range map[string]string{
+		"acme/dns/aws//modules/zone":  `tf_modules.module(source = "acme/dns/aws", version = "...")`,
+		"git::https://e.com/x.git//d": `tf_modules.module(name = "...", source = "git::https://e.com/x.git//d")`,
+	} {
+		if got := tagFor(in); got != want {
+			t.Errorf("tagFor(%q) = %s, want %s", in, got, want)
+		}
 	}
 }

@@ -64,11 +64,9 @@ load(
     "is_commit",
     "ls_remote_commit",
     "modules_service_url",
-    "parse_source",
     "registry_download_endpoint",
     "registry_location",
     "repo_name",
-    "split_subdir",
     "valid_fact",
     "version_gt",
 )
@@ -81,6 +79,32 @@ _PROVIDERS_HUB = "tf_providers"
 
 # Compiled by //tf/private:host_tools.bzl; see //tf/private/cmd/modscan.
 _MODSCAN = Label("@rules_tofu_host_tools//:bin/modscan")
+
+def _parse_sources(module_ctx, sources):
+    """Read module source addresses as OpenTofu does, with `modscan parse`.
+
+    Returns a `struct(kind, error, host, namespace, name, system, remote, ref,
+    url, type, subdir)` for each source: see tfconfig.Source.
+    """
+    result = module_ctx.execute([module_ctx.path(_MODSCAN), "parse"] + sources)
+    if result.return_code != 0:
+        fail("Could not read module sources with modscan:\n{}".format(result.stderr.strip()))
+    return [
+        struct(
+            kind = d.get("kind") or None,
+            error = d.get("error") or None,
+            host = d.get("host", ""),
+            namespace = d.get("namespace", ""),
+            name = d.get("name", ""),
+            system = d.get("system", ""),
+            remote = d.get("remote", ""),
+            ref = d.get("ref", ""),
+            url = d.get("url", ""),
+            type = d.get("type", ""),
+            subdir = d.get("subdir", ""),
+        )
+        for d in json.decode(result.stdout)
+    ]
 
 # Bazel's own files in a fetched module would split it into packages of its
 # own, so they're removed before the module's BUILD file is written.
@@ -137,9 +161,9 @@ def _resolve_registry(module_ctx, parsed, version, context):
     located = registry_location(response, context)
     if located.error:
         fail(located.error)
-    location = parse_source(located.location)
+    location = _parse_sources(module_ctx, [located.location])[0]
     if location.error or location.kind == "registry":
-        fail("{}: the registry gave a location rules_tofu can't fetch, `{}`".format(context, located.location))
+        fail("{}: the registry gave a location rules_tofu can't fetch, `{}`: {}".format(context, located.location, location.error or "it is another registry address"))
     if location.kind == "git":
         return {"location": located.location, "commit": _resolve_ref(module_ctx, location.remote, location.ref, context)}
     downloaded = module_ctx.download(url = location.url, output = "registry/archive")
@@ -212,13 +236,6 @@ def _provider_label(source, context):
               "from registry.opentofu.org").format(context, source))
     return "@{}//{}".format(_PROVIDERS_HUB, rest)
 
-def _tag_hint(source):
-    """The tag declaring the module that a call to `source` needs."""
-    base, _ = split_subdir(source)
-    if parse_source(base).kind == "registry":
-        return 'tf_modules.module(source = "{}", version = "...")'.format(base)
-    return 'tf_modules.module(name = "...", source = "{}")'.format(source)
-
 def _tf_module_repo_impl(repository_ctx):
     attr = repository_ctx.attr
     context = "tf_modules.module `{}`".format(attr.source)
@@ -228,7 +245,7 @@ def _tf_module_repo_impl(repository_ctx):
     if scanned["undeclared"]:
         fail("{} calls modules that MODULE.bazel doesn't declare. Add:\n{}".format(
             context,
-            "\n".join(["    {}  # called at {}".format(_tag_hint(c["source"]), c["where"]) for c in scanned["undeclared"]]),
+            "\n".join(["    {}  # called at {}".format(c["tag"], c["where"]) for c in scanned["undeclared"]]),
         ))
 
     providers = [p for p in [_provider_label(p, context) for p in scanned["providers"]] if p]
@@ -351,6 +368,11 @@ _module_tag = tag_class(
 
 def _check_tag(tag, parsed, context):
     """Return an error if `tag`'s attributes don't suit its kind of source, else None."""
+    if parsed.kind == "local":
+        return "{}: a local path is not a module to fetch; use a tf_library for it".format(context)
+    if parsed.kind == "registry" and parsed.subdir:
+        return ("{}: declare the module itself, without `//<subdir>`; calls reach its " +
+                "submodules with `//<subdir>` anyway").format(context)
     allowed = {
         "registry": ["version"],
         "git": ["name", "commit"],
@@ -414,24 +436,29 @@ def _resolve(tags, path):
 
 def _tf_modules_extension_impl(module_ctx):
     root_repos = []
-    by_path = {}
+    tagged = []
     for mod in module_ctx.modules:
         if mod.is_root:
             root_repos.append(_HUB)
         for tag in mod.tags.module:
-            context = "tf_modules.module `{}` in module `{}`".format(tag.source, mod.name)
-            parsed = parse_source(tag.source)
-            if parsed.error:
-                fail(parsed.error)
-            error = _check_tag(tag, parsed, context)
-            if error:
-                fail(error)
-            path = hub_path(parsed) if parsed.kind == "registry" else tag.name
-            if path not in by_path:
-                by_path[path] = []
-            elif by_path[path][0].parsed.kind != parsed.kind:
-                fail("`@tf_modules//{}` is declared both as a {} module and as a {} module".format(path, by_path[path][0].parsed.kind, parsed.kind))
-            by_path[path].append(struct(tag = tag, parsed = parsed, is_root = mod.is_root, mod_name = mod.name))
+            tagged.append(struct(tag = tag, mod = mod))
+
+    by_path = {}
+    parsed_sources = _parse_sources(module_ctx, [t.tag.source for t in tagged]) if tagged else []
+    for t, parsed in zip(tagged, parsed_sources):
+        tag, mod = t.tag, t.mod
+        context = "tf_modules.module `{}` in module `{}`".format(tag.source, mod.name)
+        if parsed.error:
+            fail("{}: {}".format(context, parsed.error))
+        error = _check_tag(tag, parsed, context)
+        if error:
+            fail(error)
+        path = hub_path(parsed) if parsed.kind == "registry" else tag.name
+        if path not in by_path:
+            by_path[path] = []
+        elif by_path[path][0].parsed.kind != parsed.kind:
+            fail("`@tf_modules//{}` is declared both as a {} module and as a {} module".format(path, by_path[path][0].parsed.kind, parsed.kind))
+        by_path[path].append(struct(tag = tag, parsed = parsed, is_root = mod.is_root, mod_name = mod.name))
 
     repos = {}
     for path in by_path:
@@ -450,7 +477,7 @@ def _tf_modules_extension_impl(module_ctx):
             key = "{}@{}".format(path, tag.version)
             fact = _cached(module_ctx, key) or _resolve_registry(module_ctx, parsed, tag.version, context)
             facts[key] = fact
-            location = parse_source(fact["location"])
+            location = _parse_sources(module_ctx, [fact["location"]])[0]
             if location.error or location.kind == "registry":
                 fail("{}: MODULE.bazel.lock records a location rules_tofu can't fetch, `{}`".format(context, fact["location"]))
             if location.kind == "git" and "commit" not in fact or location.kind == "archive" and "sha256" not in fact:
@@ -459,11 +486,11 @@ def _tf_modules_extension_impl(module_ctx):
                 source = tag.source,
                 version = tag.version,
                 kind = location.kind,
-                remote = getattr(location, "remote", ""),
+                remote = location.remote,
                 commit = fact.get("commit", ""),
-                url = getattr(location, "url", ""),
+                url = location.url,
                 sha256 = fact.get("sha256", ""),
-                archive_type = getattr(location, "type", ""),
+                archive_type = location.type,
                 subdir = location.subdir,
             )
         elif parsed.kind == "git":

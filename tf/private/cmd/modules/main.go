@@ -264,10 +264,10 @@ func lookup(deps []*dep, source string) (*dep, string) {
 
 func missingHint(source string) string {
 	base, _ := tfconfig.SplitSubdir(source)
-	if parts, ok := tfconfig.RegistryParts(source); ok {
-		label := strings.ToLower(strings.Join(parts[1:], "/"))
-		if !strings.EqualFold(parts[0], tfconfig.DefaultRegistryHost) {
-			label = strings.ToLower(parts[0]) + "/" + label
+	if s, err := tfconfig.ParseSource(source); err == nil && s.Kind == tfconfig.KindRegistry {
+		label := strings.ToLower(s.Namespace + "/" + s.Name + "/" + s.System)
+		if s.Host != tfconfig.DefaultRegistryHost {
+			label = s.Host + "/" + label
 		}
 		return fmt.Sprintf("Declare it in MODULE.bazel with tf_modules.module(source = %q, version = ...) and add "+
 			"\"@tf_modules//%s\" to deps, or add a tf_library with module_source = %q.", base, label, base)

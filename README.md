@@ -542,9 +542,11 @@ such library a package of its own.
 A call matches the library in `deps` (direct or transitive) whose
 `module_source` is its `source`, or the one whose `module_source` plus
 `//<subdir>` is, the longest such. `tf_modules` sets `module_source` to the
-tag's `source`. Registry addresses match as OpenTofu compares them, ignoring
-case and the default `registry.opentofu.org/` host. Other addresses must
-match exactly, `?ref=` included. A `source` must be a literal string.
+tag's `source`. Sources are read as OpenTofu reads them: a registry address
+matches with or without the default `registry.opentofu.org/` host, and the
+`github.com/<owner>/<repo>` shorthand matches the git URL it stands for. Other
+addresses must match exactly, `?ref=` included. A `source` must be a literal
+string.
 
 The build fails when:
 

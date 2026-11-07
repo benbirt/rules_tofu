@@ -1,25 +1,31 @@
-// Command modscan describes a fetched OpenTofu module for the repository rule
-// of tf_modules.module, which generates the module's tf_library from it.
+// Command modscan reads module sources and fetched modules for tf_modules.
+// The module extension and its repository rule can't run Bazel-built tools,
+// so they run this one as compiled by //tf/private:host_tools.bzl.
 //
-// The repository rule can't run Bazel-built tools, so it runs this one as
-// compiled by //tf/private:host_tools.bzl. Usage:
+//	modscan parse <source>...
+//
+// reads each module source address as OpenTofu does (tfconfig.ParseSource)
+// and prints a JSON list holding, for each, its tfconfig.Source or an
+// `error`. The extension uses it to tell registry, git and archive sources
+// apart and to find where each is fetched from.
 //
 //	modscan [--module=<label>=<source>...] <repository dir> <module dir>
 //
-// where <module dir> is relative to the repository ("" for its root), and
-// each --module is a declared tf_modules.module: its label and source. The
-// module's library serves the module and its submodules, which callers reach
-// with `//<subdir>`, so modscan scans the module directory, each directory
-// below its `modules/` (the standard place for submodules) that holds
-// configuration, and every directory those reach with local `source` paths.
-// Examples and tests are left out unless something calls them. It prints, as
-// JSON:
+// describes a fetched module, for the repository rule that generates its
+// tf_library. <module dir> is relative to the repository ("" for its root),
+// and each --module is a declared tf_modules.module: its label and source.
+// The module's library serves the module and its submodules, which callers
+// reach with `//<subdir>`, so modscan scans the module directory, each
+// directory below its `modules/` (the standard place for submodules) that
+// holds configuration, and every directory those reach with local `source`
+// paths. Examples and tests are left out unless something calls them. It
+// prints, as JSON:
 //
 //   - providers: every required provider, as `<host>/<namespace>/<name>`;
 //   - deps: the label of each declared module that a call uses (see
 //     tfconfig.Match; the longest source wins);
-//   - undeclared: each call by address that no declared module provides, and
-//     where it is.
+//   - undeclared: each call by address that no declared module provides,
+//     where it is, and the tf_modules.module tag that would declare it.
 package main
 
 import (
@@ -50,6 +56,9 @@ type Result struct {
 type Call struct {
 	Source string `json:"source"`
 	Where  string `json:"where"`
+	// Tag is the tf_modules.module tag that would declare the module called,
+	// for an undeclared call.
+	Tag string `json:"tag,omitempty"`
 }
 
 // Module is a declared module.
@@ -59,6 +68,10 @@ type Module struct {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "parse" {
+		parse(os.Args[2:])
+		return
+	}
 	flag.Parse()
 	if flag.NArg() != 2 {
 		fmt.Fprintln(os.Stderr, "usage: modscan [--module=<label>=<source>...] <repository dir> <module dir>")
@@ -170,6 +183,7 @@ func scan(repo, moduleDir string, modules []Module) (*Result, error) {
 			}
 		}
 		if best == nil {
+			c.Tag = tagFor(c.Source)
 			result.Undeclared = append(result.Undeclared, c)
 		} else {
 			deps[best.Label] = true
@@ -181,4 +195,36 @@ func scan(repo, moduleDir string, modules []Module) (*Result, error) {
 	sort.Strings(result.Deps)
 	sort.Slice(result.Undeclared, func(i, j int) bool { return result.Undeclared[i].Source < result.Undeclared[j].Source })
 	return result, nil
+}
+
+// Parsed is one source as `modscan parse` reports it.
+type Parsed struct {
+	tfconfig.Source
+	Error string `json:"error,omitempty"`
+}
+
+func parse(sources []string) {
+	parsed := make([]Parsed, len(sources))
+	for i, s := range sources {
+		src, err := tfconfig.ParseSource(s)
+		parsed[i] = Parsed{Source: src}
+		if err != nil {
+			parsed[i].Error = err.Error()
+		}
+	}
+	if err := json.NewEncoder(os.Stdout).Encode(parsed); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+// tagFor is the tf_modules.module tag that declares the module a call to
+// source needs: a registry module by its address without `//<subdir>`, any
+// other by its source and a name to choose.
+func tagFor(source string) string {
+	if s, err := tfconfig.ParseSource(source); err == nil && s.Kind == tfconfig.KindRegistry {
+		base, _ := tfconfig.SplitSubdir(source)
+		return fmt.Sprintf(`tf_modules.module(source = %q, version = "...")`, base)
+	}
+	return fmt.Sprintf(`tf_modules.module(name = "...", source = %q)`, source)
 }

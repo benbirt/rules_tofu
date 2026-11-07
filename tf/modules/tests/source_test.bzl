@@ -13,11 +13,9 @@ load(
     "hub_path",
     "ls_remote_commit",
     "modules_service_url",
-    "parse_source",
     "registry_download_endpoint",
     "registry_location",
     "repo_name",
-    "split_subdir",
     "valid_fact",
     "version_gt",
 )
@@ -25,81 +23,19 @@ load(
 _SHA = "488ab91e34a24a86957e397d9f7262ec5925586a"
 _SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
-def _registry_test_impl(ctx):
+def _hub_path_test_impl(ctx):
     env = unittest.begin(ctx)
 
-    parsed = parse_source("Terraform-AWS-Modules/VPC/aws")
-    asserts.equals(env, None, parsed.error)
-    asserts.equals(env, "registry", parsed.kind)
-    asserts.equals(env, "terraform-aws-modules/vpc/aws", hub_path(parsed))
-    asserts.equals(env, "tf_modules_terraform-aws-modules_vpc_aws", repo_name(hub_path(parsed)))
+    # As `modscan parse` reports a registry address, case kept.
+    default = struct(host = "registry.opentofu.org", namespace = "Terraform-AWS-Modules", name = "VPC", system = "aws")
+    asserts.equals(env, "terraform-aws-modules/vpc/aws", hub_path(default))
+    asserts.equals(env, "tf_modules_terraform-aws-modules_vpc_aws", repo_name(hub_path(default)))
 
-    other = parse_source("example.com/acme/net/aws")
-    asserts.equals(env, "registry", other.kind)
+    other = struct(host = "example.com", namespace = "acme", name = "net", system = "aws")
     asserts.equals(env, "example.com/acme/net/aws", hub_path(other))
-
-    with_subdir = parse_source("acme/net/aws//modules/x")
-    asserts.true(env, "without `//<subdir>`" in with_subdir.error)
     return unittest.end(env)
 
-_registry_test = unittest.make(_registry_test_impl)
-
-def _git_test_impl(ctx):
-    env = unittest.begin(ctx)
-
-    parsed = parse_source("git::https://github.com/acme/infra.git//vpc?ref=v1.2.0")
-    asserts.equals(env, None, parsed.error)
-    asserts.equals(env, "git", parsed.kind)
-    asserts.equals(env, "https://github.com/acme/infra.git", parsed.remote)
-    asserts.equals(env, "v1.2.0", parsed.ref)
-    asserts.equals(env, "vpc", parsed.subdir)
-
-    shorthand = parse_source("github.com/acme/infra//modules/x?ref=" + _SHA)
-    asserts.equals(env, "https://github.com/acme/infra.git", shorthand.remote)
-    asserts.equals(env, _SHA, shorthand.ref)
-    asserts.equals(env, "modules/x", shorthand.subdir)
-
-    no_ref = parse_source("git::ssh://git@example.com/infra.git")
-    asserts.equals(env, "ssh://git@example.com/infra.git", no_ref.remote)
-    asserts.equals(env, "", no_ref.ref)
-
-    asserts.true(env, "unsupported git option `sshkey`" in parse_source("git::https://e.com/x.git?sshkey=abc").error)
-    asserts.true(env, "unsupported source" in parse_source("s3::https://s3.amazonaws.com/b/x.zip").error)
-    return unittest.end(env)
-
-_git_test = unittest.make(_git_test_impl)
-
-def _archive_test_impl(ctx):
-    env = unittest.begin(ctx)
-
-    parsed = parse_source("https://example.com/vpc-1.2.0.tar.gz//vpc")
-    asserts.equals(env, None, parsed.error)
-    asserts.equals(env, "archive", parsed.kind)
-    asserts.equals(env, "https://example.com/vpc-1.2.0.tar.gz", parsed.url)
-    asserts.equals(env, "tar.gz", parsed.type)
-    asserts.equals(env, "vpc", parsed.subdir)
-
-    forced = parse_source("https://example.com/download?id=3&archive=tgz")
-    asserts.equals(env, "https://example.com/download?id=3", forced.url)
-    asserts.equals(env, "tar.gz", forced.type)
-
-    asserts.true(env, "not an archive" in parse_source("https://example.com/vpc").error)
-    return unittest.end(env)
-
-_archive_test = unittest.make(_archive_test_impl)
-
-def _split_subdir_test_impl(ctx):
-    env = unittest.begin(ctx)
-    for source, want in [
-        ("acme/net/aws", ("acme/net/aws", "")),
-        ("acme/net/aws//modules/x/", ("acme/net/aws", "modules/x")),
-        ("git::https://e.com/x.git//vpc?ref=v1", ("git::https://e.com/x.git?ref=v1", "vpc")),
-        ("https://e.com/x.zip", ("https://e.com/x.zip", "")),
-    ]:
-        asserts.equals(env, want, split_subdir(source))
-    return unittest.end(env)
-
-_split_subdir_test = unittest.make(_split_subdir_test_impl)
+_hub_path_test = unittest.make(_hub_path_test_impl)
 
 def _registry_api_test_impl(ctx):
     env = unittest.begin(ctx)
@@ -113,7 +49,7 @@ def _registry_api_test_impl(ctx):
     asserts.equals(
         env,
         "https://registry.opentofu.org/v1/modules/acme/net/aws/1.2.3/download",
-        registry_download_endpoint(service.url, parse_source("acme/net/aws"), "1.2.3"),
+        registry_download_endpoint(service.url, struct(namespace = "acme", name = "net", system = "aws"), "1.2.3"),
     )
     asserts.equals(env, "git::x", registry_location({"location": "git::x"}, "m").location)
     asserts.true(env, "gave no `location`" in registry_location({}, "m").error)
@@ -173,10 +109,7 @@ def source_test_suite(name):
     """
     unittest.suite(
         name,
-        _registry_test,
-        _git_test,
-        _archive_test,
-        _split_subdir_test,
+        _hub_path_test,
         _registry_api_test,
         _ls_remote_test,
         _checks_test,

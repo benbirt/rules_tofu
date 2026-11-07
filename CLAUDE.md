@@ -240,9 +240,16 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   `-get=false`: without it a call whose `version` rejects the manifest's is
   silently re-downloaded, and local calls rely on the manifest too. A
   non-local call resolves to the `tf_library` in `deps` (transitive) whose
-  `module_source` matches its `source`, optionally plus `//<subdir>`;
-  registry addresses are compared lower-cased with the default host added
-  (`NormalizeSource`), others verbatim. Version constraints are tofu's to
+  `module_source` is the same package, at the same `//<subdir>` or above it
+  (`tfconfig.Match`). Every `source` is read by `tfconfig.ParseSource`, as
+  OpenTofu's `addrs.ParseModuleSource` reads it: registry addresses through
+  OpenTofu's own `registry-address/v2` library (pinned to the version
+  OpenTofu's `go.mod` uses), and only the go-getter forms rules_tofu can
+  fetch (git and archives) by hand, tested against OpenTofu's own cases.
+  Don't parse sources anywhere else, Starlark included: the extension asks
+  `modscan parse`. go-getter itself is deliberately not a dependency: its
+  root package pulls in the S3 and GCS SDKs, which every user would download
+  when the host tools are compiled. Version constraints are tofu's to
   check, against `module_version`; don't reimplement them. The manifest
   format is internal to tofu, so `module_dependency_<version>_test` runs for
   every entry of `KNOWN_VERSIONS`. Files from other repositories sit at
