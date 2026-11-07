@@ -1,0 +1,10 @@
+load("@rules_tofu//tf:defs.bzl", "tf_deploy")
+
+# The calls in main.tf name the network module by its address, whole and with
+# `//subnet`; listing the library in deps provides both.
+tf_deploy(
+    name = "app",
+    srcs = ["main.tf"],
+    allow_ephemeral_state = True,
+    deps = ["//examples/modules/network"],
+)

@@ -1,0 +1,13 @@
+load("@rules_tofu//tf:defs.bzl", "tf_library")
+
+package(default_visibility = ["//visibility:public"])
+
+# A module that HCL calls by address rather than by relative path, as it would
+# a module published elsewhere. This one is in the workspace for the example's
+# sake; `module_source` is what lets a tf_library from another Bazel
+# repository be called at all. Its files include the `subnet` submodule.
+tf_library(
+    name = "network",
+    srcs = glob(["**/*.tf"]),
+    module_source = "git::https://example.com/acme/network.git?ref=v1.0.0",
+)

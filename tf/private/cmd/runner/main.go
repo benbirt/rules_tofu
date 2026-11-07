@@ -7,8 +7,10 @@
 //   - Refuse apply/destroy when the deploy declares no state backend and has
 //     not opted in via --allow-ephemeral-state, since local state under
 //     bazel-bin does not survive `bazel clean`.
-//   - Run `tofu init` inside the pre-materialized work tree, after copying in
-//     the provider lock when providers come from tf_providers.from_lock.
+//   - Run `tofu init -get=false` inside the pre-materialized work tree, after
+//     copying in the module manifest (every module is already in the work
+//     tree) and the provider lock when providers come from
+//     tf_providers.from_lock.
 //   - For plan: emit a plan artifact and stop.
 //   - For apply/destroy: delegate to tofu, passing through any extra args.
 //
@@ -34,11 +36,12 @@ import (
 )
 
 var (
-	workTree   = flag.String("work-tree", "", "path to the materialized work tree root")
-	packageDir = flag.String("package-dir", "", "workspace-relative dir to cd into within the work tree")
-	pluginDir  = flag.String("plugin-dir", "", "absolute path to the vendored provider plugin tree, passed to tofu init via -plugin-dir")
-	varFiles   = flags.StringList("var-file", "path to a .tfvars.json file passed to tofu via -var-file (repeatable)")
-	lockFile   = flag.String("lock-file", "", "optional .terraform.lock.hcl pinning the providers (tf_providers.from_lock), copied next to the configuration before tofu init")
+	workTree        = flag.String("work-tree", "", "path to the materialized work tree root")
+	packageDir      = flag.String("package-dir", "", "workspace-relative dir to cd into within the work tree")
+	pluginDir       = flag.String("plugin-dir", "", "absolute path to the vendored provider plugin tree, passed to tofu init via -plugin-dir")
+	varFiles        = flags.StringList("var-file", "path to a .tfvars.json file passed to tofu via -var-file (repeatable)")
+	modulesManifest = flag.String("modules-manifest", "", "the .terraform/modules/modules.json recording every module call, copied into place before tofu init -get=false")
+	lockFile        = flag.String("lock-file", "", "optional .terraform.lock.hcl pinning the providers (tf_providers.from_lock), copied next to the configuration before tofu init")
 
 	stateDir = flag.String("state-dir", "", "absolute path to the per-deploy state directory")
 
@@ -72,11 +75,12 @@ func run() error {
 	// the deploy lives in the workspace root package, so the work tree root
 	// itself is the cwd.
 	for name, value := range map[string]string{
-		"--tofu":       *tofu,
-		"--work-tree":  *workTree,
-		"--command":    *command,
-		"--state-dir":  *stateDir,
-		"--plugin-dir": *pluginDir,
+		"--tofu":             *tofu,
+		"--work-tree":        *workTree,
+		"--command":          *command,
+		"--state-dir":        *stateDir,
+		"--plugin-dir":       *pluginDir,
+		"--modules-manifest": *modulesManifest,
 	} {
 		if value == "" {
 			return fmt.Errorf("%s is required", name)
@@ -137,7 +141,10 @@ func run() error {
 			return err
 		}
 	}
-	if err := runTofu(env, cwd, "init", "-input=false", "-plugin-dir="+*pluginDir); err != nil {
+	if err := installModulesManifest(*modulesManifest, cwd); err != nil {
+		return err
+	}
+	if err := runTofu(env, cwd, "init", "-input=false", "-get=false", "-plugin-dir="+*pluginDir); err != nil {
 		if *lockFile != "" {
 			log.Print("if the provider versions in required_providers changed, run `bazel run @tf_providers//:pin` to update the lock file.")
 		}
@@ -189,6 +196,29 @@ func installLockFile(src, cwd string) error {
 		return fmt.Errorf("read lock file: %w", err)
 	}
 	dst := filepath.Join(cwd, ".terraform.lock.hcl")
+	if err := os.Remove(dst); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("replace %s: %w", dst, err)
+	}
+	if err := os.WriteFile(dst, data, 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", dst, err)
+	}
+	return nil
+}
+
+// installModulesManifest copies the module manifest to
+// cwd/.terraform/modules/modules.json, where `tofu init -get=false` reads
+// which module calls are installed where. As with the lock, a manifest an
+// earlier run left in this runfiles tree is replaced, never written through.
+func installModulesManifest(src, cwd string) error {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return fmt.Errorf("read module manifest: %w", err)
+	}
+	dir := filepath.Join(cwd, ".terraform", "modules")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create %s: %w", dir, err)
+	}
+	dst := filepath.Join(dir, "modules.json")
 	if err := os.Remove(dst); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("replace %s: %w", dst, err)
 	}

@@ -1,0 +1,8 @@
+load("@rules_tofu//tf:defs.bzl", "tf_deploy")
+
+tf_deploy(
+    name = "app",
+    srcs = ["main.tf"],
+    allow_ephemeral_state = True,
+    deps = ["@network_module//vpc"],
+)

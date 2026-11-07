@@ -1,0 +1,30 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+
+package(default_visibility = ["//tf/private:__subpackages__"])
+
+go_library(
+    name = "modules_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/benbirt/rules_tofu/tf/private/cmd/modules",
+    deps = [
+        "@com_github_hashicorp_hcl_v2//:hcl",
+        "@com_github_hashicorp_hcl_v2//hclparse",
+    ],
+)
+
+go_binary(
+    name = "modules",
+    embed = [":modules_lib"],
+)
+
+go_test(
+    name = "modules_test",
+    srcs = ["main_test.go"],
+    embed = [":modules_lib"],
+)
+
+filegroup(
+    name = "all_files",
+    srcs = glob(["*"]),
+    visibility = ["//:__subpackages__"],
+)

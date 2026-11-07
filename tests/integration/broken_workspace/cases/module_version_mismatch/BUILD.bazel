@@ -1,0 +1,10 @@
+load("@rules_tofu//tf:defs.bzl", "tf_library")
+
+# The call's version constraint rejects the dep's module_version. Since init
+# runs with -get=false, tofu fails rather than fetching a version it accepts.
+tf_library(
+    name = "lib",
+    srcs = ["main.tf"],
+    fmt_test = False,
+    deps = ["//cases/module_version_mismatch/net"],
+)

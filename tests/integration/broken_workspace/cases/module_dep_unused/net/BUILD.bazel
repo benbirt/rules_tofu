@@ -1,0 +1,9 @@
+load("@rules_tofu//tf:defs.bzl", "tf_library")
+
+tf_library(
+    name = "net",
+    srcs = ["main.tf"],
+    fmt_test = False,
+    module_source = "git::https://example.com/acme/network.git?ref=v1.0.0",
+    visibility = ["//cases/module_dep_unused:__pkg__"],
+)

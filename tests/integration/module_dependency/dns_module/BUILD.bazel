@@ -1,0 +1,11 @@
+load("@rules_tofu//tf:defs.bzl", "tf_library")
+
+# Its files include the `record` submodule, which main.tf calls locally. Its
+# module_version is dns_module's own version, 1.2.3, from MODULE.bazel.
+tf_library(
+    name = "dns",
+    srcs = glob(["**/*.tf"]),
+    fmt_test = False,
+    module_source = "acme/dns/null",
+    visibility = ["//visibility:public"],
+)
