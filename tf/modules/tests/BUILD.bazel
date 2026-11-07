@@ -1,0 +1,3 @@
+load(":source_test.bzl", "source_test_suite")
+
+source_test_suite(name = "source_test")
