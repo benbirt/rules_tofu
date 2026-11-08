@@ -29,6 +29,7 @@ load(":cases.bzl", "case_line")
 sh_binary(
     name = "assert_bazel_fails",
     srcs = ["assert_bazel_fails.sh"],
+    data = ["nested_bazel.sh"],
 )
 
 # Each sub-workspace is a single Bazel module, so every case ships the whole
@@ -146,6 +147,7 @@ bazel_integration_test(
 sh_binary(
     name = "lock_update_driver",
     srcs = ["lock_update_test.sh"],
+    data = ["nested_bazel.sh"],
 )
 
 bazel_integration_test(
@@ -169,6 +171,7 @@ bazel_integration_test(
 sh_binary(
     name = "module_dependency_driver",
     srcs = ["module_dependency_test.sh"],
+    data = ["nested_bazel.sh"],
 )
 
 [
@@ -194,6 +197,7 @@ sh_binary(
 sh_binary(
     name = "tf_modules_driver",
     srcs = ["tf_modules_test.sh"],
+    data = ["nested_bazel.sh"],
 )
 
 bazel_integration_test(
@@ -217,6 +221,7 @@ bazel_integration_test(
 sh_binary(
     name = "fmt_driver",
     srcs = ["fmt_test.sh"],
+    data = ["nested_bazel.sh"],
 )
 
 [

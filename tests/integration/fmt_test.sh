@@ -17,6 +17,10 @@ set -euo pipefail
 
 _TMPDIR="${TEST_TMPDIR:-/tmp}"
 
+# The nested Bazel's caches and the `bazel` function that runs it.
+# shellcheck source=tests/integration/nested_bazel.sh
+source "${BIT_WORKSPACE_DIR}/../nested_bazel.sh"
+
 fail() {
   echo "FAIL: $*" >&2
   exit 1
@@ -36,13 +40,6 @@ sed -i.bak "s|path = \"../../..\"|path = \"${RULES_TOFU}\"|" "${WS}/MODULE.bazel
 rm "${WS}/MODULE.bazel.bak"
 echo "tofu.version(version = \"${TOFU_VERSION}\")" >>"${WS}/MODULE.bazel"
 cd "${WS}"
-
-# Its own output base, as in assert_bazel_fails.sh: the one in ~/.bazelrc is
-# the outer Bazel's.
-NESTED_OUTPUT_BASE="${_TMPDIR}/nested_output_base"
-bazel() {
-  "${BIT_BAZEL_BINARY}" --output_base="${NESTED_OUTPUT_BASE}" "$@"
-}
 
 echo "--- 1. srcs only in a subdirectory ---" >&2
 bazel test //sub_only:deploy.fmt_check --test_output=errors >&2 || fail "fmt_check of a target whose srcs are all in a subdirectory failed"

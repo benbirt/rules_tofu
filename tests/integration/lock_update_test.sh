@@ -16,17 +16,9 @@ set -euo pipefail
 
 _TMPDIR="${TEST_TMPDIR:-/tmp}"
 
-# The nested Bazel's shared user root and bazelisk's per-user cache; see
-# assert_bazel_fails.sh.
-_user="${USER:-$(id -un)}"
-if [[ "$(uname -s)" == Darwin ]]; then
-  NESTED_USER_ROOT="/var/tmp/_bazel_${_user}"
-  : "${BAZELISK_HOME:=${HOME}/Library/Caches/bazelisk}"
-else
-  NESTED_USER_ROOT="${XDG_CACHE_HOME:-${HOME}/.cache}/bazel/_bazel_${_user}"
-  : "${BAZELISK_HOME:=${XDG_CACHE_HOME:-${HOME}/.cache}/bazelisk}"
-fi
-export BAZELISK_HOME
+# The nested Bazel's caches and the `bazel` function that runs it.
+# shellcheck source=tests/integration/nested_bazel.sh
+source "${BIT_WORKSPACE_DIR}/../nested_bazel.sh"
 
 # The workspace sits among read-only runfiles, so work on a copy, pointing its
 # local_path_override at the rules_tofu sources beside the original.
@@ -39,10 +31,7 @@ sed -i.bak "s|path = \"../../..\"|path = \"${RULES_TOFU}\"|" "${WS}/MODULE.bazel
 rm "${WS}/MODULE.bazel.bak"
 cd "${WS}"
 
-# Its own output base, as in assert_bazel_fails.sh: the one in ~/.bazelrc is
-# the outer Bazel's. pin runs `bazel query` itself, so it gets the same
-# wrapper through $BAZEL.
-NESTED_OUTPUT_BASE="${_TMPDIR}/nested_output_base"
+# pin runs `bazel query` itself, so it gets the same options through $BAZEL.
 BAZEL="${_TMPDIR}/bazel"
 cat >"${BAZEL}" <<EOF
 #!/usr/bin/env bash

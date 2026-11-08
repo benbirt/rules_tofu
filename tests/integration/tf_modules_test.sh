@@ -21,17 +21,9 @@ set -euo pipefail
 
 _TMPDIR="${TEST_TMPDIR:-/tmp}"
 
-# The nested Bazel's shared user root and bazelisk's per-user cache; see
-# assert_bazel_fails.sh.
-_user="${USER:-$(id -un)}"
-if [[ "$(uname -s)" == Darwin ]]; then
-  NESTED_USER_ROOT="/var/tmp/_bazel_${_user}"
-  : "${BAZELISK_HOME:=${HOME}/Library/Caches/bazelisk}"
-else
-  NESTED_USER_ROOT="${XDG_CACHE_HOME:-${HOME}/.cache}/bazel/_bazel_${_user}"
-  : "${BAZELISK_HOME:=${XDG_CACHE_HOME:-${HOME}/.cache}/bazelisk}"
-fi
-export BAZELISK_HOME
+# The nested Bazel's caches and the `bazel` function that runs it.
+# shellcheck source=tests/integration/nested_bazel.sh
+source "${BIT_WORKSPACE_DIR}/../nested_bazel.sh"
 
 fail() {
   echo "FAIL: $*" >&2
@@ -73,13 +65,6 @@ for f in MODULE.bazel app/main.tf bad/main.tf; do
   rm "${WS}/${f}.bak"
 done
 cd "${WS}"
-
-# Its own output base, as in assert_bazel_fails.sh: the one in ~/.bazelrc is
-# the outer Bazel's.
-NESTED_OUTPUT_BASE="${_TMPDIR}/nested_output_base"
-bazel() {
-  "${BIT_BAZEL_BINARY}" --output_user_root="${NESTED_USER_ROOT}" --output_base="${NESTED_OUTPUT_BASE}" "$@"
-}
 
 plan() {
   local out
