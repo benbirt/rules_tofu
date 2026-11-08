@@ -1,0 +1,3 @@
+variable   "untouched" {
+type = string
+}

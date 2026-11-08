@@ -14,9 +14,11 @@ The macro always emits:
   - `:<name>.plan`    — runnable: `bazel run :<name>.plan`
   - `:<name>.apply`   — runnable: `bazel run :<name>.apply`
   - `:<name>.destroy` — runnable: `bazel run :<name>.destroy`
+
+When `srcs` is non-empty:
   - `:<name>.fmt`     — runnable: `bazel run :<name>.fmt`
 
-When `fmt_test=True` (the default) and `srcs` is non-empty:
+When additionally `fmt_test=True` (the default):
   - `:<name>.fmt_check`  — test: `bazel test :<name>.fmt_check`
 
 Materialization happens at analysis time via `ctx.actions.symlink` (one
@@ -172,10 +174,13 @@ def tf_deploy(name, srcs = None, deps = None, vars = None, var_files = None, dat
       - `:<name>.plan`    — `bazel run` to produce a plan.
       - `:<name>.apply`   — `bazel run` to apply.
       - `:<name>.destroy` — `bazel run` to destroy all managed resources.
-      - `:<name>.fmt`     — `bazel run` to reformat .tf and .tofu files in-place.
 
-    When `fmt_test=True` (the default) and `srcs` is non-empty:
-      - `:<name>.fmt_check` — `bazel test` that fails if files are not formatted.
+    When `srcs` is non-empty:
+      - `:<name>.fmt`     — `bazel run` to reformat the .tf, .tofu, .tftest.hcl
+                            and .tofutest.hcl files in `srcs` in place.
+
+    When additionally `fmt_test=True` (the default):
+      - `:<name>.fmt_check` — `bazel test` that fails if those files are not formatted.
 
     Args:
       name: target name.
@@ -246,10 +251,11 @@ def tf_deploy(name, srcs = None, deps = None, vars = None, var_files = None, dat
         **common_kwargs
     )
 
-    _tf_fmt(name = name + ".fmt", **common_kwargs)
-    if fmt_test and srcs:
-        _tf_fmt_check(
-            name = name + ".fmt_check",
-            srcs = srcs,
-            **common_kwargs
-        )
+    if srcs:
+        _tf_fmt(name = name + ".fmt", srcs = srcs, **common_kwargs)
+        if fmt_test:
+            _tf_fmt_check(
+                name = name + ".fmt_check",
+                srcs = srcs,
+                **common_kwargs
+            )

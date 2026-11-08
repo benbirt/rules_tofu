@@ -197,3 +197,30 @@ bazel_integration_test(
     ],
     workspace_path = "tf_modules",
 )
+
+# `.fmt` and `.fmt_check` act on the files in `srcs` by name, in
+# subdirectories too, and on nothing else in the package; a target without
+# `srcs` has neither. Which extensions `tofu fmt` accepts by name is the
+# binary's to decide, so this runs with every tofu version rules_tofu pins.
+# See fmt_test.sh.
+sh_binary(
+    name = "fmt_driver",
+    srcs = ["fmt_test.sh"],
+)
+
+[
+    bazel_integration_test(
+        name = "fmt_{}_test".format(version.replace(".", "_")),
+        timeout = "moderate",
+        bazel_binaries = bazel_binaries,
+        bazel_version = bazel_binaries.versions.current,
+        env = {"TOFU_VERSION": version},
+        tags = _TAGS,
+        test_runner = ":fmt_driver",
+        workspace_files = integration_test_utils.glob_workspace_files("fmt") + [
+            "//:local_repository_files",
+        ],
+        workspace_path = "fmt",
+    )
+    for version in KNOWN_VERSIONS
+]

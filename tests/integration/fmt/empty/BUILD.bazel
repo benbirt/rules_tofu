@@ -1,0 +1,13 @@
+load("@rules_tofu//tf:defs.bzl", "tf_deploy", "tf_library")
+
+# No `srcs`: nothing to format, so no `.fmt` or `.fmt_check` target.
+tf_library(
+    name = "lib",
+    deps = ["//nested:lib"],
+)
+
+tf_deploy(
+    name = "deploy",
+    allow_ephemeral_state = True,
+    deps = [":lib"],
+)

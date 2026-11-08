@@ -128,14 +128,20 @@ and destroys.
 | Target             | Rule    | Command      | Does |
 |--------------------|---------|--------------|------|
 | `:name`            | both    | `bazel build`| Materialises the work tree and runs `tofu init -backend=false && tofu validate`. |
-| `:name.fmt_check`  | both    | `bazel test` | Fails if `srcs` are not `tofu fmt` clean. |
-| `:name.fmt`        | both    | `bazel run`  | Reformats `srcs` in place. |
+| `:name.fmt_check`  | both    | `bazel test` | Fails if the `.tf`, `.tofu`, `.tftest.hcl` and `.tofutest.hcl` files in `srcs` are not `tofu fmt` clean. |
+| `:name.fmt`        | both    | `bazel run`  | Reformats those files in place. |
 | `:name.plan`       | deploy  | `bazel run`  | `tofu plan`, saving the plan to the state directory. |
 | `:name.apply`      | deploy  | `bazel run`  | `tofu apply`. Prompts for confirmation unless the command is followed by `-- --auto-approve`. |
 | `:name.destroy`    | deploy  | `bazel run`  | `tofu destroy`. Prompts for confirmation unless the command is followed by `-- --auto-approve`. |
 
 There is no separate `:name.validate` target. If the rule builds
 successfully, the configuration is valid.
+
+`:name.fmt` and `:name.fmt_check` exist only when `srcs` is non-empty. Both
+name the files in `srcs` one by one, so a file in a subdirectory of the
+package counts and a file in the package that isn't in `srcs` is left
+alone. `.fmt` rewrites source files of the main repository; a generated
+file in `srcs` is checked but never rewritten.
 
 ## Providers 📦
 
