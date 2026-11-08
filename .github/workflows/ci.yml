@@ -121,3 +121,15 @@ jobs:
 
       - name: Run buildifier (lint warnings)
         run: bazel run @buildifier_prebuilt//:buildifier -- -lint=warn -r .
+
+      # `bazel mod tidy` manages use_repo lines (rules_tofu's extensions report
+      # their direct deps for it) and normalises MODULE.bazel; it must have nothing
+      # to change. Only MODULE.bazel is checked: the command may also refresh
+      # MODULE.bazel.lock, which the build jobs check.
+      - name: Check bazel mod tidy leaves MODULE.bazel unchanged
+        run: |
+          bazel mod tidy
+          if ! git diff --exit-code -- MODULE.bazel; then
+            echo "::error::'bazel mod tidy' changes MODULE.bazel. Run it and commit the result."
+            exit 1
+          fi
