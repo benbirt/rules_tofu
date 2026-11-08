@@ -131,6 +131,9 @@ Notes:
   differs from the one being submitted.
 - Published BCR versions are immutable (add-only) — never edit a shipped version;
   to retract one, yank it via `.bcr/metadata.template.json`.
-- The release tarball excludes `examples/` and `tests/` but **keeps** `e2e/` and
-  `.bcr/`, which the BCR presubmit reads from the extracted archive. See
+- The release tarball excludes `examples/`, `tests/`, `tools/`, `docs/` and
+  the `toolchain/tests/`, `tf/providers/tests/` and `tf/modules/tests/`
+  packages (everything that loads a `dev_dependency`), but **keeps** `e2e/`
+  and `.bcr/`, which the BCR presubmit reads from the extracted archive.
+  `docs/` feeds the separate docs archive instead. See
   [`release_prep.sh`](.github/workflows/release_prep.sh).
