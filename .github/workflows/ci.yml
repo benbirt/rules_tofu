@@ -26,10 +26,20 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # cache-version is part of every cache key, so each Bazel version gets
+      # its own bazelisk and repository caches. With shared keys, whichever
+      # job finished first saved them, and the other version's dependencies
+      # (Bazel itself, protobuf, rules_java, ...) were fetched from GitHub
+      # releases on every run, failing whenever GitHub did.
+      # Only pushes to main save caches: pull requests restore from them
+      # (via the key prefix) without adding a set per commit, which kept the
+      # repository at the Actions cache limit and evicted what main had saved.
       - name: Set up Bazel
         uses: bazel-contrib/setup-bazel@0.19.1
         with:
           bazelisk-cache: true
+          cache-save: ${{ github.ref == 'refs/heads/main' }}
+          cache-version: ${{ matrix.bazel }}
           disk-cache: ${{ github.workflow }}-${{ matrix.os }}-${{ matrix.bazel }}
           repository-cache: true
 
@@ -113,6 +123,7 @@ jobs:
         uses: bazel-contrib/setup-bazel@0.19.1
         with:
           bazelisk-cache: true
+          cache-save: ${{ github.ref == 'refs/heads/main' }}
           disk-cache: ${{ github.workflow }}
           repository-cache: true
 
