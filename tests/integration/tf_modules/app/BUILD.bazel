@@ -1,10 +1,12 @@
 load("@rules_tofu//tf:defs.bzl", "tf_deploy")
 
-# No providers: hashicorp/null comes with the network module.
+# hashicorp/null comes with the network module. hashicorp/time is required
+# by a submodule outside its modules/, which only this caller reaches.
 tf_deploy(
     name = "app",
     srcs = ["main.tf"],
     allow_ephemeral_state = True,
+    providers = ["@tf_providers//hashicorp/time"],
     deps = [
         "@tf_modules//cloudposse/label/null",
         "@tf_modules//dns",

@@ -6,14 +6,16 @@
 #   1. fixtures/network becomes a git repository with an annotated tag v1.0.0,
 #      and fixtures/dns an archive; @FIXTURES@ and @DNS_SHA256@ are filled in.
 #   2. //app plans: it calls a git module (which calls a registry module and
-#      requires a provider that only the module names), a submodule of it by
-#      `//<subdir>`, the archive, and the registry module directly.
+#      requires a provider that only the module names), a submodule of it
+#      under modules/ and one outside modules/ by `//<subdir>`, the archive,
+#      and the registry module directly.
 #   3. MODULE.bazel.lock records the commits of the git and registry modules.
 #   4. v1.0.0 is moved to a new commit. After `bazel clean --expunge`, //app
 #      still plans the old commit's content, and the build passes with
 #      --lockfile_mode=error.
-#   5. With the provider locked rather than tagged, `@tf_providers//:pin`
-#      covers what the git module requires, but not what its examples do.
+#   5. With the providers locked rather than tagged, `@tf_providers//:pin`
+#      covers what the git module and the submodule //app calls require, but
+#      not what its examples do.
 #   6. A module that calls an undeclared one fails when fetched, naming the
 #      tag to add.
 
@@ -74,7 +76,7 @@ plan() {
 }
 
 echo "--- 2. plan ---" >&2
-plan "app-v1 10.0.0.0/24 www.example.com direct"
+plan "app-v1 10.0.0.0/24 www.example.com direct hub-peered"
 
 echo "--- 3. facts ---" >&2
 grep -q -F "\"commit\": \"${first_commit}\"" MODULE.bazel.lock || fail "MODULE.bazel.lock doesn't record ${first_commit}"
@@ -90,8 +92,9 @@ plan "app-v1 10.0.0.0/24"
 bazel build --lockfile_mode=error //app >&2 || fail "the build with --lockfile_mode=error failed"
 
 echo "--- 5. pin ---" >&2
-# The root pins hashicorp/null with a lock instead of a tag. Nothing in the
-# main repository requires it: only the git module does.
+# The root pins hashicorp/null and hashicorp/time with a lock instead of tags.
+# Nothing in the main repository requires them: the git module requires null,
+# and its submodule outside modules/ that //app calls requires time.
 sed -i.bak '/^tf_providers.provider($/,/^)$/d' MODULE.bazel
 rm MODULE.bazel.bak
 # A backslash-newline, not `\n`, which BSD sed doesn't read as a newline.
@@ -109,6 +112,8 @@ BAZEL="${BAZEL}" bazel run @tf_providers//:pin >&2 || fail "pin failed"
 cat .terraform.lock.hcl >&2
 grep -q 'provider "registry.opentofu.org/hashicorp/null"' .terraform.lock.hcl ||
   fail "the lock doesn't cover hashicorp/null, which the git module requires"
+grep -q 'provider "registry.opentofu.org/hashicorp/time"' .terraform.lock.hcl ||
+  fail "the lock doesn't cover hashicorp/time, which the submodule //app calls by //vpc/peering requires"
 if grep -q 'hashicorp/random' .terraform.lock.hcl; then
   fail "the lock covers hashicorp/random, which only the git module's examples require"
 fi
