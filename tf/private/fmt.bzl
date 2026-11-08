@@ -66,7 +66,7 @@ tf_fmt_check_test = rule(
         "srcs": attr.label_list(
             allow_files = ALLOWED_SRC_EXTS,
             doc = "Source files to check; included as runfiles so the test sees them. " +
-                  "`tofu fmt -check` only inspects .tf files; other extensions are harmless runfiles.",
+                  "`tofu fmt -check` only inspects .tf and .tofu files; other extensions are harmless runfiles.",
         ),
     },
     toolchains = [TOOLCHAIN_TYPE],

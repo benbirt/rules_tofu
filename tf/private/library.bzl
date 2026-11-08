@@ -82,7 +82,7 @@ _tf_library = rule(
     attrs = {
         "srcs": attr.label_list(
             allow_files = ALLOWED_SRC_EXTS,
-            doc = "Source files belonging to this library (.tf, .tf.json, .tftpl, .hcl).",
+            doc = "Source files belonging to this library (.tf, .tf.json, .tofu, .tofu.json, .tftpl, .hcl).",
         ),
         "deps": attr.label_list(
             providers = [TfLibraryInfo],
@@ -164,7 +164,7 @@ def tf_library(name, srcs = None, deps = None, data = None, providers = None, mo
 
     Args:
       name: target name.
-      srcs: source .tf/.tf.json/.tftpl/.hcl files.
+      srcs: source .tf/.tf.json/.tofu/.tofu.json/.tftpl/.hcl files.
       deps: other `tf_library` targets to compose with.
       data: arbitrary files to include in the work tree for `file()` calls.
       providers: providers (`@tf_providers//<namespace>/<name>`, from the

@@ -109,3 +109,98 @@ func TestReadRequiredProviders_DuplicateLocalName(t *testing.T) {
 		t.Errorf("expected a duplicate error, got %v", err)
 	}
 }
+
+func writeFiles(t *testing.T, dir string, files map[string]string) {
+	t.Helper()
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A `.tofu` or `.tofu.json` file shadows the `.tf` or `.tf.json` file of the
+// same name, and only that one.
+func TestConfigFiles_TofuShadowsTf(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir, map[string]string{
+		"main.tf":            "",
+		"main.tofu":          "",
+		"main.tf.json":       "{}",
+		"data.tf.json":       "{}",
+		"data.tofu.json":     "{}",
+		"only.tofu":          "",
+		"x_override.tf":      "",
+		"x_override.tofu":    "",
+		"vars.tfvars":        "",
+		"notes.tofu.txt":     "",
+		"tests.tofutest.hcl": "",
+	})
+	got, err := ConfigFiles(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range got {
+		got[i] = filepath.Base(got[i])
+	}
+	want := []string{"data.tofu.json", "main.tf.json", "main.tofu", "only.tofu", "x_override.tofu"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+func TestHasConfig_TofuOnly(t *testing.T) {
+	dir := t.TempDir()
+	if HasConfig(dir) {
+		t.Error("empty directory has config")
+	}
+	writeFiles(t, dir, map[string]string{"main.tofu.json": "{}"})
+	if !HasConfig(dir) {
+		t.Error("a directory holding only main.tofu.json has no config")
+	}
+}
+
+func TestReadCalls_Tofu(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir, map[string]string{
+		// Shadowed by main.tofu, so neither its call nor the duplicate counts.
+		"main.tf":         `module "a" { source = "acme/tf/aws" }`,
+		"main.tofu":       `module "a" { source = "acme/tofu/aws" }`,
+		"b.tofu.json":     `{"module": {"b": {"source": "./b"}}}`,
+		"c.tofu":          `module "c" { source = "./c" }`,
+		"c_override.tofu": `module "c" { source = "./c2" }`,
+	})
+	calls, err := ReadCalls(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, c := range calls {
+		got[c.Name] = c.Source
+	}
+	want := map[string]string{"a": "acme/tofu/aws", "b": "./b", "c": "./c2"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+// pin hands ReadRequiredProviders the files Bazel lists, both halves of a
+// shadowed pair included; the `.tf` one must not count.
+func TestReadRequiredProviders_TofuShadowsTf(t *testing.T) {
+	dir := t.TempDir()
+	null := func(version string) string {
+		return "terraform {\n  required_providers {\n    null = { source = \"hashicorp/null\", version = \"" + version + "\" }\n  }\n}\n"
+	}
+	writeFiles(t, dir, map[string]string{
+		"versions.tf":   null("3.1.0"),
+		"versions.tofu": null("3.2.0"),
+	})
+	got, err := ReadRequiredProviders([]string{filepath.Join(dir, "versions.tf"), filepath.Join(dir, "versions.tofu")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]Requirement{"null": {Source: "registry.opentofu.org/hashicorp/null", Version: "3.2.0"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+}

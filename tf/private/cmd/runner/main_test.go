@@ -501,6 +501,49 @@ func TestRunner_BackendBlock_JSON_OmitsStateFlags(t *testing.T) {
 	}
 }
 
+// TestRunner_BackendBlock_Tofu_OmitsStateFlags verifies that backend blocks in
+// OpenTofu-only files (.tofu, .tofu.json) are recognised.
+func TestRunner_BackendBlock_Tofu_OmitsStateFlags(t *testing.T) {
+	for name, content := range map[string]string{
+		"backend.tofu":      "terraform {\n  backend \"s3\" {}\n}\n",
+		"backend.tofu.json": `{"terraform": {"backend": {"s3": {}}}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
+			writePkgFile(t, cmd, name, content)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
+			}
+			invs := invocations()
+			if len(invs) != 2 {
+				t.Fatalf("expected 2 tofu invocations (init, plan), got %d: %+v", len(invs), invs)
+			}
+			if plan := invs[1]; plan.hasArgWithPrefix("-state=") || plan.hasArgWithPrefix("-state-out=") {
+				t.Errorf("plan invocation should not have local state flags when %s declares a backend, got args: %v", name, plan.args)
+			}
+		})
+	}
+}
+
+// TestRunner_BackendBlock_ShadowedByTofu_KeepsStateFlags verifies that a backend
+// block in a .tf file doesn't count when a .tofu file of the same name, which
+// tofu reads instead, declares none.
+func TestRunner_BackendBlock_ShadowedByTofu_KeepsStateFlags(t *testing.T) {
+	cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
+	writePkgFile(t, cmd, "backend.tf", "terraform {\n  backend \"s3\" {}\n}\n")
+	writePkgFile(t, cmd, "backend.tofu", `terraform { required_version = ">= 1.8" }`)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
+	}
+	invs := invocations()
+	if len(invs) != 2 {
+		t.Fatalf("expected 2 tofu invocations (init, plan), got %d: %+v", len(invs), invs)
+	}
+	if plan := invs[1]; !plan.hasArgWithPrefix("-state=") || !plan.hasArgWithPrefix("-state-out=") {
+		t.Errorf("plan invocation should have local state flags when backend.tofu shadows backend.tf, got args: %v", plan.args)
+	}
+}
+
 // TestRunner_NoBackendBlock_JSON_KeepsStateFlags verifies that a .tf.json file
 // with a terraform block but no backend/cloud block does not suppress the local
 // -state= / -state-out= flags.

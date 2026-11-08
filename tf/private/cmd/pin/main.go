@@ -4,7 +4,7 @@
 // The lock serves every tf_library and tf_deploy in the workspace, so it is
 // locked against all of their version constraints:
 //
-//   - `bazel query` lists the .tf/.tf.json source files of every tf_library
+//   - `bazel query` lists the .tf/.tf.json/.tofu/.tofu.json source files of every tf_library
 //     and tf_deploy in the main repository (with their dependencies). Bazel
 //     already knows which packages exist, so .bazelignore, deleted packages
 //     and nested workspaces need no handling here. A .tf file outside every
@@ -197,7 +197,7 @@ const rootRules = `kind("^(_tf_library|tf_deploy_rule) rule$", //...)`
 
 // configQuery lists the configuration files of those rules, including those
 // reached through filegroups and library deps, in any repository.
-const configQuery = `filter("\.tf(\.json)?$", kind("source file", deps(` + rootRules + `)))`
+const configQuery = `filter("\.(tf|tofu)(\.json)?$", kind("source file", deps(` + rootRules + `)))`
 
 // moduleQuery lists the libraries with a module_source among their deps:
 // those are the modules, tf_modules' generated ones included, whose files

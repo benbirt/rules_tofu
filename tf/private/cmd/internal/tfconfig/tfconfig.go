@@ -31,31 +31,86 @@ var (
 	requiredSchema  = &hcl.BodySchema{Blocks: []hcl.BlockHeaderSchema{{Type: "required_providers"}}}
 )
 
-// configFiles lists the .tf and .tf.json files in dir: primary files, then
-// `_override` files, which tofu merges over them.
-func configFiles(dir string) (primary, overrides []string, err error) {
+// configExt returns name's configuration file extension, or "" if it isn't a
+// configuration file. Since OpenTofu 1.8, a `.tofu` or `.tofu.json` file
+// shadows the `.tf` or `.tf.json` file of the same name (see Effective), so a
+// module can ship OpenTofu-specific configuration beside Terraform-compatible
+// files.
+func configExt(name string) string {
+	for _, ext := range []string{".tf.json", ".tofu.json", ".tf", ".tofu"} {
+		if strings.HasSuffix(name, ext) {
+			return ext
+		}
+	}
+	return ""
+}
+
+// IsConfigFile reports whether name is a configuration file: a `.tf`,
+// `.tf.json`, `.tofu` or `.tofu.json` file.
+func IsConfigFile(name string) bool {
+	return configExt(name) != ""
+}
+
+// Effective drops each `.tf` or `.tf.json` file of files that a `.tofu` or
+// `.tofu.json` file of the same path shadows, as tofu ignores them. The order
+// of the rest is kept.
+func Effective(files []string) []string {
+	present := map[string]bool{}
+	for _, f := range files {
+		present[f] = true
+	}
+	var kept []string
+	for _, f := range files {
+		ext := configExt(f)
+		if ext == ".tf" || ext == ".tf.json" {
+			tofu := strings.TrimSuffix(f, ext) + strings.Replace(ext, ".tf", ".tofu", 1)
+			if present[tofu] {
+				continue
+			}
+		}
+		kept = append(kept, f)
+	}
+	return kept
+}
+
+// ConfigFiles lists the configuration files in dir that tofu reads, sorted
+// by name: those with a configuration extension, less the ones Effective
+// drops.
+func ConfigFiles(dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var files []string
+	for _, e := range entries {
+		if !e.IsDir() && IsConfigFile(e.Name()) {
+			files = append(files, filepath.Join(dir, e.Name()))
+		}
+	}
+	return Effective(files), nil
+}
+
+// configFiles lists the configuration files tofu reads in dir: primary
+// files, then `_override` files, which tofu merges over them.
+func configFiles(dir string) (primary, overrides []string, err error) {
+	files, err := ConfigFiles(dir)
 	if err != nil {
 		return nil, nil, err
 	}
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || !(strings.HasSuffix(name, ".tf") || strings.HasSuffix(name, ".tf.json")) {
-			continue
-		}
-		if isOverride(name) {
-			overrides = append(overrides, filepath.Join(dir, name))
+	for _, f := range files {
+		if isOverride(filepath.Base(f)) {
+			overrides = append(overrides, f)
 		} else {
-			primary = append(primary, filepath.Join(dir, name))
+			primary = append(primary, f)
 		}
 	}
 	return primary, overrides, nil
 }
 
-// HasConfig reports whether dir holds any .tf or .tf.json file.
+// HasConfig reports whether dir holds any configuration file.
 func HasConfig(dir string) bool {
-	primary, overrides, err := configFiles(dir)
-	return err == nil && len(primary)+len(overrides) > 0
+	files, err := ConfigFiles(dir)
+	return err == nil && len(files) > 0
 }
 
 func parse(parser *hclparse.Parser, file string) (*hcl.File, error) {
@@ -76,7 +131,7 @@ func parse(parser *hclparse.Parser, file string) (*hcl.File, error) {
 	return f, nil
 }
 
-// ReadCalls parses the module blocks of the .tf and .tf.json files in dir. An
+// ReadCalls parses the module blocks of the configuration files in dir. An
 // `_override` file's `source` replaces the one in the primary file, as tofu
 // merges it.
 func ReadCalls(dir string) ([]Call, error) {
@@ -160,7 +215,7 @@ type Requirement struct {
 }
 
 // RequiredProviders returns the normalised `source` of every
-// required_providers entry in dir's .tf and .tf.json files, sorted.
+// required_providers entry in dir's configuration files, sorted.
 func RequiredProviders(dir string) ([]string, error) {
 	primary, overrides, err := configFiles(dir)
 	if err != nil {
@@ -183,16 +238,17 @@ func RequiredProviders(dir string) ([]string, error) {
 }
 
 // ReadRequiredProviders returns the required_providers entries in files,
-// which share a module directory, keyed by local name. An entry in an
-// `_override` file replaces the primary files' entry of that name, as tofu
-// merges it; two primary entries of one name are an error, as in tofu.
+// which share a module directory, keyed by local name. A `.tf` or `.tf.json`
+// file that a `.tofu` or `.tofu.json` file of files shadows is skipped, as
+// tofu skips it (see Effective). An entry in an `_override` file replaces the
+// primary files' entry of that name, as tofu merges it; two primary entries of one name are an error, as in tofu.
 //
 // An entry is `{ source = ..., version = ... }`, or the legacy bare version
 // string. Other keys, like configuration_aliases, are references that can't
 // be evaluated here and don't name a provider, so they're skipped.
 func ReadRequiredProviders(files []string) (map[string]Requirement, error) {
 	var primary, overrides []string
-	for _, f := range files {
+	for _, f := range Effective(files) {
 		if isOverride(filepath.Base(f)) {
 			overrides = append(overrides, f)
 		} else {
@@ -305,7 +361,7 @@ func LiteralString(expr hcl.Expression) (string, bool) {
 func ModuleDirs(repo, moduleDir string) ([]string, error) {
 	moduleDir = strings.Trim(moduleDir, "/")
 	if !HasConfig(filepath.Join(repo, filepath.FromSlash(moduleDir))) {
-		return nil, fmt.Errorf("%q holds no .tf or .tf.json files", "/"+moduleDir)
+		return nil, fmt.Errorf("%q holds no .tf, .tf.json, .tofu or .tofu.json files", "/"+moduleDir)
 	}
 	pending := []string{moduleDir}
 	submodules := filepath.Join(repo, filepath.FromSlash(path.Join(moduleDir, "modules")))
@@ -365,6 +421,6 @@ func ModuleDirs(repo, moduleDir string) ([]string, error) {
 // isOverride reports whether a configuration file is an override file, which
 // tofu merges over the others.
 func isOverride(name string) bool {
-	stem := strings.TrimSuffix(strings.TrimSuffix(name, ".json"), ".tf")
+	stem := strings.TrimSuffix(name, configExt(name))
 	return stem == "override" || strings.HasSuffix(stem, "_override")
 }

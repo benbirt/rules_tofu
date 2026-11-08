@@ -21,7 +21,10 @@ load(":providers.bzl", "TfLibraryInfo")
 # here would create ambiguous precedence with the deploy-emitted
 # `rules_tofu.auto.tfvars.json` and lets a reusable module declare values
 # it has no business owning.
-ALLOWED_SRC_EXTS = [".tf", ".tf.json", ".tftpl", ".hcl"]
+#
+# `.tofu` and `.tofu.json` are OpenTofu-only configuration files: tofu reads
+# `foo.tofu` in place of a `foo.tf` beside it.
+ALLOWED_SRC_EXTS = [".tf", ".tf.json", ".tofu", ".tofu.json", ".tftpl", ".hcl"]
 
 def runfiles_path(workspace_name, f):
     """Return the path at which `f` appears in a runfiles tree.
