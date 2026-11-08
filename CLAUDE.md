@@ -287,7 +287,9 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   `@tf_providers//...`, which they can only see because rules_tofu's
   MODULE.bazel imports the hub through a non-dev `use_extension`; keep that.
   `//tests/integration:tf_modules_test` covers git (with a moved tag),
-  archive and registry modules offline but for the registry itself. Unlike
+  archive and registry modules offline but for the registry itself, and
+  `examples/modules/{label,stack,git}` use real modules from the registry and
+  GitHub, which CI plans: keep them small (light providers only). Unlike
   a provider lock update, a module version bump changes MODULE.bazel.lock
   (a new fact), so a bot's PR needs `bazel mod deps --lockfile_mode=update`;
   the README says so. That is the price of pinning commits on first use:

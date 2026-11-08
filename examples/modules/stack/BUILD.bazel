@@ -1,0 +1,13 @@
+load("@rules_tofu//tf:defs.bzl", "tf_deploy")
+
+# main.tf calls the `modules/stack` submodule of cloudposse/stack-config/yaml,
+# a real module from the OpenTofu registry. That submodule calls another
+# registry module, cloudposse/label/null, which MODULE.bazel declares too. The
+# providers stack-config requires come with its library, so none is listed
+# here; //examples/lock pins them.
+tf_deploy(
+    name = "stack",
+    srcs = ["main.tf"],
+    allow_ephemeral_state = True,
+    deps = ["@tf_modules//cloudposse/stack-config/yaml"],
+)

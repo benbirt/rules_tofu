@@ -105,11 +105,24 @@ tf_providers.provider(
 # Renovate and Dependabot can update. `@tf_providers//:pin` regenerates it.
 tf_providers.from_lock(lock = "//examples/lock:.terraform.lock.hcl")
 
-# examples/modules/label calls a module from the OpenTofu registry.
+# Real modules for the examples under examples/modules:
+# - label calls cloudposse/label/null from the OpenTofu registry;
+# - stack calls a submodule of cloudposse/stack-config/yaml, which in turn
+#   calls cloudposse/label/null and requires providers that the examples' lock
+#   pins (//examples/lock);
+# - git calls Cloud Posse's label module straight from GitHub, by tag.
 tf_modules = use_extension("//tf/modules:extensions.bzl", "tf_modules", dev_dependency = True)
 tf_modules.module(
     source = "cloudposse/label/null",
     version = "0.25.0",
+)
+tf_modules.module(
+    source = "cloudposse/stack-config/yaml",
+    version = "2.0.1",
+)
+tf_modules.module(
+    name = "null_label",
+    source = "git::https://github.com/cloudposse/terraform-null-label.git?ref=0.25.0",
 )
 use_repo(tf_modules, "tf_modules")
 

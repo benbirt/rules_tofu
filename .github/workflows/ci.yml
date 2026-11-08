@@ -43,6 +43,15 @@ jobs:
       - name: Test
         run: bazel test //... --test_output=errors --verbose_failures ${{ matrix.bazel == 'pinned' && '--lockfile_mode=error' || '' }}
 
+      # The module examples call real modules from the OpenTofu registry and
+      # GitHub. Building them only validates; planning runs them, offline,
+      # against what rules_tofu fetched and the providers the lock pins.
+      - name: Plan the module examples
+        run: |
+          for example in label stack git; do
+            bazel run "//examples/modules/${example}:${example}.plan" ${{ matrix.bazel == 'pinned' && '--lockfile_mode=error' || '' }}
+          done
+
       # e2e/smoke is the BCR presubmit test module and models the README-shaped
       # consumer path. It's excluded from //... via --deleted_packages, so build
       # it explicitly here to catch consumer-facing breakage before a release.

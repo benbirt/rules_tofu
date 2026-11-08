@@ -647,6 +647,13 @@
       "cloudposse/label/null@0.25.0": {
         "commit": "488ab91e34a24a86957e397d9f7262ec5925586a",
         "location": "git::https://github.com/cloudposse/terraform-null-label?ref=488ab91e34a24a86957e397d9f7262ec5925586a"
+      },
+      "cloudposse/stack-config/yaml@2.0.1": {
+        "commit": "558d1e0ad3417a32594dfa865766b294d00b1aef",
+        "location": "git::https://github.com/cloudposse/terraform-yaml-stack-config?ref=558d1e0ad3417a32594dfa865766b294d00b1aef"
+      },
+      "git::https://github.com/cloudposse/terraform-null-label.git?ref=0.25.0": {
+        "commit": "488ab91e34a24a86957e397d9f7262ec5925586a"
       }
     },
     "//tf/providers:extensions.bzl%tf_providers": {
