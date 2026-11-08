@@ -23,8 +23,22 @@ jobs:
       # Bazelisk reads this for every invocation, including the nested
       # e2e/smoke module. Empty means "use .bazelversion".
       USE_BAZEL_VERSION: ${{ matrix.bazel != 'pinned' && matrix.bazel || '' }}
+      # gazelle's go_repository then reads Go modules from the user's module
+      # cache (restored below) instead of downloading each into a cache
+      # private to the output base. The build fills it once; the integration
+      # tests' nested Bazels, which set this too, find everything there and
+      # never reach proxy.golang.org, whose timeouts have failed them.
+      GO_REPOSITORY_USE_HOST_CACHE: "1"
     steps:
       - uses: actions/checkout@v7
+
+      # Keyed on go.sum, so a run with unchanged Go modules downloads none.
+      - name: Restore the Go module cache
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: gomod-${{ runner.os }}-${{ hashFiles('go.sum') }}
+          restore-keys: gomod-${{ runner.os }}-
 
       # cache-version is part of every cache key, so each Bazel version gets
       # its own bazelisk and repository caches. With shared keys, whichever
@@ -50,8 +64,12 @@ jobs:
       - name: Build
         run: bazel build //... ${{ matrix.bazel == 'pinned' && '--lockfile_mode=error' || '' }}
 
+      # lock_update_test and tf_modules_test pin against the live OpenTofu
+      # registry, and have failed when it could not be reached for a minute.
+      # A second attempt costs under a minute; Bazel reports such a test as
+      # FLAKY, so a flake stays visible without failing the run.
       - name: Test
-        run: bazel test //... --test_output=errors --verbose_failures ${{ matrix.bazel == 'pinned' && '--lockfile_mode=error' || '' }}
+        run: bazel test //... --test_output=errors --verbose_failures --flaky_test_attempts=2 ${{ matrix.bazel == 'pinned' && '--lockfile_mode=error' || '' }}
 
       # The module examples call real modules from the OpenTofu registry and
       # GitHub. Building them only validates; planning runs them, offline,
