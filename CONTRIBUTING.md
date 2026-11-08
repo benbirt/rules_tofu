@@ -52,6 +52,9 @@ Before submitting a PR, make sure you have not violated these:
 # Unit tests (Go):
 bazel test //tf/private/cmd/...
 
+# Unit tests (Starlark, via bazel_skylib's unittest):
+bazel test //toolchain/tests/... //tf/providers/tests/... //tf/modules/tests/...
+
 # Integration tests (Bazel-in-Bazel, slower):
 bazel test //tests/integration/...
 

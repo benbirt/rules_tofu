@@ -88,8 +88,8 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
 - The only `.terraform.lock.hcl` rules_tofu reads is the root module's
   `from_lock` file (README, "Pinning with a lock file"; CONTRIBUTING,
   invariant 1). None is accepted in `srcs`/`data`, and `init_action.bzl`
-  fails if one reaches a work tree: don't relax that. `_ALLOWED_EXTS` in
-  `library.bzl`/`deploy.bzl` includes `.hcl`, so a user *can* list a lock
+  fails if one reaches a work tree: don't relax that. `ALLOWED_SRC_EXTS` in
+  `tf/private/work_tree.bzl` includes `.hcl`, so a user *can* list a lock
   in `srcs`; the runtime rejection is the backstop. The managed lock
   travels as `TfProviderInfo.lock` and is copied in only *after* that
   check, as the runner does with `--lock-file`. Don't use
@@ -104,8 +104,9 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   `versions.tf` leaves `MODULE.bazel.lock` valid.
   `//tests/integration:lock_update_test` guards this; don't move the
   lookup back into the extension.
-- Both extensions declare `reproducible = True`, so their repo specs are
-  deliberately absent from `MODULE.bazel.lock`; only facts are recorded.
+- All three extensions (`tofu`, `tf_providers`, `tf_modules`) declare
+  `reproducible = True`, so their repo specs are deliberately absent from
+  `MODULE.bazel.lock`; only facts are recorded.
   Facts are validated on read (`valid_cached_sha256s`, `valid_fact`),
   treated as a miss if malformed, and only the facts in use are returned,
   so stale ones drop out.
@@ -200,10 +201,11 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
 
 ### Extensions and the toolchain
 
-- Both module extensions call `module_ctx.extension_metadata` with the
+- All three extensions call `module_ctx.extension_metadata` with the
   dev/non-dev split keyed on `root_module_has_non_dev_dependency`. Root
-  direct deps are `tofu_toolchains` and `tf_providers` only, never the
-  internal per-platform or per-provider repos. `bazel mod tidy` must leave
+  direct deps are the hubs only, `tofu_toolchains`, `tf_providers` and
+  `tf_modules`, never the internal per-platform, per-provider or
+  per-module repos. `bazel mod tidy` must leave
   `MODULE.bazel` unchanged; CI's lint job checks it.
 - `tofu.version` is "root arbitrates": more than one root tag fails, one
   root tag wins unconditionally, agreeing non-root requests are honoured,
