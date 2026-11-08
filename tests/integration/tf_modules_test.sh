@@ -21,6 +21,18 @@ set -euo pipefail
 
 _TMPDIR="${TEST_TMPDIR:-/tmp}"
 
+# The nested Bazel's shared user root and bazelisk's per-user cache; see
+# assert_bazel_fails.sh.
+_user="${USER:-$(id -un)}"
+if [[ "$(uname -s)" == Darwin ]]; then
+  NESTED_USER_ROOT="/var/tmp/_bazel_${_user}"
+  : "${BAZELISK_HOME:=${HOME}/Library/Caches/bazelisk}"
+else
+  NESTED_USER_ROOT="${XDG_CACHE_HOME:-${HOME}/.cache}/bazel/_bazel_${_user}"
+  : "${BAZELISK_HOME:=${XDG_CACHE_HOME:-${HOME}/.cache}/bazelisk}"
+fi
+export BAZELISK_HOME
+
 fail() {
   echo "FAIL: $*" >&2
   exit 1
@@ -66,7 +78,7 @@ cd "${WS}"
 # the outer Bazel's.
 NESTED_OUTPUT_BASE="${_TMPDIR}/nested_output_base"
 bazel() {
-  "${BIT_BAZEL_BINARY}" --output_base="${NESTED_OUTPUT_BASE}" "$@"
+  "${BIT_BAZEL_BINARY}" --output_user_root="${NESTED_USER_ROOT}" --output_base="${NESTED_OUTPUT_BASE}" "$@"
 }
 
 plan() {
@@ -105,7 +117,7 @@ grep -q '^tf_providers.from_lock()$' MODULE.bazel || fail "couldn't switch MODUL
 BAZEL="${_TMPDIR}/bazel"
 cat >"${BAZEL}" <<EOF
 #!/usr/bin/env bash
-exec "${BIT_BAZEL_BINARY}" --output_base="${NESTED_OUTPUT_BASE}" "\$@"
+exec "${BIT_BAZEL_BINARY}" --output_user_root="${NESTED_USER_ROOT}" --output_base="${NESTED_OUTPUT_BASE}" "\$@"
 EOF
 chmod +x "${BAZEL}"
 BAZEL="${BAZEL}" bazel run @tf_providers//:pin >&2 || fail "pin failed"
