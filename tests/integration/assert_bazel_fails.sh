@@ -15,6 +15,25 @@ set -uo pipefail
 _TMPDIR="${TEST_TMPDIR:-/tmp}"
 LOG="${_TMPDIR}/build.log"
 
+# Bazel sees TEST_TMPDIR and puts the nested Bazel's output user root under
+# it, so every test would extract an install base and fetch each repository
+# from nothing (the Go SDK alone is ten seconds). Give it the outer Bazel's
+# user root instead, Bazel's own default for the platform (HOME is inherited
+# by bazel_integration_test): the install base and the repository and repo
+# contents caches are then shared with the outer Bazel and across tests,
+# while --output_base below stays per test. The nested `bazel` is a bazelisk
+# wrapper that likewise caches its Bazel download under $PWD unless told
+# otherwise; use its per-user cache, which setup-bazel saves on CI.
+_user="${USER:-$(id -un)}"
+if [[ "$(uname -s)" == Darwin ]]; then
+  NESTED_USER_ROOT="/var/tmp/_bazel_${_user}"
+  : "${BAZELISK_HOME:=${HOME}/Library/Caches/bazelisk}"
+else
+  NESTED_USER_ROOT="${XDG_CACHE_HOME:-${HOME}/.cache}/bazel/_bazel_${_user}"
+  : "${BAZELISK_HOME:=${XDG_CACHE_HOME:-${HOME}/.cache}/bazelisk}"
+fi
+export BAZELISK_HOME
+
 # Build-time failures are the common case, so `build` is the default; cases
 # that assert a runtime launcher failure set BAZEL_COMMAND=run.
 _BAZEL_COMMAND="${BAZEL_COMMAND:-build}"
@@ -63,7 +82,7 @@ echo "--- starting nested bazel ${_BAZEL_COMMAND} at $(date -u) ---" >&2
 #
 # --output_base is a STARTUP option (before the command) so it overrides any
 # --output_base set in ~/.bazelrc.
-"${BIT_BAZEL_BINARY}" --output_base="${NESTED_OUTPUT_BASE}" "${_BAZEL_COMMAND}" "${TARGET}" 2>&1 | tee "${LOG}" >&2
+"${BIT_BAZEL_BINARY}" --output_user_root="${NESTED_USER_ROOT}" --output_base="${NESTED_OUTPUT_BASE}" "${_BAZEL_COMMAND}" "${TARGET}" 2>&1 | tee "${LOG}" >&2
 rc=${PIPESTATUS[0]}
 
 echo "--- nested bazel ${_BAZEL_COMMAND} finished at $(date -u), exit code: ${rc} ---" >&2
