@@ -180,9 +180,52 @@ func TestBuild_Errors(t *testing.T) {
 			want:  "needs `source` to be a literal string",
 		},
 		{
+			name:  "matched source with no configuration in the subdir",
+			files: map[string]string{"app/main.tf": `module "m" { source = "acme/x/aws//docs" }`, "external/a/main.tf": ``, "external/a/docs/README.md": ``},
+			deps:  []dep{{Label: "@a", Source: "acme/x/aws", Version: "1.0.0", Dir: "external/a"}},
+			want:  `@a (module_source "acme/x/aws") has no .tf, .tf.json, .tofu or .tofu.json files in "docs"`,
+		},
+		{
+			name:  "matched source with no configuration",
+			files: map[string]string{"app/main.tf": `module "m" { source = "acme/x/aws" }`, "external/a/README.md": ``},
+			deps:  []dep{{Label: "@a", Source: "acme/x/aws", Version: "1.0.0", Dir: "external/a"}},
+			want:  `@a (module_source "acme/x/aws") has no .tf, .tf.json, .tofu or .tofu.json files`,
+		},
+		{
+			name:  "matched source with no directory",
+			files: map[string]string{"app/main.tf": `module "m" { source = "acme/x/aws" }`},
+			deps:  []dep{{Label: "@a", Source: "acme/x/aws", Version: "1.0.0", Dir: "external/a"}},
+			want:  `@a (module_source "acme/x/aws") has no .tf, .tf.json, .tofu or .tofu.json files`,
+		},
+		{
+			name:  "backslash local source outside the work tree",
+			files: map[string]string{"app/main.tf": `module "m" { source = "..\\..\\outside" }`},
+			want:  `source "..\\..\\outside" is outside the work tree`,
+		},
+		{
 			name:  "self-call",
 			files: map[string]string{"app/main.tf": `module "m" { source = "./" }`},
-			want:  "nested more than",
+			want:  `source "./" is the directory of the root module, an ancestor of this call, so the module calls form a cycle`,
+		},
+		{
+			name: "cycle through a called module",
+			files: map[string]string{
+				"app/main.tf":     `module "b" { source = "./b" }`,
+				"app/b/main.tf":   `module "c" { source = "./c" }`,
+				"app/b/c/main.tf": `module "back" { source = "../" }`,
+			},
+			want: `module "back" (app/b/c/main.tf:1): source "../" is the directory of module "b", an ancestor of this call, so the module calls form a cycle`,
+		},
+		{
+			// Two calls into a cycle at each level once branched 2^depth times
+			// before any depth limit stopped it (#58); a cycle is reported as
+			// soon as a call reaches a module above it.
+			name: "cycle reached by two calls",
+			files: map[string]string{
+				"app/main.tf":   "module \"b1\" { source = \"./b\" }\nmodule \"b2\" { source = \"./b\" }",
+				"app/b/main.tf": "module \"a1\" { source = \"../\" }\nmodule \"a2\" { source = \"../\" }",
+			},
+			want: `module "a1" (app/b/main.tf:1): source "../" is the directory of the root module`,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -331,6 +374,86 @@ func TestBuild_TransitiveCallDoesNotUseDirectDep(t *testing.T) {
 			deps[0].Direct = false
 			if _, err := build(tree, "app", "//app", deps, packages); err != nil {
 				t.Fatal(err)
+			}
+		})
+	}
+}
+
+// Two calls to one module are not a cycle: each is recorded, and the module
+// is walked once per call.
+func TestBuild_RepeatedCall(t *testing.T) {
+	tree := writeTree(t, map[string]string{
+		"app/main.tf":              "module \"x\" { source = \"./shared\" }\nmodule \"y\" { source = \"./shared\" }",
+		"app/shared/main.tf":       `module "inner" { source = "./inner" }`,
+		"app/shared/inner/main.tf": ``,
+	})
+	got, err := build(tree, "app", "//app", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Record{
+		{Key: "", Source: "", Dir: "."},
+		{Key: "x", Source: "./shared", Dir: "shared"},
+		{Key: "x.inner", Source: "./inner", Dir: "shared/inner"},
+		{Key: "y", Source: "./shared", Dir: "shared"},
+		{Key: "y.inner", Source: "./inner", Dir: "shared/inner"},
+	}
+	if !reflect.DeepEqual(got.Modules, want) {
+		t.Errorf("got\n%+v\nwant\n%+v", got.Modules, want)
+	}
+}
+
+// A local source written with backslashes, which tofu accepts, names the
+// same directory as one with slashes; the manifest keeps the source as
+// written and gives the directory with slashes (#58).
+func TestBuild_BackslashLocalSource(t *testing.T) {
+	tree := writeTree(t, map[string]string{
+		"app/main.tf":          `module "m" { source = "..\\shared" }`,
+		"shared/main.tf":       `module "inner" { source = ".\\inner\\" }`,
+		"shared/inner/main.tf": ``,
+	})
+	got, err := build(tree, "app", "//app", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Record{
+		{Key: "", Source: "", Dir: "."},
+		{Key: "m", Source: `..\shared`, Dir: "../shared"},
+		{Key: "m.inner", Source: `.\inner\`, Dir: "../shared/inner"},
+	}
+	if !reflect.DeepEqual(got.Modules, want) {
+		t.Errorf("got\n%+v\nwant\n%+v", got.Modules, want)
+	}
+}
+
+// A call that lands on the work tree root resolves to "", the root's
+// directory everywhere else, so a cycle through the root package is caught
+// on the first call back into it.
+func TestBuild_RootPackageCycle(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		files map[string]string
+		want  string
+	}{
+		{
+			name:  "self-call",
+			files: map[string]string{"main.tf": `module "m" { source = "./" }`},
+			want:  `module "m" (main.tf:1): source "./" is the directory of the root module`,
+		},
+		{
+			name: "call back up",
+			files: map[string]string{
+				"main.tf":   `module "a" { source = "./a" }`,
+				"a/main.tf": `module "up" { source = "../" }`,
+			},
+			want: `module "up" (a/main.tf:1): source "../" is the directory of the root module`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tree := writeTree(t, tc.files)
+			_, err := build(tree, "", "//:root", nil, nil)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("got %v, want an error containing %q", err, tc.want)
 			}
 		})
 	}

@@ -23,7 +23,9 @@
 // the walk continues into the called module.
 //
 // It fails when a call's source is provided by no dep, when a direct dep is
-// used by no call, and when two deps claim the same source.
+// used by no call, when two deps claim the same source, when a module_source
+// call lands in a directory with no configuration files, and when module
+// calls form a cycle.
 //
 // A direct dep counts as used only when the root's own configuration calls
 // it: the root module, or a local module in the root's own package. A
@@ -124,10 +126,6 @@ type Record struct {
 	Dir     string `json:"Dir"`
 }
 
-// The deepest module tree accepted, so a module that calls itself fails
-// rather than looping.
-const maxDepth = 64
-
 func build(workTree, root, label string, deps []dep, packages []string) (*Manifest, error) {
 	bySource := map[string]*dep{}
 	var all []*dep
@@ -149,12 +147,16 @@ func build(workTree, root, label string, deps []dep, packages []string) (*Manife
 		}
 	}
 	manifest := &Manifest{Modules: []Record{{Key: "", Source: "", Dir: "."}}}
+	// active is the directory of each module on the path from the root to the
+	// one being read, by its key. A call back into one of them is a cycle,
+	// reported at once: tofu rejects it too, and short of one a module tree
+	// is finite, so no depth limit is needed.
+	active := map[string]string{}
 	// own is whether dir is the root's own configuration (see the package doc).
-	var walk func(key, dir string, own bool, depth int) error
-	walk = func(key, dir string, own bool, depth int) error {
-		if depth > maxDepth {
-			return fmt.Errorf("%s: module %q is nested more than %d deep; does a module call itself?", label, key, maxDepth)
-		}
+	var walk func(key, dir string, own bool) error
+	walk = func(key, dir string, own bool) error {
+		active[dir] = key
+		defer delete(active, dir)
 		calls, err := tfconfig.ReadCalls(filepath.Join(workTree, filepath.FromSlash(dir)))
 		if err != nil {
 			return err
@@ -169,7 +171,7 @@ func build(workTree, root, label string, deps []dep, packages []string) (*Manife
 			var childDir string
 			childOwn := false
 			if tfconfig.IsLocal(c.Source) {
-				childDir = path.Join(dir, c.Source)
+				childDir = tfconfig.ResolveLocal(dir, c.Source)
 				if err := checkLocal(workTree, dir, childDir); err != nil {
 					return fmt.Errorf("%s: %s: source %q %w", label, where, c.Source, err)
 				}
@@ -191,8 +193,8 @@ func build(workTree, root, label string, deps []dep, packages []string) (*Manife
 					used[d.Label] = true
 				}
 				childDir = path.Join(d.Dir, subdir)
-				if subdir != "" && !isDir(workTree, childDir) {
-					return fmt.Errorf("%s: %s: %s (module_source %q) has no directory %q", label, where, d.Label, d.Source, subdir)
+				if err := checkProvided(workTree, childDir, subdir); err != nil {
+					return fmt.Errorf("%s: %s: %s (module_source %q) %w", label, where, d.Label, d.Source, err)
 				}
 				if tfconfig.IsRegistry(c.Source) {
 					if d.Version == "" {
@@ -201,19 +203,23 @@ func build(workTree, root, label string, deps []dep, packages []string) (*Manife
 					record.Version = d.Version
 				}
 			}
+			if above, ok := active[childDir]; ok {
+				return fmt.Errorf("%s: %s: source %q is the directory of %s, an ancestor of this call, so the module calls form a cycle",
+					label, where, c.Source, moduleName(above))
+			}
 			rel, err := filepath.Rel(filepath.FromSlash(rootDir(root)), filepath.FromSlash(rootDir(childDir)))
 			if err != nil {
 				return err
 			}
 			record.Dir = filepath.ToSlash(rel)
 			manifest.Modules = append(manifest.Modules, record)
-			if err := walk(childKey, childDir, childOwn, depth+1); err != nil {
+			if err := walk(childKey, childDir, childOwn); err != nil {
 				return err
 			}
 		}
 		return nil
 	}
-	if err := walk("", root, true, 0); err != nil {
+	if err := walk("", root, true); err != nil {
 		return nil, err
 	}
 
@@ -265,11 +271,39 @@ func isDir(workTree, dir string) bool {
 	return err == nil && info.IsDir()
 }
 
+// moduleName names a module by its manifest key, for error messages.
+func moduleName(key string) string {
+	if key == "" {
+		return "the root module"
+	}
+	return fmt.Sprintf("module %q", key)
+}
+
+// checkProvided checks the directory a module_source call lands in: dir, the
+// subdirectory subdir ("" for the dep's own) of the dep's directory. It must
+// hold configuration files, as tofu requires of a module it installs from a
+// remote source: a dep's data brings directories with none along (a
+// glob(["**"]) includes docs), and a dep with none in its own directory has
+// no directory in the work tree at all.
+func checkProvided(workTree, dir, subdir string) error {
+	if tfconfig.HasConfig(filepath.Join(workTree, filepath.FromSlash(dir))) {
+		return nil
+	}
+	if subdir == "" {
+		return errors.New("has no .tf, .tf.json, .tofu or .tofu.json files")
+	}
+	if !isDir(workTree, dir) {
+		return fmt.Errorf("has no directory %q", subdir)
+	}
+	return fmt.Errorf("has no .tf, .tf.json, .tofu or .tofu.json files in %q", subdir)
+}
+
 // checkLocal checks a local call's target: a directory of the work tree,
 // which is to say of some tf_library in deps, and in the same repository as
 // the caller. Files from other repositories are under `external/`, at a path
 // that depends on Bazel's canonical repository names, so they are reached by
-// module_source instead.
+// module_source instead. The directory may hold no configuration: tofu loads
+// a local module from an empty directory, unlike a remote one.
 func checkLocal(workTree, parent, child string) error {
 	if child == ".." || strings.HasPrefix(child, "../") {
 		return errors.New("is outside the work tree")

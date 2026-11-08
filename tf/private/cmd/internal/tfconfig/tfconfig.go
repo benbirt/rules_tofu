@@ -389,9 +389,6 @@ func ModuleDirs(repo, moduleDir string) ([]string, error) {
 	for len(pending) > 0 {
 		dir := pending[len(pending)-1]
 		pending = pending[:len(pending)-1]
-		if dir == "." {
-			dir = ""
-		}
 		if seen[dir] {
 			continue
 		}
@@ -405,7 +402,7 @@ func ModuleDirs(repo, moduleDir string) ([]string, error) {
 				continue
 			}
 			// A path out of the repository fails in tofu; it isn't ours to report.
-			if child := path.Join(dir, c.Source); child != ".." && !strings.HasPrefix(child, "../") {
+			if child := ResolveLocal(dir, c.Source); child != ".." && !strings.HasPrefix(child, "../") {
 				pending = append(pending, child)
 			}
 		}

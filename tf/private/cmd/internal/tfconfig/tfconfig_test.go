@@ -204,3 +204,53 @@ func TestReadRequiredProviders_TofuShadowsTf(t *testing.T) {
 		t.Errorf("got %+v, want %+v", got, want)
 	}
 }
+
+// ModuleDirs lists the module's directory, the configured directories under
+// its modules/, and what local calls reach, backslash paths included; a call
+// out of the repository is ignored, and examples count only when called.
+func TestModuleDirs(t *testing.T) {
+	repo := t.TempDir()
+	for name, content := range map[string]string{
+		"main.tf":                  `module "a" { source = ".\\lib\\a" }`,
+		"lib/a/main.tf":            `module "out" { source = "..\\..\\..\\outside" }`,
+		"modules/sub/main.tf":      `module "ex" { source = "../../examples/called" }`,
+		"modules/README.md":        ``,
+		"examples/called/main.tf":  ``,
+		"examples/ignored/main.tf": ``,
+	} {
+		p := filepath.Join(repo, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := ModuleDirs(repo, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"", "examples/called", "lib/a", "modules/sub"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+func TestResolveLocal(t *testing.T) {
+	for _, tc := range []struct{ dir, source, want string }{
+		{"app", "./x", "app/x"},
+		{"app", "../shared", "shared"},
+		{"app", "./", "app"},
+		{"", "./", ""},
+		{"a", "../", ""},
+		{"a", `..\`, ""},
+		{"", "../out", "../out"},
+		{"app", `..\sibling`, "sibling"},
+		{"", `..\outside`, "../outside"},
+		{"app", `.\x\y`, "app/x/y"},
+	} {
+		if got := ResolveLocal(tc.dir, tc.source); got != tc.want {
+			t.Errorf("ResolveLocal(%q, %q) = %q, want %q", tc.dir, tc.source, got, tc.want)
+		}
+	}
+}
