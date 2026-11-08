@@ -24,10 +24,13 @@ bazel test //...
 |------|---------|
 | `tf/` | Public rules (`tf_library`, `tf_deploy`) |
 | `tf/providers/` | `tf_providers` Bzlmod extension |
+| `tf/modules/` | `tf_modules` Bzlmod extension |
 | `tf/private/` | Internal rule implementations |
 | `tf/private/cmd/runner/` | Go binary: wraps `tofu` at runtime |
 | `tf/private/cmd/dupcheck/` | Go binary: duplicate-variable-key check |
+| `tf/private/cmd/{pin,lockjson,modscan,modules}/` | Go binaries behind `@tf_providers//:pin`, the lock reader, `tf_modules` and the modules manifest |
 | `toolchain/` | OpenTofu binary download + toolchain registration |
+| `docs/` | `starlark_doc_extract` per public `.bzl` file; shipped as the BCR entry's `docs_url` |
 | `tools/` | Maintainer tools (dev-only, not in the release tarball): `update_versions` pins an OpenTofu release |
 | `tests/integration/` | Bazel-in-Bazel negative integration tests |
 | `examples/` | End-to-end usage examples |
@@ -38,9 +41,9 @@ bazel test //...
 
 Before submitting a PR, make sure you have not violated these:
 
-1. **No `.terraform.lock.hcl` files** — provider pinning is handled exclusively via `MODULE.bazel` SHA256 maps. Never add, commit, or accept `.terraform.lock.hcl` in any rule's `srcs` or `data`.
+1. **One lock, the root module's** — the only `.terraform.lock.hcl` rules_tofu reads is the one `tf_providers.from_lock` names in the root module, written by `bazel run @tf_providers//:pin`. Never accept a `.terraform.lock.hcl` in any rule's `srcs` or `data`, and never relax the check in `init_action.bzl` that fails when one reaches a work tree. Every provider download is gated on a digest: the `sha256` on its `tf_providers.provider(...)` tag, the registry's digest recorded as a fact in `MODULE.bazel.lock`, or one of the lock's `zh:` hashes for a locked provider.
 2. **Build = validation** — `bazel build` on any `tf_library` or `tf_deploy` target must run `tofu init -backend=false && tofu validate`. Do not bypass or defer this.
-3. **Private API** — nothing under `tf/private/` is a supported public API. External users load only from `@rules_tofu//tf:defs.bzl` and `@rules_tofu//tf/providers:extensions.bzl`.
+3. **Private API** — nothing under `tf/private/` is a supported public API. External users load only from `@rules_tofu//tf:defs.bzl`, `@rules_tofu//tf/providers:extensions.bzl`, `@rules_tofu//tf/modules:extensions.bzl`, `@rules_tofu//toolchain:extensions.bzl` and `@rules_tofu//toolchain:toolchain.bzl`. Each has a `starlark_doc_extract` target in `docs/`; a new public `.bzl` entry point needs one too.
 4. **`bazel run` only** — `tf_deploy`'s `.plan`/`.apply`/`.destroy` targets require `BUILD_WORKSPACE_DIRECTORY` to be set; they must be invoked via `bazel run`, never executed directly.
 
 ## Running the tests
