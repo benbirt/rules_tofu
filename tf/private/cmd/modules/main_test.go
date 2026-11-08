@@ -425,3 +425,36 @@ func TestBuild_BackslashLocalSource(t *testing.T) {
 		t.Errorf("got\n%+v\nwant\n%+v", got.Modules, want)
 	}
 }
+
+// A call that lands on the work tree root resolves to "", the root's
+// directory everywhere else, so a cycle through the root package is caught
+// on the first call back into it.
+func TestBuild_RootPackageCycle(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		files map[string]string
+		want  string
+	}{
+		{
+			name:  "self-call",
+			files: map[string]string{"main.tf": `module "m" { source = "./" }`},
+			want:  `module "m" (main.tf:1): source "./" is the directory of the root module`,
+		},
+		{
+			name: "call back up",
+			files: map[string]string{
+				"main.tf":   `module "a" { source = "./a" }`,
+				"a/main.tf": `module "up" { source = "../" }`,
+			},
+			want: `module "up" (a/main.tf:1): source "../" is the directory of the root module`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tree := writeTree(t, tc.files)
+			_, err := build(tree, "", "//:root", nil, nil)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("got %v, want an error containing %q", err, tc.want)
+			}
+		})
+	}
+}

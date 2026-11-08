@@ -389,9 +389,6 @@ func ModuleDirs(repo, moduleDir string) ([]string, error) {
 	for len(pending) > 0 {
 		dir := pending[len(pending)-1]
 		pending = pending[:len(pending)-1]
-		if dir == "." {
-			dir = ""
-		}
 		if seen[dir] {
 			continue
 		}
