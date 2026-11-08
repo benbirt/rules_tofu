@@ -163,7 +163,7 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   `@tf_providers//:__subpackages__` (the hub's aliases). BUILD files name
   every provider as `@tf_providers//<ns>/<name>`; don't document or reintroduce
   the per-provider labels (removing them was a breaking change).
-  `bazel mod tidy` must leave `MODULE.bazel` unchanged.
+  `bazel mod tidy` must leave `MODULE.bazel` unchanged; CI's lint job checks it.
 - The tofu extension resolves `tofu.version` as "root arbitrates": >1
   root tag fails, one root tag wins unconditionally, agreeing non-root
   requests are honoured, disagreeing non-root requests fail naming the

@@ -153,10 +153,10 @@ http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_
 [
     http_file(
         name = "cosign_" + platform,
+        dev_dependency = True,
         executable = True,
         sha256 = sha256,
         urls = ["https://github.com/sigstore/cosign/releases/download/v3.1.4/cosign-" + platform.replace("_", "-")],
-        dev_dependency = True,
     )
     for platform, sha256 in [
         ("linux_amd64", "424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa"),
