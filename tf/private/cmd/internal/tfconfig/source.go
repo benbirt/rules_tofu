@@ -61,6 +61,13 @@ func IsLocal(source string) bool {
 		strings.HasPrefix(source, `.\`) || strings.HasPrefix(source, `..\`)
 }
 
+// ResolveLocal is the directory a local source refers to from dir, cleaned,
+// relative to whatever dir is relative to. A `\` separates segments too,
+// since OpenTofu reads `.\` and `..\` sources, so the result has `/` only.
+func ResolveLocal(dir, source string) string {
+	return path.Join(dir, strings.ReplaceAll(source, `\`, "/"))
+}
+
 // ParseSource reads a module source address. It fails on addresses OpenTofu
 // would reject, and on remote forms rules_tofu can't fetch.
 func ParseSource(raw string) (Source, error) {
