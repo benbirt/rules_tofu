@@ -12,9 +12,9 @@ compiles the Go tools they need with rules_go's host Go SDK, as Gazelle's
 - `modscan` (//tf/private/cmd/modscan) lists a module's required providers
   and module calls.
 
-Their Go module dependencies (`hashicorp/hcl` and those it needs) are
-downloaded through the Go module proxy (`GOPROXY` is honoured) and checked
-against rules_tofu's `go.sum`.
+Their Go module dependencies (`hashicorp/hcl`, OpenTofu's `registry-address`
+and those they need) are downloaded through the Go module proxy (`GOPROXY`
+is honoured) and checked against rules_tofu's `go.sum`.
 
 The repository is fetched the first time a tool is needed, and kept until
 rules_tofu's sources or the Go SDK change.

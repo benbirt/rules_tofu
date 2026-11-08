@@ -90,3 +90,54 @@ func TestConvert_SyntaxErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestConvert_AddressParts(t *testing.T) {
+	got := decode(t, `
+provider "registry.opentofu.org/hashicorp/null" {
+  version = "3.2.4"
+}
+provider "registry.terraform.io/posthog/posthog" {
+  version = "1.0.24"
+}
+`)
+	want := []map[string]any{
+		{"address": "registry.opentofu.org/hashicorp/null", "host": "registry.opentofu.org", "namespace": "hashicorp", "name": "null"},
+		{"address": "registry.terraform.io/posthog/posthog", "host": "registry.terraform.io", "namespace": "posthog", "name": "posthog"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d providers, want %d: %v", len(got), len(want), got)
+	}
+	for i, w := range want {
+		for key, value := range w {
+			if got[i][key] != value {
+				t.Errorf("provider %d: %s = %q, want %q", i, key, got[i][key], value)
+			}
+		}
+	}
+}
+
+// Addresses tofu's own lock reader refuses are refused here, with its
+// messages, pointing at the block.
+func TestConvert_InvalidAddresses(t *testing.T) {
+	for address, fragment := range map[string]string{
+		"":                                     `fully-qualified address of the form "hostname/namespace/type"`,
+		"null":                                 `fully-qualified address of the form "hostname/namespace/type"`,
+		"hashicorp/null":                       `must be written as "registry.opentofu.org/hashicorp/null"`,
+		"registry.opentofu.org/HashiCorp/Null": `must be written as "registry.opentofu.org/hashicorp/null"`,
+		"Registry.OpenTofu.org/hashicorp/null": `must be written as "registry.opentofu.org/hashicorp/null"`,
+		"registry.opentofu.org/hashicorp/null/extra":              `fully-qualified address of the form "hostname/namespace/type"`,
+		"registry.opentofu.org//null":                             `fully-qualified address of the form "hostname/namespace/type"`,
+		"registry.opentofu.org/hashicorp/terraform-provider-null": `fully-qualified address of the form "hostname/namespace/type"`,
+		"registry.opentofu.org/hashicorp/not valid":               `fully-qualified address of the form "hostname/namespace/type"`,
+		"registry.opentofu.org/-/null":                            "not eligible for dependency locking",
+		"terraform.io/builtin/terraform":                          "Cannot lock a version for built-in provider terraform.io/builtin/terraform",
+		"opentofu.org/builtin/terraform":                          "Cannot lock a version for built-in provider opentofu.org/builtin/terraform",
+	} {
+		src := "# comment\nprovider \"registry.opentofu.org/a/b\" {}\nprovider \"" + address + "\" {\n  version = \"1\"\n}\n"
+		var out strings.Builder
+		err := convert([]byte(src), "test.hcl", &out)
+		if err == nil || !strings.Contains(err.Error(), fragment) || !strings.Contains(err.Error(), "test.hcl:3,") {
+			t.Errorf("convert(provider %q) error = %v, want one at test.hcl:3 containing %q", address, err, fragment)
+		}
+	}
+}

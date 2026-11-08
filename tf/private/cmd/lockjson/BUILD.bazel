@@ -12,6 +12,7 @@ go_library(
         "@com_github_hashicorp_hcl_v2//:hcl",
         "@com_github_hashicorp_hcl_v2//gohcl",
         "@com_github_hashicorp_hcl_v2//hclparse",
+        "@com_github_opentofu_registry_address_v2//:registry-address",
     ],
 )
 

@@ -1,9 +1,11 @@
 """What `tf_providers.from_lock` accepts from a `.terraform.lock.hcl`.
 
 The file itself is parsed by `lockjson` (//tf/private/cmd/lockjson, built by
-`//tf/private:host_tools.bzl`) with the standard HCL library. These pure functions decide
-what rules_tofu makes of its entries, so //tf/providers/tests can exercise
-them without a module graph. Errors are returned, not raised: the extension
+`//tf/private:host_tools.bzl`) with the standard HCL library, and each
+entry's address is checked and split there with OpenTofu's registry-address
+library, the way tofu reads a lock. These pure functions decide what
+rules_tofu makes of the entries, so //tf/providers/tests can exercise them
+without a module graph. Errors are returned, not raised: the extension
 decides which ones abort evaluation and which become a repository that fails
 only when fetched (so `@tf_providers//:pin` still runs and can rewrite the
 lock).
@@ -20,26 +22,26 @@ def lock_entries(providers):
     with `error` set, so the extension can name it and point at `pin`.
 
     Args:
-        providers: A list of `{"address", "version", "hashes"}` dicts.
+        providers: A list of `{"address", "host", "namespace", "name",
+            "version", "hashes"}` dicts. `lockjson` has already checked
+            that each address is a full, canonical
+            `<host>/<namespace>/<name>`, so the parts are in their
+            normalised (lower-case) form.
 
     Returns:
         `struct(entries, error)`. `error` is set if the lock can't be used at
         all. Each entry is `struct(source, namespace, name, version, zh,
-        error)`: `source` is the lower-cased `<namespace>/<name>`, `zh` the
-        lock's `zh:` hashes (the SHA256s of the provider zips), and `error`
-        None if the entry is usable.
+        error)`: `source` is `<namespace>/<name>`, `zh` the lock's `zh:`
+        hashes (the SHA256s of the provider zips), and `error` None if the
+        entry is usable.
     """
     entries = []
     seen = {}
     for provider in providers:
-        address = provider.get("address", "")
-        parts = address.lower().split("/")
-        if len(parts) != 3 or not parts[0] or not parts[1] or not parts[2]:
-            return struct(
-                entries = None,
-                error = "provider address {} is not `<host>/<namespace>/<name>`".format(repr(address)),
-            )
-        host, namespace, name = parts
+        address = provider["address"]
+        host = provider["host"]
+        namespace = provider["namespace"]
+        name = provider["name"]
         source = "{}/{}".format(namespace, name)
         if source in seen:
             return struct(entries = None, error = "{} is locked more than once".format(repr(address)))
