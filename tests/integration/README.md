@@ -7,8 +7,9 @@ Bazel-in-Bazel tests that assert misuses of `tf_library` /
 
 ```
 tests/integration/
-├── BUILD.bazel              bazel_integration_test target per case
-├── assert_bazel_fails.sh    runs the nested bazel (build or run) and
+├── BUILD.bazel              one bazel_integration_test for broken_workspace's
+│                            cases, one per case with its own sub-workspace
+├── assert_bazel_fails.sh    runs each case's nested bazel (build or run) and
 │                            asserts non-zero exit + stderr fragment
 ├── broken_workspace/        sub-workspace for the nested bazel
 │   ├── MODULE.bazel
@@ -65,6 +66,14 @@ case whose failure lives in the module graph cannot go there — it gets a
 sub-workspace of its own. `BUILD.bazel` names the workspace per case row
 and globs each workspace's files once.
 
+All of `broken_workspace`'s cases run as one test, `broken_workspace_test`,
+against a single nested Bazel: starting a server and fetching and analysing
+rules_tofu's dependencies costs far more than any case, so after the first
+they are incremental builds of a few seconds. The driver runs every case
+even after a failure, prints the nested log of each case that fails, and
+names them all at the end. A case with its own sub-workspace is its own
+test.
+
 The child workspace packages are excluded from the parent Bazel via
 the `--deleted_packages` flag in `.bazelrc` (the "deleted packages"
 trick recommended by `rules_bazel_integration_test`), so the outer
@@ -78,14 +87,16 @@ command the driver runs:
 
 - `_CASES` — build-mode cases. The failure comes from loading,
   analysis, or one of the actions the rules emit, so `bazel build` on
-  the case target is enough to surface it. This is the driver's
-  default, so these rows set no `BAZEL_COMMAND`.
-- `_RUN_CASES` — run-mode cases, with `BAZEL_COMMAND: "run"` in `env`.
-  The case target builds cleanly and the refusal comes from the
-  launcher process a `tf_deploy` generates. These are the only tests
-  that exercise the path from a BUILD attribute through the generated
-  launcher to a runner flag; the runner's own Go unit tests pass flags
-  directly and cannot see that plumbing.
+  the case target is enough to surface it.
+- `_RUN_CASES` — run-mode cases, driven with `bazel run`. The case
+  target builds cleanly and the refusal comes from the launcher process
+  a `tf_deploy` generates. These are the only tests that exercise the
+  path from a BUILD attribute through the generated launcher to a runner
+  flag; the runner's own Go unit tests pass flags directly and cannot
+  see that plumbing.
+
+Each row becomes a `name|command|target|fragment` line of the driver's
+`CASES` environment variable.
 
 ## Running
 
@@ -97,6 +108,13 @@ Each test spawns a nested Bazel that materializes the case's work tree
 and runs `tofu init/validate` (or the dupcheck action), or — for a
 run-mode case — launches the deploy's runner; the driver checks the
 failure mode.
+
+To run a selection of `broken_workspace`'s cases, name them:
+
+```sh
+bazel test //tests/integration:broken_workspace_test \
+    --test_env=ONLY_CASES=stale_lock,missing_provider --test_output=all
+```
 
 ## Adding a case
 
@@ -115,8 +133,9 @@ failure mode.
 2. Add a row to `tests/integration/BUILD.bazel`:
    `("<case>", "<workspace>", "//cases/<case>:<target>", "<stderr-fragment>")`.
    Put it in `_CASES` if `bazel build` on the target fails, or in
-   `_RUN_CASES` if the target builds and only `bazel run` fails — the
-   latter comprehension passes `BAZEL_COMMAND=run` to the driver.
+   `_RUN_CASES` if the target builds and only `bazel run` fails. A
+   `broken_workspace` row joins `broken_workspace_test`; a row for
+   another workspace becomes a `<case>_test` of its own.
 3. Execute `bazel run @rules_bazel_integration_test//tools:update_deleted_packages`
    to add the new package to `--deleted_packages` in the root `.bazelrc`.
 

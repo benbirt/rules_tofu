@@ -1,19 +1,22 @@
 #!/usr/bin/env bash
-# Driver for //tests/integration:*_test targets. The bazel_integration_test
-# rule sets:
-#   BIT_BAZEL_BINARY   — path to the nested Bazel binary
-#   TARGET             — target to build or run inside the sub-workspace
-#   EXPECTED_PATTERN   — substring expected in the failing command's stderr
-#   BAZEL_COMMAND      — nested Bazel command to invoke; "build" when unset
-# We invoke the nested Bazel and assert: non-zero exit AND stderr contains
-# the expected fragment. Anything else is a test failure.
+# Driver for the negative //tests/integration:*_test targets. The
+# bazel_integration_test rule sets BIT_BAZEL_BINARY and BIT_WORKSPACE_DIR; the
+# test's env sets:
+#   CASES        — one case per line, `name|command|target|fragment`: the
+#                  nested Bazel command (build or run), the target inside the
+#                  sub-workspace, and a substring expected in its stderr
+#   ONLY_CASES   — optional, comma-separated names: run only these cases
+#                  (e.g. `--test_env=ONLY_CASES=stale_lock` from the outer Bazel)
+# Every case must fail with its fragment in the output; anything else fails
+# the test. A workspace's cases all run against one nested Bazel, so after the
+# first they are incremental builds; every case runs even after a failure, and
+# the summary at the end names the ones that failed.
 
 set -uo pipefail
 
 # Use TEST_TMPDIR for our temp files; this is the per-test scratch area
 # provided by the outer Bazel.
 _TMPDIR="${TEST_TMPDIR:-/tmp}"
-LOG="${_TMPDIR}/build.log"
 
 # Bazel sees TEST_TMPDIR and puts the nested Bazel's output user root under
 # it, so every test would extract an install base and fetch each repository
@@ -34,10 +37,6 @@ else
 fi
 export BAZELISK_HOME
 
-# Build-time failures are the common case, so `build` is the default; cases
-# that assert a runtime launcher failure set BAZEL_COMMAND=run.
-_BAZEL_COMMAND="${BAZEL_COMMAND:-build}"
-
 # Force the nested Bazel to use its own output base inside the test's temp
 # directory.  Without this, it inherits the global --output_base from
 # ~/.bazelrc (set by setup-bazel), which points to the SAME output base the
@@ -48,54 +47,78 @@ _BAZEL_COMMAND="${BAZEL_COMMAND:-build}"
 # See: https://github.com/bazel-contrib/setup-bazel/issues/108
 NESTED_OUTPUT_BASE="${_TMPDIR}/nested_output_base"
 
-# Ensure partial log is always visible, even when the test is killed by timeout.
+# --output_user_root and --output_base are STARTUP options (before the
+# command), so they override anything set in ~/.bazelrc.
+bazel() {
+  "${BIT_BAZEL_BINARY}" --output_user_root="${NESTED_USER_ROOT}" --output_base="${NESTED_OUTPUT_BASE}" "$@"
+}
+
+# The log of the case in progress, dumped if the test is killed by timeout.
+LOG=""
 dump_log() {
-  if [ -s "${LOG}" ]; then
-    echo "--- nested bazel log (${LOG}) ---" >&2
+  if [[ -n "${LOG}" && -s "${LOG}" ]]; then
+    echo "--- nested bazel log of the case in progress (${LOG}) ---" >&2
     cat "${LOG}" >&2
     echo "--- end nested bazel log ---" >&2
-  else
-    echo "--- nested bazel log is empty or missing ---" >&2
   fi
 }
 trap dump_log EXIT
 
 # Diagnostics — these go to stderr so they appear in test output even on timeout.
 echo "=== assert_bazel_fails ===" >&2
-echo "  BAZEL_COMMAND:      ${_BAZEL_COMMAND}" >&2
-echo "  TARGET:             ${TARGET}" >&2
-echo "  EXPECTED_PATTERN:   ${EXPECTED_PATTERN}" >&2
 echo "  BIT_BAZEL_BINARY:   ${BIT_BAZEL_BINARY}" >&2
 echo "  BIT_WORKSPACE_DIR:  ${BIT_WORKSPACE_DIR}" >&2
 echo "  TEST_TMPDIR:        ${_TMPDIR}" >&2
 echo "  NESTED_OUTPUT_BASE: ${NESTED_OUTPUT_BASE}" >&2
-echo "  PWD:                $(pwd)" >&2
+echo "  ONLY_CASES:         ${ONLY_CASES:-}" >&2
 echo "  date:               $(date -u)" >&2
 
 cd "${BIT_WORKSPACE_DIR}"
 
-echo "  workspace dir:    $(pwd)" >&2
-echo "--- starting nested bazel ${_BAZEL_COMMAND} at $(date -u) ---" >&2
+only=",${ONLY_CASES:-},"
+passed=()
+failed=()
+ran=0
+while IFS='|' read -r name command target pattern; do
+  [[ -n "${name}" ]] || continue
+  if [[ "${only}" != ",," && "${only}" != *",${name},"* ]]; then
+    continue
+  fi
+  ran=$((ran + 1))
+  LOG="${_TMPDIR}/${name}.log"
+  echo "--- ${name}: bazel ${command} ${target}, expecting '${pattern}' ---" >&2
+  start=${SECONDS}
+  bazel "${command}" "${target}" >"${LOG}" 2>&1
+  rc=$?
+  elapsed=$((SECONDS - start))
+  if [[ ${rc} -eq 0 ]]; then
+    verdict="FAIL: ${name}: ${command} of ${target} succeeded; expected failure"
+  elif ! grep -q -F -- "${pattern}" "${LOG}"; then
+    verdict="FAIL: ${name}: ${target} failed (exit ${rc}) but stderr did not contain '${pattern}'"
+  else
+    verdict=""
+  fi
+  if [[ -n "${verdict}" ]]; then
+    echo "${verdict}" >&2
+    dump_log
+    failed+=("${name}")
+  else
+    echo "OK: ${name} failed with '${pattern}' (exit ${rc}, ${elapsed}s)" >&2
+    passed+=("${name}")
+  fi
+  LOG=""
+done <<<"${CASES}"
 
-# Use tee so nested Bazel output streams to stderr in real time (visible in
-# test logs) while also being captured in $LOG for the grep assertion below.
-#
-# --output_base is a STARTUP option (before the command) so it overrides any
-# --output_base set in ~/.bazelrc.
-"${BIT_BAZEL_BINARY}" --output_user_root="${NESTED_USER_ROOT}" --output_base="${NESTED_OUTPUT_BASE}" "${_BAZEL_COMMAND}" "${TARGET}" 2>&1 | tee "${LOG}" >&2
-rc=${PIPESTATUS[0]}
+# The nested server would otherwise live until the test's process group is
+# killed.
+bazel shutdown >/dev/null 2>&1 || true
 
-echo "--- nested bazel ${_BAZEL_COMMAND} finished at $(date -u), exit code: ${rc} ---" >&2
-
-if [[ ${rc} -eq 0 ]]; then
-  echo "FAIL: ${_BAZEL_COMMAND} of ${TARGET} succeeded; expected failure" >&2
+echo "=== ${ran} cases: ${#passed[@]} passed, ${#failed[@]} failed ===" >&2
+if [[ ${ran} -eq 0 ]]; then
+  echo "FAIL: no case matched ONLY_CASES='${ONLY_CASES:-}'" >&2
   exit 1
 fi
-
-if ! grep -q -F -- "${EXPECTED_PATTERN}" "${LOG}"; then
-  echo "FAIL: ${TARGET} failed but stderr did not contain '${EXPECTED_PATTERN}'" >&2
-  cat "${LOG}" >&2
+if [[ ${#failed[@]} -gt 0 ]]; then
+  echo "FAIL: ${failed[*]}" >&2
   exit 1
 fi
-
-echo "OK: ${TARGET} failed with expected fragment '${EXPECTED_PATTERN}'" >&2
