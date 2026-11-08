@@ -181,7 +181,7 @@ def _cached(module_ctx, key):
     fact = module_ctx.facts.get(key)
     return dict(fact) if valid_fact(fact) else None
 
-def _tidy(repository_ctx):
+def _tidy(repository_ctx, context):
     """Remove what the fetched files hold that Bazel must not see.
 
     Bazel's own files would split the module into packages of its own. A
@@ -190,9 +190,13 @@ def _tidy(repository_ctx):
     one to a directory and fails the package when the links lead back up to
     an ancestor; and through a symlink out of the module, the module's files
     would depend on the machine's.
+
+    The module's own directory can't be a symlink then: `//<subdir>` is
+    where its library is written, so that fails, naming where the link leads.
     """
     root = repository_ctx.path(".")
     root_real = str(root.realpath)
+    subdir = repository_ctx.attr.subdir
     entries = walk(root)
     for entry in entries:
         if not entry.is_dir and entry.path.basename in _BAZEL_FILES:
@@ -203,6 +207,14 @@ def _tidy(repository_ctx):
     symlinks = [entry for entry in entries if entry.is_symlink and entry.path.basename not in _BAZEL_FILES]
     for entry in symlinks:
         if entry.path.exists and entry.path.is_dir:
+            if subdir == entry.rel or subdir.startswith(entry.rel + "/"):
+                target = str(entry.path.realpath)
+                fail(("{}: `{}` is a symlink in the fetched files, to {}; rules_tofu keeps no symlinks to " +
+                      "directories, so declare and call the module by the directory the link leads to").format(
+                    context,
+                    entry.rel,
+                    target[len(root_real) + 1:] if within(target, root_real) and target != root_real else target,
+                ))
             repository_ctx.delete(entry.path)
     for entry in symlinks:
         if not entry.path.exists or not within(str(entry.path.realpath), root_real):
@@ -228,7 +240,7 @@ def _fetch(repository_ctx):
         repository_ctx.delete(".git")
     else:
         repository_ctx.download_and_extract(url = attr.url, sha256 = attr.sha256, type = attr.archive_type)
-    _tidy(repository_ctx)
+    _tidy(repository_ctx, context)
 
 def _scan(repository_ctx):
     args = [repository_ctx.path(_MODSCAN)]
