@@ -10,7 +10,16 @@ _ZH_A = "3d106c7e32a929e2843f732625a582e562ff09120021e510a51a6f5d01175b8d"
 _ZH_B = "1769783386610bed8bb1e861a119fe25058be41895e3996d9216dd6bb8a7aee3"
 
 def _provider(address, version = "3.2.4", hashes = None):
-    return {"address": address, "version": version, "hashes": hashes if hashes != None else ["zh:" + _ZH_A]}
+    """An entry as `lockjson` emits it: the address already checked and split."""
+    host, namespace, name = address.split("/")
+    return {
+        "address": address,
+        "host": host,
+        "namespace": namespace,
+        "name": name,
+        "version": version,
+        "hashes": hashes if hashes != None else ["zh:" + _ZH_A],
+    }
 
 def _entries_test_impl(ctx):
     env = unittest.begin(ctx)
@@ -20,7 +29,7 @@ def _entries_test_impl(ctx):
             "registry.opentofu.org/hashicorp/null",
             hashes = ["h1:346niW/SBt/jtCZctHefjkQGqtX9YgxSkCAKeCzQhXw=", "zh:" + _ZH_A, "zh:" + _ZH_B],
         ),
-        _provider("registry.opentofu.org/PostHog/PostHog", version = "1.0.24"),
+        _provider("registry.opentofu.org/posthog/posthog", version = "1.0.24"),
     ])
 
     asserts.equals(env, None, parsed.error)
@@ -50,11 +59,14 @@ _empty_lock_test = unittest.make(_empty_lock_test_impl)
 def _unusable_lock_test_impl(ctx):
     env = unittest.begin(ctx)
 
+    # Malformed addresses never get this far: `lockjson` refuses them, as
+    # tofu does (//tf/private/cmd/lockjson tests that).
     cases = [
-        ([_provider("a/b")], "is not `<host>/<namespace>/<name>`"),
         ([_provider("registry.opentofu.org/a/b", version = "")], "has no `version`"),
         (
-            [_provider("registry.opentofu.org/a/b"), _provider("registry.opentofu.org/A/B", version = "2")],
+            # The same provider from two registries is one provider to
+            # rules_tofu, which names providers by `<namespace>/<name>`.
+            [_provider("registry.opentofu.org/a/b"), _provider("registry.terraform.io/a/b", version = "2")],
             "locked more than once",
         ),
     ]

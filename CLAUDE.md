@@ -119,8 +119,11 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   `@tf_providers//:pin`, the way to fix it. Only an unparseable file fails
   the extension.
 - The lock is parsed by `lockjson` (`tf/private/cmd/lockjson`, `gohcl`),
-  not in Starlark; don't reintroduce a hand-written parser. What an entry
-  must contain is `lock_entries` in `tf/providers/lock.bzl`, unit-tested in
+  not in Starlark; don't reintroduce a hand-written parser. `lockjson` also
+  checks and splits each entry's address with OpenTofu's registry-address
+  library, as tofu's own lock reader does (full, lockable, canonical form);
+  don't re-implement address rules in Starlark. What else an entry must
+  contain is `lock_entries` in `tf/providers/lock.bzl`, unit-tested in
   Starlark. An extension can't run Bazel-built tools, so
   `tf/private/host_tools.bzl` compiles `lockjson` and `modscan` with the
   host Go SDK into `@rules_tofu_host_tools` (a non-dev `use_repo_rule`),
