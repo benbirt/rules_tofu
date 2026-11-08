@@ -8,9 +8,11 @@
 // Inputs:
 //   - --work-tree=<path>: the work tree root.
 //   - --root=<dir>: the root module's work-tree-relative directory.
-//   - --modules=<path>: a JSON list of the tf_library deps that set
-//     `module_source`, each {label, source, version, dir, direct}, where `dir`
-//     is the library's work-tree-relative directory.
+//   - --modules=<path>: a JSON object {modules, packages}. `modules` lists
+//     the tf_library deps that set `module_source`, each {label, source,
+//     version, dir, direct}, where `dir` is the library's work-tree-relative
+//     directory; `packages` is the work-tree-relative directory of every
+//     tf_library package in deps, transitively.
 //   - --label=<label>: the target being built, for error messages.
 //   - --out=<path>: the manifest to write.
 //
@@ -24,11 +26,13 @@
 // used by no call, and when two deps claim the same source.
 //
 // A direct dep counts as used only when the root's own configuration calls
-// it: the root module, or a local module it reaches by relative paths without
-// entering a dep's directory. A call from inside another library is that
-// library's business, so it does not use the root's direct deps. A local call
-// into a dep's directory uses that dep, and a dep in the root's own package
-// is used, since its files are part of the root module.
+// it: the root module, or a local module in the root's own package. A
+// directory belongs to the package nearest above it, as in Bazel, so a local
+// call into another library's package leaves the root's configuration; calls
+// from there are that library's business and use none of the root's direct
+// deps. A local call into a package uses the deps with module_source there,
+// and the deps in the root's own package are used, since their files are part
+// of the root module.
 package main
 
 import (
@@ -77,11 +81,14 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	var deps []dep
-	if err := json.Unmarshal(data, &deps); err != nil {
+	var listing struct {
+		Modules  []dep    `json:"modules"`
+		Packages []string `json:"packages"`
+	}
+	if err := json.Unmarshal(data, &listing); err != nil {
 		return fmt.Errorf("parse %s: %w", *modules, err)
 	}
-	manifest, err := build(*workTree, *root, *label, deps)
+	manifest, err := build(*workTree, *root, *label, listing.Modules, listing.Packages)
 	if err != nil {
 		return err
 	}
@@ -121,7 +128,7 @@ type Record struct {
 // rather than looping.
 const maxDepth = 64
 
-func build(workTree, root, label string, deps []dep) (*Manifest, error) {
+func build(workTree, root, label string, deps []dep, packages []string) (*Manifest, error) {
 	bySource := map[string]*dep{}
 	var all []*dep
 	for i := range deps {
@@ -166,12 +173,14 @@ func build(workTree, root, label string, deps []dep) (*Manifest, error) {
 				if err := checkLocal(workTree, dir, childDir); err != nil {
 					return fmt.Errorf("%s: %s: source %q %w", label, where, c.Source, err)
 				}
-				if d := containing(all, root, childDir); d != nil {
-					if own {
-						used[d.Label] = true
-					}
-				} else {
+				if pkg := packageOf(packages, root, childDir); pkg == root {
 					childOwn = own
+				} else if own {
+					for _, d := range all {
+						if d.Dir == pkg {
+							used[d.Label] = true
+						}
+					}
 				}
 			} else {
 				d, subdir := lookup(all, c.Source)
@@ -224,17 +233,14 @@ func build(workTree, root, label string, deps []dep) (*Manifest, error) {
 	return manifest, nil
 }
 
-// containing is the dep whose directory is dir or contains it, the deepest
-// if several do. Deps whose directory is the root's, or contains it, are
-// skipped: dir is not outside the root's configuration by being in them.
-func containing(deps []*dep, root, dir string) *dep {
-	var best *dep
-	for _, d := range deps {
-		if within(root, d.Dir) || !within(dir, d.Dir) {
-			continue
-		}
-		if best == nil || len(d.Dir) > len(best.Dir) {
-			best = d
+// packageOf is the package dir belongs to: the nearest of packages, or
+// root, at or above it, as Bazel gives a directory to the nearest package
+// above it.
+func packageOf(packages []string, root, dir string) string {
+	best, found := "", false
+	for _, p := range append([]string{root}, packages...) {
+		if within(dir, p) && (!found || len(p) > len(best)) {
+			best, found = p, true
 		}
 	}
 	return best

@@ -45,6 +45,8 @@ TfLibraryInfo = provider(
         "providers": "depset[TfProviderInfo]: providers contributed by this library and its transitive deps.",
         "module": "struct(label, source, version, dir) or None: this library's `module_source`, if it sets one.",
         "modules": "depset[struct(label, source, version, dir)]: `module` of this library and its transitive deps.",
+        "packages": "depset[string]: the work-tree directory of the package of this library and of its " +
+                    "transitive deps, so a directory can be traced to the library that owns it.",
     },
 )
 

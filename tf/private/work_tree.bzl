@@ -268,16 +268,20 @@ def modules_manifest(ctx, work_tree_outputs, deps):
     listing = ctx.actions.declare_file(ctx.label.name + ".modules_deps.json")
     ctx.actions.write(
         output = listing,
-        content = json.encode([
-            struct(
-                label = m.label,
-                source = m.source,
-                version = m.version,
-                dir = m.dir,
-                direct = m.label in direct,
-            )
-            for m in modules
-        ]),
+        content = json.encode(struct(
+            modules = [
+                struct(
+                    label = m.label,
+                    source = m.source,
+                    version = m.version,
+                    dir = m.dir,
+                    direct = m.label in direct,
+                )
+                for m in modules
+            ],
+            # Which library a directory belongs to, for the unused-dep check.
+            packages = depset(transitive = [d[TfLibraryInfo].packages for d in deps]).to_list(),
+        )),
     )
 
     manifest = ctx.actions.declare_file(ctx.label.name + ".modules.json")
