@@ -157,7 +157,7 @@ def tf_library(name, srcs = None, deps = None, data = None, providers = None, mo
       - `:<name>`     — the library target. Building it runs
                         `tofu init -backend=false && tofu validate` against
                         the library's transitive files.
-      - `:<name>.fmt` — `bazel run` to reformat .tf files in-place.
+      - `:<name>.fmt` — `bazel run` to reformat .tf and .tofu files in-place.
 
     When `fmt_test=True` (the default) and `srcs` is non-empty:
       - `:<name>.fmt_check`  — `bazel test` that fails if files are not formatted.
