@@ -31,6 +31,7 @@ import (
 	"strings"
 
 	"github.com/benbirt/rules_tofu/tf/private/cmd/internal/flags"
+	"github.com/benbirt/rules_tofu/tf/private/cmd/internal/tfconfig"
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclparse"
 )
@@ -283,8 +284,9 @@ func runTofu(env []string, cwd string, args ...string) error {
 
 // terraformBlockSchema matches top-level `terraform {}` blocks; backendBlockSchema
 // matches the `backend "type" {}` and `cloud {}` blocks nested within one. Both
-// are used with schema-based PartialContent, which decodes native (.tf) and JSON
-// (.tf.json) syntax uniformly and ignores every other construct.
+// are used with schema-based PartialContent, which decodes native (.tf, .tofu)
+// and JSON (.tf.json, .tofu.json) syntax uniformly and ignores every other
+// construct.
 var (
 	terraformBlockSchema = &hcl.BodySchema{
 		Blocks: []hcl.BlockHeaderSchema{{Type: "terraform"}},
@@ -297,9 +299,10 @@ var (
 	}
 )
 
-// hasBackend reports whether any .tf or .tf.json file in the deploy's package
-// directory declares a `backend "..." {}` or `cloud {}` block nested inside a
-// top-level `terraform {}` block. Either construct means the workspace uses a
+// hasBackend reports whether any configuration file tofu reads in the deploy's
+// package directory (tfconfig.ConfigFiles: a `.tofu` file shadows the `.tf`
+// file of the same name) declares a `backend "..." {}` or `cloud {}` block
+// nested inside a top-level `terraform {}` block. Either construct means the workspace uses a
 // remote/cloud state backend, and local -state/-state-out flags should be
 // omitted from the runner invocation.
 //
@@ -314,27 +317,20 @@ var (
 // and are not the root module, so backend blocks in those files do not affect
 // the root module's state backend.
 func hasBackend(cwd string) bool {
-	entries, err := os.ReadDir(cwd)
+	files, err := tfconfig.ConfigFiles(cwd)
 	if err != nil {
 		return false
 	}
 	parser := hclparse.NewParser()
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		name := e.Name()
-		isJSON := strings.HasSuffix(name, ".tf.json")
-		if !isJSON && filepath.Ext(name) != ".tf" {
-			continue
-		}
-		b, err := os.ReadFile(filepath.Join(cwd, name))
+	for _, path := range files {
+		b, err := os.ReadFile(path)
 		if err != nil {
 			continue
 		}
+		name := filepath.Base(path)
 		var file *hcl.File
 		var diags hcl.Diagnostics
-		if isJSON {
+		if strings.HasSuffix(name, ".json") {
 			file, diags = parser.ParseJSON(b, name)
 		} else {
 			file, diags = parser.ParseHCL(b, name)

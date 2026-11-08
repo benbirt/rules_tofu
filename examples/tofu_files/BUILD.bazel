@@ -1,0 +1,24 @@
+load("@rules_tofu//tf:defs.bzl", "tf_deploy", "tf_library")
+
+package(default_visibility = ["//visibility:public"])
+
+# OpenTofu reads `main.tofu` in place of `main.tf`, so a module can ship
+# OpenTofu-specific configuration beside Terraform-compatible files. If both
+# were read, the duplicate `greeting` output would fail validation.
+tf_library(
+    name = "greet_lib",
+    srcs = [
+        "main.tf",
+        "main.tofu",
+        "variables.tofu.json",
+    ],
+)
+
+tf_deploy(
+    name = "greet",
+    allow_ephemeral_state = True,
+    vars = {
+        "name": "world",
+    },
+    deps = [":greet_lib"],
+)

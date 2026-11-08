@@ -172,14 +172,14 @@ def tf_deploy(name, srcs = None, deps = None, vars = None, var_files = None, dat
       - `:<name>.plan`    — `bazel run` to produce a plan.
       - `:<name>.apply`   — `bazel run` to apply.
       - `:<name>.destroy` — `bazel run` to destroy all managed resources.
-      - `:<name>.fmt`     — `bazel run` to reformat .tf files in-place.
+      - `:<name>.fmt`     — `bazel run` to reformat .tf and .tofu files in-place.
 
     When `fmt_test=True` (the default) and `srcs` is non-empty:
       - `:<name>.fmt_check` — `bazel test` that fails if files are not formatted.
 
     Args:
       name: target name.
-      srcs: optional deploy-local .tf files (e.g. provider/backend config).
+      srcs: optional deploy-local .tf/.tf.json/.tofu/.tofu.json/.tftpl/.hcl files (e.g. provider/backend config).
       deps: `tf_library` targets to compose.
       vars: dict of variable name -> value, rendered to rules_tofu.auto.tfvars.json.
       var_files: `.tfvars.json` or `.tfvars` files passed to tofu with `-var-file`.
