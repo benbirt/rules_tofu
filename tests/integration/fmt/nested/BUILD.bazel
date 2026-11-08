@@ -1,0 +1,16 @@
+load("@rules_tofu//tf:defs.bzl", "tf_library")
+
+# `srcs` reach into subdirectories, as a module with submodules and tests
+# does. `not_src.tf` is in the package directory but not in `srcs`, so
+# neither `.fmt` nor `.fmt_check` may touch it.
+tf_library(
+    name = "lib",
+    srcs = glob(
+        [
+            "**/*.tf",
+            "**/*.tofu",
+            "**/*.tftest.hcl",
+        ],
+        exclude = ["not_src.tf"],
+    ),
+)

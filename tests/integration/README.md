@@ -43,8 +43,8 @@ Renovate makes it (`versions.tf` and `.terraform.lock.hcl` only, from
 `bumped.lock.hcl`), which must build with `--lockfile_mode=error` and leave
 `MODULE.bazel.lock` unchanged.
 
-`module_dependency/` and its driver `module_dependency_test.sh` are the
-other: `//app` calls a `tf_library` from the `network_module` Bazel module
+`module_dependency/` and its driver `module_dependency_test.sh` are
+another: `//app` calls a `tf_library` from the `network_module` Bazel module
 by its `module_source`, and that library calls one from `dns_module` by
 its own. Everything must build, each external library on its own too, and
 `//app:app.plan` must plan. The generated module manifest is tofu's
@@ -134,3 +134,12 @@ Still untested end-to-end: the opt-in direction (a deploy that sets
 `bazel run :deploy.plan` outside the Bazel environment, and
 `tf_providers` module-resolution errors. These can be addressed in
 future testing passes if needed.
+
+`fmt/` and its driver `fmt_test.sh` cover the `.fmt` and `.fmt_check`
+targets, which act on the files in `srcs` by name: a target whose `srcs`
+are all in a subdirectory passes its check; unformatted `.tf`, `.tofu` and
+`.tftest.hcl` files in subdirectories fail it, each named; `.fmt` rewrites
+exactly those and leaves the package's file outside `srcs` byte-identical;
+and a target without `srcs` has neither target. Which extensions `tofu fmt`
+accepts by name is the binary's to decide, so there is one
+`fmt_<version>_test` per pinned tofu version.

@@ -161,10 +161,13 @@ def tf_library(name, srcs = None, deps = None, data = None, providers = None, mo
       - `:<name>`     — the library target. Building it runs
                         `tofu init -backend=false && tofu validate` against
                         the library's transitive files.
-      - `:<name>.fmt` — `bazel run` to reformat .tf and .tofu files in-place.
 
-    When `fmt_test=True` (the default) and `srcs` is non-empty:
-      - `:<name>.fmt_check`  — `bazel test` that fails if files are not formatted.
+    When `srcs` is non-empty:
+      - `:<name>.fmt` — `bazel run` to reformat the .tf, .tofu, .tftest.hcl
+                        and .tofutest.hcl files in `srcs` in place.
+
+    When additionally `fmt_test=True` (the default):
+      - `:<name>.fmt_check`  — `bazel test` that fails if those files are not formatted.
 
     Args:
       name: target name.
@@ -210,10 +213,11 @@ def tf_library(name, srcs = None, deps = None, data = None, providers = None, mo
         **dict(common_kwargs, **kwargs)
     )
 
-    _tf_fmt(name = name + ".fmt", **common_kwargs)
-    if fmt_test and srcs:
-        _tf_fmt_check(
-            name = name + ".fmt_check",
-            srcs = srcs,
-            **common_kwargs
-        )
+    if srcs:
+        _tf_fmt(name = name + ".fmt", srcs = srcs, **common_kwargs)
+        if fmt_test:
+            _tf_fmt_check(
+                name = name + ".fmt_check",
+                srcs = srcs,
+                **common_kwargs
+            )
