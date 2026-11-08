@@ -50,7 +50,7 @@ module "local" { source = "../shared" }
 		{Label: "@infra//vpc", Source: "git::https://example.com/infra.git//vpc?ref=v1.0.0", Dir: "external/infra+/vpc", Direct: true},
 		{Label: "@dns//:dns", Source: "registry.opentofu.org/acme/dns/aws", Version: "0.1.0", Dir: "external/dns+"},
 	}
-	got, err := build(tree, "app", "//app:app", deps)
+	got, err := build(tree, "app", "//app:app", deps, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestBuild_RootPackage(t *testing.T) {
 		"a/main.tf":   ``,
 		"versions.tf": `terraform {}`,
 	})
-	got, err := build(tree, "", "//:root", nil)
+	got, err := build(tree, "", "//:root", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestBuild_JSONAndOverride(t *testing.T) {
 		"app/new/main.tf":    ``,
 		"app/unused/main.tf": ``,
 	})
-	got, err := build(tree, "app", "//app", nil)
+	got, err := build(tree, "app", "//app", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +187,7 @@ func TestBuild_Errors(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tree := writeTree(t, tc.files)
-			_, err := build(tree, "app", "//app", tc.deps)
+			_, err := build(tree, "app", "//app", tc.deps, nil)
 			if err == nil {
 				t.Fatalf("expected an error containing %q", tc.want)
 			}
@@ -211,11 +211,11 @@ func TestBuild_LongestMatch(t *testing.T) {
 		{Label: "@whole", Source: "acme/n/aws", Version: "1.0.0", Dir: "external/whole+", Direct: true},
 		{Label: "@sub", Source: "acme/n/aws//modules", Version: "1.0.0", Dir: "external/sub+", Direct: true},
 	}
-	_, err := build(tree, "app", "//app", deps)
+	_, err := build(tree, "app", "//app", deps, nil)
 	if err == nil || !strings.Contains(err.Error(), "no module call uses @whole") {
 		t.Fatalf("expected @whole to go unused, got %v", err)
 	}
-	got, err := build(tree, "app", "//app", deps[1:])
+	got, err := build(tree, "app", "//app", deps[1:], nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,5 +225,113 @@ func TestBuild_LongestMatch(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got.Modules, want) {
 		t.Errorf("got %+v, want %+v", got.Modules, want)
+	}
+}
+
+// A direct dep is used by a call from the root's own configuration: the root
+// module or a local module in the root's package. A dep in the root's package
+// is used (its files are the root module's), and so is a dep whose package a
+// local call enters, from below it or above it (#57).
+func TestBuild_DirectUse(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		files    map[string]string
+		root     string
+		deps     []dep
+		packages []string
+	}{
+		{
+			name: "same package",
+			files: map[string]string{
+				"vpc/main.tf":             `module "sub" { source = "./modules/sub" }`,
+				"vpc/modules/sub/main.tf": `module "dns" { source = "acme/dns/aws" }`,
+				"external/dns+/main.tf":   ``,
+			},
+			root: "vpc",
+			deps: []dep{
+				{Label: "//vpc:vpc_lib", Source: "github.com/acme/infra//vpc", Dir: "vpc", Direct: true},
+				{Label: "@dns//:dns", Source: "acme/dns/aws", Version: "1.0.0", Dir: "external/dns+", Direct: true},
+			},
+			packages: []string{"vpc", "external/dns+"},
+		},
+		{
+			name: "local call to a sibling",
+			files: map[string]string{
+				"app/main.tf":           `module "net" { source = "../network" }`,
+				"network/main.tf":       `module "inner" { source = "./inner" }`,
+				"network/inner/main.tf": ``,
+			},
+			root:     "app",
+			deps:     []dep{{Label: "//network", Source: "github.com/acme/infra//network", Dir: "network", Direct: true}},
+			packages: []string{"network"},
+		},
+		{
+			name: "local call up out of the root",
+			files: map[string]string{
+				"net/app/main.tf":    `module "s" { source = "../subnet" }`,
+				"net/subnet/main.tf": ``,
+			},
+			root:     "net/app",
+			deps:     []dep{{Label: "//net", Source: "github.com/acme/net", Dir: "net", Direct: true}},
+			packages: []string{"net"},
+		},
+		{
+			name: "example calling the repository's root package",
+			files: map[string]string{
+				"examples/complete/main.tf": `module "m" { source = "../../" }`,
+				"main.tf":                   ``,
+			},
+			root:     "examples/complete",
+			deps:     []dep{{Label: "//:lib", Source: "acme/lib/aws", Version: "1.0.0", Dir: "", Direct: true}},
+			packages: []string{""},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tree := writeTree(t, tc.files)
+			if _, err := build(tree, tc.root, "//"+tc.root, tc.deps, tc.packages); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+// A direct dep called only from inside another library is not used by the
+// root, whether the root reaches that library by module_source or by a
+// relative path, and whether or not the library sets module_source (#57).
+func TestBuild_TransitiveCallDoesNotUseDirectDep(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		call   string
+		source string
+	}{
+		{name: "module_source", call: `module "a" { source = "github.com/acme/mod_a" }`, source: "github.com/acme/mod_a"},
+		{name: "local", call: `module "a" { source = "../mod_a" }`, source: "github.com/acme/mod_a"},
+		{name: "local without module_source", call: `module "a" { source = "../mod_a" }`},
+		{name: "subpackage", call: `module "a" { source = "./mod_a" }`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := "mod_a"
+			if tc.name == "subpackage" {
+				dir = "app/mod_a"
+			}
+			tree := writeTree(t, map[string]string{
+				"app/main.tf":             tc.call,
+				dir + "/main.tf":          `module "b" { source = "acme/b/aws" }`,
+				"external/mod_b+/main.tf": ``,
+			})
+			deps := []dep{{Label: "@tf_modules//mod_b", Source: "acme/b/aws", Version: "1.0.0", Dir: "external/mod_b+", Direct: true}}
+			if tc.source != "" {
+				deps = append(deps, dep{Label: "//mod_a", Source: tc.source, Dir: dir, Direct: true})
+			}
+			packages := []string{dir, "external/mod_b+"}
+			_, err := build(tree, "app", "//app", deps, packages)
+			if err == nil || !strings.Contains(err.Error(), "no module call uses @tf_modules//mod_b") {
+				t.Fatalf("expected @tf_modules//mod_b to go unused, got %v", err)
+			}
+			deps[0].Direct = false
+			if _, err := build(tree, "app", "//app", deps, packages); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }

@@ -74,6 +74,10 @@ def _tf_library_impl(ctx):
             providers = providers_depset,
             module = module,
             modules = modules,
+            packages = depset(
+                direct = [_package_dir(ctx.label)],
+                transitive = [d[TfLibraryInfo].packages for d in ctx.attr.deps],
+            ),
         ),
     ]
 

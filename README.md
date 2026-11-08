@@ -589,7 +589,11 @@ string.
 The build fails when:
 
 - a call's `source` matches no library in `deps`;
-- a library in `deps` with `module_source` matches no call;
+- a library in `deps` with `module_source` is called neither by the root's
+  own configuration (its package's directories) nor by a relative `source`
+  from there into the library's package, and is not in the root's package;
+  a call from inside another library doesn't count, since that library
+  lists its own `deps`;
 - two libraries have the same `module_source`;
 - a call's `version` constraint rejects the matching version.
 

@@ -8,9 +8,11 @@
 // Inputs:
 //   - --work-tree=<path>: the work tree root.
 //   - --root=<dir>: the root module's work-tree-relative directory.
-//   - --modules=<path>: a JSON list of the tf_library deps that set
-//     `module_source`, each {label, source, version, dir, direct}, where `dir`
-//     is the library's work-tree-relative directory.
+//   - --modules=<path>: a JSON object {modules, packages}. `modules` lists
+//     the tf_library deps that set `module_source`, each {label, source,
+//     version, dir, direct}, where `dir` is the library's work-tree-relative
+//     directory; `packages` is the work-tree-relative directory of every
+//     tf_library package in deps, transitively.
 //   - --label=<label>: the target being built, for error messages.
 //   - --out=<path>: the manifest to write.
 //
@@ -22,6 +24,15 @@
 //
 // It fails when a call's source is provided by no dep, when a direct dep is
 // used by no call, and when two deps claim the same source.
+//
+// A direct dep counts as used only when the root's own configuration calls
+// it: the root module, or a local module in the root's own package. A
+// directory belongs to the package nearest above it, as in Bazel, so a local
+// call into another library's package leaves the root's configuration; calls
+// from there are that library's business and use none of the root's direct
+// deps. A local call into a package uses the deps with module_source there,
+// and the deps in the root's own package are used, since their files are part
+// of the root module.
 package main
 
 import (
@@ -70,11 +81,14 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	var deps []dep
-	if err := json.Unmarshal(data, &deps); err != nil {
+	var listing struct {
+		Modules  []dep    `json:"modules"`
+		Packages []string `json:"packages"`
+	}
+	if err := json.Unmarshal(data, &listing); err != nil {
 		return fmt.Errorf("parse %s: %w", *modules, err)
 	}
-	manifest, err := build(*workTree, *root, *label, deps)
+	manifest, err := build(*workTree, *root, *label, listing.Modules, listing.Packages)
 	if err != nil {
 		return err
 	}
@@ -114,7 +128,7 @@ type Record struct {
 // rather than looping.
 const maxDepth = 64
 
-func build(workTree, root, label string, deps []dep) (*Manifest, error) {
+func build(workTree, root, label string, deps []dep, packages []string) (*Manifest, error) {
 	bySource := map[string]*dep{}
 	var all []*dep
 	for i := range deps {
@@ -129,9 +143,15 @@ func build(workTree, root, label string, deps []dep) (*Manifest, error) {
 	}
 
 	used := map[string]bool{}
+	for _, d := range all {
+		if d.Dir == root {
+			used[d.Label] = true
+		}
+	}
 	manifest := &Manifest{Modules: []Record{{Key: "", Source: "", Dir: "."}}}
-	var walk func(key, dir string, depth int) error
-	walk = func(key, dir string, depth int) error {
+	// own is whether dir is the root's own configuration (see the package doc).
+	var walk func(key, dir string, own bool, depth int) error
+	walk = func(key, dir string, own bool, depth int) error {
 		if depth > maxDepth {
 			return fmt.Errorf("%s: module %q is nested more than %d deep; does a module call itself?", label, key, maxDepth)
 		}
@@ -147,17 +167,29 @@ func build(workTree, root, label string, deps []dep) (*Manifest, error) {
 			where := fmt.Sprintf("module %q (%s)", c.Name, displayRange(workTree, c.Range))
 			record := Record{Key: childKey, Source: c.Source}
 			var childDir string
+			childOwn := false
 			if tfconfig.IsLocal(c.Source) {
 				childDir = path.Join(dir, c.Source)
 				if err := checkLocal(workTree, dir, childDir); err != nil {
 					return fmt.Errorf("%s: %s: source %q %w", label, where, c.Source, err)
+				}
+				if pkg := packageOf(packages, root, childDir); pkg == root {
+					childOwn = own
+				} else if own {
+					for _, d := range all {
+						if d.Dir == pkg {
+							used[d.Label] = true
+						}
+					}
 				}
 			} else {
 				d, subdir := lookup(all, c.Source)
 				if d == nil {
 					return fmt.Errorf("%s: %s: no dep provides source %q. %s", label, where, c.Source, missingHint(c.Source))
 				}
-				used[d.Label] = true
+				if own {
+					used[d.Label] = true
+				}
 				childDir = path.Join(d.Dir, subdir)
 				if subdir != "" && !isDir(workTree, childDir) {
 					return fmt.Errorf("%s: %s: %s (module_source %q) has no directory %q", label, where, d.Label, d.Source, subdir)
@@ -175,13 +207,13 @@ func build(workTree, root, label string, deps []dep) (*Manifest, error) {
 			}
 			record.Dir = filepath.ToSlash(rel)
 			manifest.Modules = append(manifest.Modules, record)
-			if err := walk(childKey, childDir, depth+1); err != nil {
+			if err := walk(childKey, childDir, childOwn, depth+1); err != nil {
 				return err
 			}
 		}
 		return nil
 	}
-	if err := walk("", root, 0); err != nil {
+	if err := walk("", root, true, 0); err != nil {
 		return nil, err
 	}
 
@@ -199,6 +231,25 @@ func build(workTree, root, label string, deps []dep) (*Manifest, error) {
 
 	sort.Slice(manifest.Modules, func(i, j int) bool { return manifest.Modules[i].Key < manifest.Modules[j].Key })
 	return manifest, nil
+}
+
+// packageOf is the package dir belongs to: the nearest of packages, or
+// root, at or above it, as Bazel gives a directory to the nearest package
+// above it.
+func packageOf(packages []string, root, dir string) string {
+	best, found := "", false
+	for _, p := range append([]string{root}, packages...) {
+		if within(dir, p) && (!found || len(p) > len(best)) {
+			best, found = p, true
+		}
+	}
+	return best
+}
+
+// within is whether dir is ancestor or inside it, "" being the work tree
+// root, which contains everything.
+func within(dir, ancestor string) bool {
+	return ancestor == "" || dir == ancestor || strings.HasPrefix(dir, ancestor+"/")
 }
 
 // rootDir maps the work tree root ("") to ".", for filepath.Rel.
