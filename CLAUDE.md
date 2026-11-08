@@ -187,7 +187,9 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   `label.workspace_root`, so a library in another repository builds on its
   own.
 - `tf_modules` (`tf/modules/extensions.bzl`; usage in README, "Modules")
-  gives each module one `tf_library` (`:module`, with `//:files` as data)
+  gives each module one `tf_library` (`:_rules_tofu_module`, with
+  `//:_rules_tofu_files` as data: names no file of a module shares, since a
+  file beside a target of the same name fails the package, issue #61)
   aliased as `@tf_modules//<path>`; submodules are `//<subdir>` against it,
   never targets of their own, because the hub can't list directories
   without fetching every module. The per-module repos are private, like
@@ -198,8 +200,13 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   version bump therefore changes `MODULE.bazel.lock`, unlike a provider
   lock update; the README tells bots to run
   `bazel mod deps --lockfile_mode=update`. The repository rule deletes
-  upstream Bazel files and runs `modscan`; an undeclared call fails the
-  fetch naming the tag to add. Generated libraries name providers as
+  upstream Bazel files and every symlink but those to a file of the module
+  (`_tidy`; README, "From a registry, git or an archive"), then runs
+  `modscan`; an undeclared call fails the fetch naming the tag to add.
+  Walk fetched trees with `walk` in `tf/private/fetched_tree.bzl`, never
+  by `is_dir` alone: it is true for a symlink to a directory, and a link
+  back to an ancestor loops, while Bazel's `glob` fails the package on one
+  (issue #61). Generated libraries name providers as
   `@tf_providers//...`, which they can see only because rules_tofu's own
   MODULE.bazel imports the hub through a non-dev `use_extension`; keep
   that. `//tests/integration:tf_modules_test` covers git (with a moved

@@ -507,6 +507,11 @@ Each module is pinned, so a tag that moves later changes nothing:
 
 git sources are fetched with `git`, which must be on the `PATH`.
 
+A module's files are its own. A symlink to a file of the module is kept and
+read as that file; a symlink to a directory, to nothing or to anything
+outside the module is removed when the module is fetched, as are any Bazel
+files it ships.
+
 A module's `tf_library` carries the providers its `required_providers`
 name, and its `modules/` submodules', so callers don't list them. The root
 module still pins them, with tags or in its lock, which `pin` writes to

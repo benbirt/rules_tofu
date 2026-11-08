@@ -48,6 +48,7 @@ BUILD files then name each provider as `@tf_providers//<namespace>/<name>`.
 # carries the lock, which builds copy next to the configuration so
 # `tofu init` checks against it.
 
+load("//tf/private:fetched_tree.bzl", "walk")
 load(":lock.bzl", "lock_entries", "lock_sha256s")
 load(
     ":source.bzl",
@@ -256,24 +257,17 @@ def _fail_lock(repository_ctx, error):
     ))
 
 def _files_under(path, prefix):
-    """Every file below the directory `path`, as paths relative to it joined onto `prefix`."""
-    files = []
-    pending = [(path, prefix)]
+    """Every file below the directory `path`, as paths relative to it joined onto `prefix`.
 
-    # Starlark has no `while`; one iteration per directory.
-    for _ in range(1000):
-        if not pending:
-            break
-        directory, rel = pending.pop()
-        for child in directory.readdir():
-            child_rel = "{}/{}".format(rel, child.basename)
-            if child.is_dir:
-                pending.append((child, child_rel))
-            else:
-                files.append(child_rel)
-    if pending:
-        fail("{} holds more directories than a provider zip should".format(path))
-    return sorted(files)
+    A symlink counts if it leads to a file, which Bazel reads as that file;
+    one to a directory or to nothing is left out, since no file can be made
+    of it and a walk that followed it could circle for ever.
+    """
+    return sorted([
+        "{}/{}".format(prefix, entry.rel)
+        for entry in walk(path)
+        if not entry.is_dir and (not entry.is_symlink or (entry.path.exists and not entry.path.is_dir))
+    ])
 
 def _tf_provider_download_impl(repository_ctx):
     source = repository_ctx.attr.source
