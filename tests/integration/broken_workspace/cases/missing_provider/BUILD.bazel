@@ -1,10 +1,10 @@
 load("@rules_tofu//tf:defs.bzl", "tf_library")
 
-# main.tf declares `required_providers { aws = ... }` but the library has
+# main.tf declares `required_providers { random = ... }` but the library has
 # no `providers = [...]`. The plugin tree materialized for validate is
 # empty, so `tofu init -plugin-dir=<empty>` fails with
 # "Failed to query available provider packages" (or similar) while
-# looking up hashicorp/aws.
+# looking up hashicorp/random.
 tf_library(
     name = "missing",
     srcs = ["main.tf"],

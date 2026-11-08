@@ -7,5 +7,5 @@ tf_library(
     name = "lib",
     srcs = ["main.tf"],
     fmt_test = False,
-    providers = ["@tf_providers_hashicorp_aws//:provider"],
+    providers = ["@tf_providers_hashicorp_random//:provider"],
 )
