@@ -22,6 +22,13 @@
 //
 // It fails when a call's source is provided by no dep, when a direct dep is
 // used by no call, and when two deps claim the same source.
+//
+// A direct dep counts as used only when the root's own configuration calls
+// it: the root module, or a local module it reaches by relative paths without
+// entering a dep's directory. A call from inside another library is that
+// library's business, so it does not use the root's direct deps. A local call
+// into a dep's directory uses that dep, and a dep in the root's own package
+// is used, since its files are part of the root module.
 package main
 
 import (
@@ -129,9 +136,15 @@ func build(workTree, root, label string, deps []dep) (*Manifest, error) {
 	}
 
 	used := map[string]bool{}
+	for _, d := range all {
+		if d.Dir == root {
+			used[d.Label] = true
+		}
+	}
 	manifest := &Manifest{Modules: []Record{{Key: "", Source: "", Dir: "."}}}
-	var walk func(key, dir string, depth int) error
-	walk = func(key, dir string, depth int) error {
+	// own is whether dir is the root's own configuration (see the package doc).
+	var walk func(key, dir string, own bool, depth int) error
+	walk = func(key, dir string, own bool, depth int) error {
 		if depth > maxDepth {
 			return fmt.Errorf("%s: module %q is nested more than %d deep; does a module call itself?", label, key, maxDepth)
 		}
@@ -147,17 +160,27 @@ func build(workTree, root, label string, deps []dep) (*Manifest, error) {
 			where := fmt.Sprintf("module %q (%s)", c.Name, displayRange(workTree, c.Range))
 			record := Record{Key: childKey, Source: c.Source}
 			var childDir string
+			childOwn := false
 			if tfconfig.IsLocal(c.Source) {
 				childDir = path.Join(dir, c.Source)
 				if err := checkLocal(workTree, dir, childDir); err != nil {
 					return fmt.Errorf("%s: %s: source %q %w", label, where, c.Source, err)
+				}
+				if d := containing(all, root, childDir); d != nil {
+					if own {
+						used[d.Label] = true
+					}
+				} else {
+					childOwn = own
 				}
 			} else {
 				d, subdir := lookup(all, c.Source)
 				if d == nil {
 					return fmt.Errorf("%s: %s: no dep provides source %q. %s", label, where, c.Source, missingHint(c.Source))
 				}
-				used[d.Label] = true
+				if own {
+					used[d.Label] = true
+				}
 				childDir = path.Join(d.Dir, subdir)
 				if subdir != "" && !isDir(workTree, childDir) {
 					return fmt.Errorf("%s: %s: %s (module_source %q) has no directory %q", label, where, d.Label, d.Source, subdir)
@@ -175,13 +198,13 @@ func build(workTree, root, label string, deps []dep) (*Manifest, error) {
 			}
 			record.Dir = filepath.ToSlash(rel)
 			manifest.Modules = append(manifest.Modules, record)
-			if err := walk(childKey, childDir, depth+1); err != nil {
+			if err := walk(childKey, childDir, childOwn, depth+1); err != nil {
 				return err
 			}
 		}
 		return nil
 	}
-	if err := walk("", root, 0); err != nil {
+	if err := walk("", root, true, 0); err != nil {
 		return nil, err
 	}
 
@@ -199,6 +222,28 @@ func build(workTree, root, label string, deps []dep) (*Manifest, error) {
 
 	sort.Slice(manifest.Modules, func(i, j int) bool { return manifest.Modules[i].Key < manifest.Modules[j].Key })
 	return manifest, nil
+}
+
+// containing is the dep whose directory is dir or contains it, the deepest
+// if several do. Deps whose directory is the root's, or contains it, are
+// skipped: dir is not outside the root's configuration by being in them.
+func containing(deps []*dep, root, dir string) *dep {
+	var best *dep
+	for _, d := range deps {
+		if within(root, d.Dir) || !within(dir, d.Dir) {
+			continue
+		}
+		if best == nil || len(d.Dir) > len(best.Dir) {
+			best = d
+		}
+	}
+	return best
+}
+
+// within is whether dir is ancestor or inside it, "" being the work tree
+// root, which contains everything.
+func within(dir, ancestor string) bool {
+	return ancestor == "" || dir == ancestor || strings.HasPrefix(dir, ancestor+"/")
 }
 
 // rootDir maps the work tree root ("") to ".", for filepath.Rel.

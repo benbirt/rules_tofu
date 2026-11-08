@@ -227,3 +227,66 @@ func TestBuild_LongestMatch(t *testing.T) {
 		t.Errorf("got %+v, want %+v", got.Modules, want)
 	}
 }
+
+// A direct dep is used by a call from the root's own configuration: the root
+// module, a dep in the root's package (its files are the root module's), a
+// local call into a dep's directory, and calls from local modules the root
+// reaches without entering a dep (#57).
+func TestBuild_DirectUse(t *testing.T) {
+	tree := writeTree(t, map[string]string{
+		"vpc/main.tf":           `module "net" { source = "../network" }` + "\n" + `module "sub" { source = "./sub" }`,
+		"vpc/sub/main.tf":       `module "dns" { source = "acme/dns/aws" }`,
+		"network/main.tf":       `module "inner" { source = "./inner" }`,
+		"network/inner/main.tf": ``,
+		"external/dns+/main.tf": ``,
+	})
+	deps := []dep{
+		{Label: "//vpc:vpc_lib", Source: "github.com/acme/infra//vpc", Dir: "vpc", Direct: true},
+		{Label: "//network", Source: "github.com/acme/infra//network", Dir: "network", Direct: true},
+		{Label: "@dns//:dns", Source: "acme/dns/aws", Version: "1.0.0", Dir: "external/dns+", Direct: true},
+	}
+	got, err := build(tree, "vpc", "//vpc", deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Record{
+		{Key: "", Source: "", Dir: "."},
+		{Key: "net", Source: "../network", Dir: "../network"},
+		{Key: "net.inner", Source: "./inner", Dir: "../network/inner"},
+		{Key: "sub", Source: "./sub", Dir: "sub"},
+		{Key: "sub.dns", Source: "acme/dns/aws", Version: "1.0.0", Dir: "../external/dns+"},
+	}
+	if !reflect.DeepEqual(got.Modules, want) {
+		t.Errorf("got\n%+v\nwant\n%+v", got.Modules, want)
+	}
+}
+
+// A direct dep called only from inside another dep is not used by the root,
+// whether the root reaches that dep by module_source or by a relative path
+// (#57).
+func TestBuild_TransitiveCallDoesNotUseDirectDep(t *testing.T) {
+	for name, call := range map[string]string{
+		"module_source": `module "a" { source = "github.com/acme/mod_a" }`,
+		"local":         `module "a" { source = "../mod_a" }`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			tree := writeTree(t, map[string]string{
+				"app/main.tf":             call,
+				"mod_a/main.tf":           `module "b" { source = "acme/b/aws" }`,
+				"external/mod_b+/main.tf": ``,
+			})
+			deps := []dep{
+				{Label: "//mod_a", Source: "github.com/acme/mod_a", Dir: "mod_a", Direct: true},
+				{Label: "@tf_modules//mod_b", Source: "acme/b/aws", Version: "1.0.0", Dir: "external/mod_b+", Direct: true},
+			}
+			_, err := build(tree, "app", "//app", deps)
+			if err == nil || !strings.Contains(err.Error(), "no module call uses @tf_modules//mod_b") {
+				t.Fatalf("expected @tf_modules//mod_b to go unused, got %v", err)
+			}
+			deps[1].Direct = false
+			if _, err := build(tree, "app", "//app", deps); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
