@@ -1,0 +1,2 @@
+# The root package, where tf_modules_test.sh has `@tf_providers//:pin` write
+# .terraform.lock.hcl.

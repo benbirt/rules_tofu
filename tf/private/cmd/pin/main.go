@@ -8,7 +8,9 @@
 //     and tf_deploy in the main repository (with their dependencies). Bazel
 //     already knows which packages exist, so .bazelignore, deleted packages
 //     and nested workspaces need no handling here. A .tf file outside every
-//     rule, a versions.tf included, is not locked against.
+//     rule, a versions.tf included, is not locked against. Modules from
+//     other repositories (tf_modules, or a library with module_source) count
+//     too, but only in the directories their library serves.
 //   - Each file's `terraform { required_providers { ... } }` entries are
 //     extracted, and nothing else, so resources, variables and module calls
 //     that only make sense in place never need to load.
@@ -34,13 +36,14 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/benbirt/rules_tofu/tf/private/cmd/internal/flags"
-	"github.com/hashicorp/hcl/v2"
-	"github.com/hashicorp/hcl/v2/hclparse"
+	"github.com/benbirt/rules_tofu/tf/private/cmd/internal/tfconfig"
 )
 
 var (
@@ -67,16 +70,10 @@ func main() {
 	}
 }
 
-// requirement is one `required_providers` entry.
-type requirement struct {
-	Source  string `json:"source"`
-	Version string `json:"version,omitempty"`
-}
-
-// module is the requirements found in one workspace directory.
+// module is the requirements found in one directory.
 type module struct {
-	Dir  string // workspace-relative, "" for the workspace root
-	Reqs map[string]requirement
+	Dir  string // workspace-relative ("" for the workspace root), or `@<repo>//<dir>`
+	Reqs map[string]tfconfig.Requirement
 }
 
 // bazelCommand is the Bazel to query with: $BAZEL, else bazel or bazelisk
@@ -106,7 +103,7 @@ func run(workspace, lockDir, tofu, bazel string, defaultPlatforms, excludedSourc
 
 	var modules []module
 	for _, dir := range dirs {
-		reqs, err := parseFiles(workspace, byDir[dir])
+		reqs, err := tfconfig.ReadRequiredProviders(byDir[dir])
 		if err != nil {
 			return err
 		}
@@ -161,15 +158,16 @@ func run(workspace, lockDir, tofu, bazel string, defaultPlatforms, excludedSourc
 // withoutSources drops the requirements on the given `<namespace>/<name>`
 // sources. Sources compare as tofu does: case-insensitively, with the default
 // registry host optional.
-func withoutSources(reqs map[string]requirement, sources []string) map[string]requirement {
+func withoutSources(reqs map[string]tfconfig.Requirement, sources []string) map[string]tfconfig.Requirement {
 	drop := map[string]bool{}
 	for _, s := range sources {
-		drop[strings.ToLower(s)] = true
+		if normalized, err := tfconfig.NormalizeProvider(s); err == nil {
+			drop[normalized] = true
+		}
 	}
-	kept := map[string]requirement{}
+	kept := map[string]tfconfig.Requirement{}
 	for name, req := range reqs {
-		source := strings.TrimPrefix(strings.ToLower(req.Source), "registry.opentofu.org/")
-		if !drop[source] {
+		if !drop[req.Source] {
 			kept[name] = req
 		}
 	}
@@ -193,18 +191,31 @@ func hasPlatformArg(args []string) bool {
 	return false
 }
 
-// configQuery lists the configuration files of every tf_library and
-// tf_deploy (whose underlying rules are `_tf_library` and `tf_deploy_rule`),
-// including those reached through filegroups and library deps.
-const configQuery = `filter("\.tf(\.json)?$", kind("source file", deps(kind("^(_tf_library|tf_deploy_rule) rule$", //...))))`
+// rootRules is every tf_library and tf_deploy in the main repository (their
+// underlying rules are `_tf_library` and `tf_deploy_rule`).
+const rootRules = `kind("^(_tf_library|tf_deploy_rule) rule$", //...)`
+
+// configQuery lists the configuration files of those rules, including those
+// reached through filegroups and library deps, in any repository.
+const configQuery = `filter("\.tf(\.json)?$", kind("source file", deps(` + rootRules + `)))`
+
+// moduleQuery lists the libraries with a module_source among their deps:
+// those are the modules, tf_modules' generated ones included, whose files
+// may come from another repository.
+const moduleQuery = `attr("module_source", ".", kind("^_tf_library rule$", deps(` + rootRules + `)))`
 
 // queryPartialExitCode is Bazel's exit code for a --keep_going command that
 // produced results despite errors.
 const queryPartialExitCode = 3
 
 // queryConfigFiles asks Bazel for the configuration files of every tf_library
-// and tf_deploy in the main repository, grouped by workspace-relative
-// directory ("" for the workspace root).
+// and tf_deploy in the main repository, and of the modules they depend on,
+// grouped by directory: workspace-relative ("" for the workspace root) in the
+// main repository, `@<repo>//<dir>` in others. The paths are absolute.
+//
+// A module from another repository, such as one tf_modules fetched, holds
+// files its library doesn't serve, like examples requiring providers of
+// their own. Only the directories tfconfig.ModuleDirs gives for it count.
 //
 // The query runs with --keep_going because `deps()` also follows each
 // rule's `providers` into @tf_providers, which can't load before they are
@@ -212,7 +223,65 @@ const queryPartialExitCode = 3
 // and a lock entry that can't be used makes its provider's repo fail when
 // fetched. Neither has .tf files to find, and pin is how both are fixed.
 func queryConfigFiles(bazel, workspace string, log io.Writer) (map[string][]string, error) {
-	cmd := exec.Command(bazel, "query", "--keep_going", "--noimplicit_deps", "--notool_deps", "--output=label", configQuery)
+	targets, err := query(bazel, workspace, configQuery+" + "+moduleQuery, log)
+	if err != nil {
+		return nil, err
+	}
+	var files, modules []target
+	for _, t := range targets {
+		if t.Kind == "source file" {
+			files = append(files, t)
+		} else {
+			modules = append(modules, t)
+		}
+	}
+
+	served := map[string]bool{}
+	for _, m := range modules {
+		if m.Repo == "" {
+			continue
+		}
+		pkgDir := filepath.Dir(m.Path)
+		root := pkgDir
+		if m.Package != "" {
+			root = strings.TrimSuffix(pkgDir, string(filepath.Separator)+filepath.FromSlash(m.Package))
+		}
+		dirs, err := tfconfig.ModuleDirs(root, m.Package)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", m.Label, err)
+		}
+		for _, d := range dirs {
+			served[filepath.Join(root, filepath.FromSlash(d))] = true
+		}
+	}
+
+	byDir := map[string][]string{}
+	for _, f := range files {
+		dir := path.Dir(path.Join(f.Package, f.Name))
+		if dir == "." {
+			dir = ""
+		}
+		if f.Repo != "" {
+			if !served[filepath.Dir(f.Path)] {
+				continue
+			}
+			dir = "@" + f.Repo + "//" + dir
+		}
+		byDir[dir] = append(byDir[dir], f.Path)
+	}
+	return byDir, nil
+}
+
+// target is one line of `bazel query --output=location`: a target's label,
+// split up, its kind, and the absolute path of the file it is or is declared
+// in.
+type target struct {
+	Kind, Label, Repo, Package, Name, Path string
+}
+
+// query runs a `bazel query --output=location`, accepting partial results.
+func query(bazel, workspace, expr string, log io.Writer) ([]target, error) {
+	cmd := exec.Command(bazel, "query", "--keep_going", "--noimplicit_deps", "--notool_deps", "--output=location", expr)
 	cmd.Dir = workspace
 	cmd.Stderr = log
 	out, err := cmd.Output()
@@ -223,133 +292,33 @@ func queryConfigFiles(bazel, workspace string, log io.Writer) (map[string][]stri
 	} else if err != nil {
 		return nil, fmt.Errorf("bazel query: %w", err)
 	}
-	return groupByDir(string(out)), nil
+	return parseLocations(string(out)), nil
 }
 
-// groupByDir turns main-repository source file labels (`//pkg:sub/f.tf`)
-// into workspace-relative paths, grouped by directory. Labels from other
-// repositories can't be part of a work tree, so they're skipped.
-func groupByDir(labels string) map[string][]string {
-	byDir := map[string][]string{}
-	for _, label := range strings.Fields(labels) {
-		label = strings.TrimPrefix(label, "@@")
-		label = strings.TrimPrefix(label, "@")
-		if !strings.HasPrefix(label, "//") {
+// locationLine is `<path>:<line>:<column>: <kind> <label>`.
+var locationLine = regexp.MustCompile(`^(.+):\d+:\d+: (.+) (\S+)$`)
+
+// parseLocations reads `bazel query --output=location` output. `Repo` is ""
+// for the main repository, else the repository's name as Bazel prints it.
+func parseLocations(out string) []target {
+	var targets []target
+	for _, line := range strings.Split(out, "\n") {
+		m := locationLine.FindStringSubmatch(line)
+		if m == nil {
 			continue
 		}
-		pkg, name, ok := strings.Cut(label[2:], ":")
+		label := m[3]
+		repo, rest, ok := strings.Cut(strings.TrimLeft(label, "@"), "//")
 		if !ok {
 			continue
 		}
-		path := strings.TrimPrefix(pkg+"/"+name, "/")
-		dir := filepath.ToSlash(filepath.Dir(path))
-		if dir == "." {
-			dir = ""
-		}
-		byDir[dir] = append(byDir[dir], path)
-	}
-	return byDir
-}
-
-var (
-	terraformSchema = &hcl.BodySchema{Blocks: []hcl.BlockHeaderSchema{{Type: "terraform"}}}
-	requiredSchema  = &hcl.BodySchema{Blocks: []hcl.BlockHeaderSchema{{Type: "required_providers"}}}
-)
-
-// parseFiles returns the required_providers entries declared in the given
-// workspace-relative files, which share a directory, keyed by local name.
-func parseFiles(workspace string, files []string) (map[string]requirement, error) {
-	parser := hclparse.NewParser()
-	reqs := map[string]requirement{}
-	where := map[string]string{}
-	sort.Strings(files)
-	for _, rel := range files {
-		path := filepath.Join(workspace, rel)
-		src, err := os.ReadFile(path)
-		if err != nil {
-			return nil, err
-		}
-		var file *hcl.File
-		var diags hcl.Diagnostics
-		if strings.HasSuffix(path, ".json") {
-			file, diags = parser.ParseJSON(src, path)
-		} else {
-			file, diags = parser.ParseHCL(src, path)
-		}
-		if diags.HasErrors() {
-			return nil, diags
-		}
-		content, _, diags := file.Body.PartialContent(terraformSchema)
-		if diags.HasErrors() {
-			return nil, diags
-		}
-		for _, tf := range content.Blocks {
-			inner, _, diags := tf.Body.PartialContent(requiredSchema)
-			if diags.HasErrors() {
-				return nil, diags
-			}
-			for _, block := range inner.Blocks {
-				attrs, diags := block.Body.JustAttributes()
-				if diags.HasErrors() {
-					return nil, diags
-				}
-				for name, attr := range attrs {
-					req, err := parseRequirement(name, attr.Expr)
-					if err != nil {
-						return nil, fmt.Errorf("%s: %w", attr.Range, err)
-					}
-					if prior, ok := where[name]; ok {
-						return nil, fmt.Errorf("%s: provider %q is already required in %s", attr.Range, name, prior)
-					}
-					where[name] = attr.Range.String()
-					reqs[name] = req
-				}
-			}
-		}
-	}
-	return reqs, nil
-}
-
-// parseRequirement reads one entry: `{ source = ..., version = ... }`, or the
-// legacy bare version string (with the source implied, as tofu does).
-// Other keys, like configuration_aliases, are references that can't be
-// evaluated here and don't affect locking, so they're skipped.
-func parseRequirement(name string, expr hcl.Expression) (requirement, error) {
-	req := requirement{Source: "hashicorp/" + name}
-	pairs, diags := hcl.ExprMap(expr)
-	if diags.HasErrors() {
-		version, ok := literalString(expr)
+		pkg, name, ok := strings.Cut(rest, ":")
 		if !ok {
-			return req, fmt.Errorf("required_providers entry %q is neither an object nor a version string", name)
-		}
-		req.Version = version
-		return req, nil
-	}
-	for _, pair := range pairs {
-		key, ok := literalString(pair.Key)
-		if !ok || (key != "source" && key != "version") {
 			continue
 		}
-		value, ok := literalString(pair.Value)
-		if !ok {
-			return req, fmt.Errorf("`%s` of required_providers entry %q must be a literal string", key, name)
-		}
-		if key == "source" {
-			req.Source = value
-		} else {
-			req.Version = value
-		}
+		targets = append(targets, target{Kind: m[2], Label: label, Repo: repo, Package: pkg, Name: name, Path: m[1]})
 	}
-	return req, nil
-}
-
-// literalString evaluates expr with no variables in scope, as a string.
-func literalString(expr hcl.Expression) (string, bool) {
-	v, diags := expr.Value(nil)
-	if diags.HasErrors() || v.IsNull() || !v.IsKnown() || v.Type().FriendlyName() != "string" {
-		return "", false
-	}
-	return v.AsString(), true
+	return targets
 }
 
 // moduleNames gives each child module a unique, valid module name derived
