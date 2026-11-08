@@ -65,275 +65,230 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   Bazel run is `bazel test //tf/private/cmd/runner:runner_test`,
   which needs network).
 
+## Where things are documented
+
+- `README.md` is the user documentation: the rules, providers and the lock
+  ("Providers"), modules ("Modules"), the toolchain and bringing your own
+  binary ("The `tofu` binary"), the work tree and runner ("How it works"),
+  "Restrictions", "Non-goals" and "Known gaps".
+- `CONTRIBUTING.md` is the maintainer documentation: repository layout,
+  the hard invariants in short form with the public `.bzl` entry points,
+  running the tests, pinning a new OpenTofu release, formatting, and the
+  release and BCR process.
+- This file carries only what neither of those should: the sandbox
+  bootstrap above, the reasons behind the invariants, and the traps earlier
+  changes fell into. When a note here starts describing how the code works
+  rather than what must not change, move it to README or CONTRIBUTING and
+  leave a pointer. Names in backticks are for `grep`, not descriptions.
+
 ## Invariants — don't regress these
 
-- No `.terraform.lock.hcl` is accepted in `srcs`/`data`. The only lock
-  rules_tofu uses is the root module's `tf_providers.from_lock` file, which
-  `@tf_providers//:pin` writes into the user's tree. Every provider download
-  is gated on a per-platform
-  digest: the `sha256` pinned on its `tf_providers.provider(...)` tag; for
-  a tag that pins none, the OpenTofu registry's, recorded as a fact in
-  `MODULE.bazel.lock` (keyed `<source>@<version>`); for a locked provider,
-  the registry's, accepted only if it is one of the lock's `zh:` hashes
-  (`lock_sha256s` in `tf/providers/lock.bzl`). A locked provider's digests
-  are resolved and checked by its repository rule when fetched
-  (`_locked_downloads`), never in the extension, and are never facts: the
-  lock is the whole pin, so a bot that updates only `.terraform.lock.hcl`
-  (and `versions.tf`) leaves `MODULE.bazel.lock` valid.
+### Providers and the lock
+
+- The only `.terraform.lock.hcl` rules_tofu reads is the root module's
+  `from_lock` file (README, "Pinning with a lock file"; CONTRIBUTING,
+  invariant 1). None is accepted in `srcs`/`data`, and `init_action.bzl`
+  fails if one reaches a work tree: don't relax that. `ALLOWED_SRC_EXTS` in
+  `tf/private/work_tree.bzl` includes `.hcl`, so a user *can* list a lock
+  in `srcs`; the runtime rejection is the backstop. The managed lock
+  travels as `TfProviderInfo.lock` and is copied in only *after* that
+  check, as the runner does with `--lock-file`. Don't use
+  `-lockfile=readonly`: it also fails on entries a work tree doesn't use.
+- Every provider download is gated on a per-platform digest: the tag's
+  `sha256`; else the registry's, recorded as a fact in `MODULE.bazel.lock`
+  (keyed `<source>@<version>`); for a locked provider, the registry's,
+  accepted only if it is one of the lock's `zh:` hashes (`lock_sha256s`).
+  A locked provider's digests are resolved by its repository rule
+  (`_locked_downloads`), never in the extension and never as facts: the
+  lock is the whole pin, so a bot that updates only the lock and
+  `versions.tf` leaves `MODULE.bazel.lock` valid.
   `//tests/integration:lock_update_test` guards this; don't move the
-  lookup back into the extension. The table in
-  `toolchain/versions.bzl` pins tofu itself; `bazel run //tools:update_versions`
-  writes it after verifying the release's cosign signature (cosign is a
-  dev-only `http_file` in MODULE.bazel), so don't paste digests in by hand.
-  The repository cache keys on these digests. Both extensions declare
-  `reproducible = True`, so their repo specs deliberately do *not* appear in
-  `MODULE.bazel.lock`; the provider extension's facts do. Facts are validated on read
-  (`valid_cached_sha256s`) and treated as a miss if malformed, never
-  trusted blindly, and only the facts in use are returned, so stale ones
-  drop out.
-  `init_action.bzl` fails loudly if a lock file slips into the work tree;
-  don't relax that check. The managed lock is never part of the work tree:
-  it travels as `TfProviderInfo.lock` (from the copy in the hub repo), and
-  the validate action copies it in only *after* that check, as the runner
-  does with `--lock-file`. Don't use `-lockfile=readonly`: it also fails on
-  lock entries a work tree doesn't use.
-- `from_lock` details: one lock per workspace, named `.terraform.lock.hcl`.
-  Only the root module's lock counts; a dependency's `from_lock` is
-  silently ignored (never read, never an error), as OpenTofu ignores a
-  child module's lock and Cargo/npm ignore a dependency's: libraries
-  constrain, the root decides. The `@tf_providers` hub is always created
-  (so a dependency's `use_repo(tf_providers, "tf_providers")` resolves),
-  with an alias for every resolved provider; `:pin` explains itself and
-  fails when the root has no lock. A missing lock is an empty one, so `pin` can write
-  the first. A lock *entry* the extension can't use (wrong host, `zh:`
-  mismatch, version not on the registry) becomes a `_tf_provider_download`
-  with `error` set that fails when fetched, never a `fail()` in the
-  extension: that would also break `@tf_providers//:pin`, the way to fix
-  it. Only an unparseable file fails the extension.
-- The lock is parsed by `lockjson` (`tf/private/cmd/lockjson`, using
-  `hashicorp/hcl`'s `gohcl`), not in Starlark: don't reintroduce a
-  hand-written parser. An extension can't run Bazel-built tools, so
-  `tf/private/host_tools.bzl` compiles it with rules_go's host Go SDK
-  (`@go_host_compatible_sdk_label`), as Gazelle's `go_repository_tools`
-  does, into `@rules_tofu_host_tools` (a non-dev `use_repo_rule` in
-  `MODULE.bazel`). Its Go module deps come through `GOPROXY`, checked
-  against `go.sum`, under `-mod=readonly`, so `go.mod` must stay tidy for
-  `lockjson` too. `lockjson` only parses; what an entry must contain
-  (host, `version`, `zh:` hashes, no duplicates) is `lock_entries` in
-  `tf/providers/lock.bzl`, unit-tested in Starlark.
-- `pin` (`tf/private/cmd/pin`) locks against the `required_providers` of
-  every `tf_library`/`tf_deploy` in the main repository, found with
-  `bazel query` (run from inside `bazel run`; `$BAZEL` overrides the
-  binary). The query runs with `--keep_going` and accepts partial results
-  (exit 3): `deps()` follows `providers` into the hub, which has no package
-  for a provider until it is locked, so without it the first `pin` fails
-  wherever a BUILD file already names the provider (also covered by
-  `lock_update_test`). It is one query (`--output=location`, for absolute
-  paths in any repository) for the files and, unioned, the `_tf_library`
-  rules with `module_source` among the deps. Files from other repositories
-  count only in the directories `tfconfig.ModuleDirs` gives for such a
-  library, the same ones `modscan` reads, so a fetched module's examples
-  never reach the lock (`tf_modules_test` covers this). Only `.tf` files
-  in those rules count, a `versions.tf` included:
-  don't reintroduce a filesystem walk, which would have to duplicate
-  Bazel's own `.bazelignore`/deleted-package/nested-workspace handling. A
-  `versions.tf` beside the lock is strongly recommended but optional;
-  without one the libraries' constraints are all there is. It extracts only
-  the `required_providers` entries into a scratch configuration, one child
-  module per directory, so tofu combines them as for nested modules, and
-  runs `tofu get` + `tofu providers lock` there from scratch, because
-  `providers lock` keeps an existing lock's versions and has no
-  `-upgrade`. It leaves out providers the root module tags (the hub passes
-  them as `--exclude-source`), and on failure lists the constraints by
-  provider and directory, since tofu's error doesn't say where they came
-  from. The resulting `constraints` line is the combined
+  lookup back into the extension.
+- All three extensions (`tofu`, `tf_providers`, `tf_modules`) declare
+  `reproducible = True`, so their repo specs are deliberately absent from
+  `MODULE.bazel.lock`; only facts are recorded.
+  Facts are validated on read (`valid_cached_sha256s`, `valid_fact`),
+  treated as a miss if malformed, and only the facts in use are returned,
+  so stale ones drop out.
+- A dependency's `from_lock` is silently ignored (README: libraries
+  constrain, the root decides). The `@tf_providers` hub is always created,
+  so a dependency's `use_repo` resolves, and a missing lock is an empty
+  one, so `pin` can write the first. A lock *entry* the extension can't
+  use becomes a `_tf_provider_download` with `error` set that fails when
+  fetched, never a `fail()` in the extension: that would also break
+  `@tf_providers//:pin`, the way to fix it. Only an unparseable file fails
+  the extension.
+- The lock is parsed by `lockjson` (`tf/private/cmd/lockjson`, `gohcl`),
+  not in Starlark; don't reintroduce a hand-written parser. What an entry
+  must contain is `lock_entries` in `tf/providers/lock.bzl`, unit-tested in
+  Starlark. An extension can't run Bazel-built tools, so
+  `tf/private/host_tools.bzl` compiles `lockjson` and `modscan` with the
+  host Go SDK into `@rules_tofu_host_tools` (a non-dev `use_repo_rule`),
+  under `-mod=readonly` via `GOPROXY`: `go.mod` and `go.sum` must stay tidy
+  for them too.
+- `pin` (`tf/private/cmd/pin`; behaviour in README, "Providers") finds
+  `required_providers` with one `bazel query` (`--output=location`,
+  `--keep_going`, exit 3 accepted: `deps()` follows `providers` into a hub
+  that has no package for a provider until it is locked; `$BAZEL`
+  overrides the binary). Don't reintroduce a filesystem walk, which would
+  have to duplicate Bazel's `.bazelignore`, deleted-package and
+  nested-workspace handling. Files from other repositories count only in
+  the directories `tfconfig.ModuleDirs` gives, the same ones `modscan`
+  reads, so a fetched module's examples never reach the lock
+  (`tf_modules_test`). It locks a scratch configuration from scratch,
+  because `tofu providers lock` keeps an existing lock's versions and has
+  no `-upgrade`, and leaves out providers the root tags
+  (`--exclude-source`). The `constraints` line it writes is the combined
   one; Renovate and Dependabot write their own, and nothing verifies it.
-- Provider repos vendor the whole unpacked zip (`package_files`), not just
-  the binary, and `materialize_plugin_tree` symlinks all of it: tofu checks
-  a lock's `h1:` hash over the entire package directory, so a binary-only
-  plugin tree fails `tofu init` against a lock.
-- Both module extensions call `module_ctx.extension_metadata` with the
-  dev/non-dev split keyed on `root_module_has_non_dev_dependency`, so
-  `bazel mod tidy` can manage downstream `use_repo` lines. Root direct
-  deps are `tofu_toolchains` only (never the internal `tofu_<platform>`
-  repos) and, for providers, only `tf_providers` (the hub), whenever the
-  root uses the extension. The per-provider `tf_providers_<ns>_<name>`
-  repos are private implementation details: they're never reported as
-  direct deps, their files are private, and `:provider` is visible only to
-  `@tf_providers//:__subpackages__` (the hub's aliases). BUILD files name
-  every provider as `@tf_providers//<ns>/<name>`; don't document or reintroduce
-  the per-provider labels (removing them was a breaking change).
-  `bazel mod tidy` must leave `MODULE.bazel` unchanged; CI's lint job checks it.
-- The tofu extension resolves `tofu.version` as "root arbitrates": >1
-  root tag fails, one root tag wins unconditionally, agreeing non-root
-  requests are honoured, disagreeing non-root requests fail naming the
-  versions and modules, no tags means `DEFAULT_VERSION`. The branching
-  lives in `toolchain/version_resolution.bzl` as a pure function that
-  returns `struct(version, error)` — the extension owns the `fail()` so
-  the logic stays unit-testable from `//toolchain/tests`. Don't fold it
-  back inline, and don't make it last-write-wins. The providers
-  extension stays "root wins, else highest version": a provider is a
-  per-configuration artefact (MVS-shaped), the tofu binary is one global
-  tool.
-- Where a provider zip comes from is decided by the pure functions in
-  `tf/providers/source.bzl` (tested from `//tf/providers/tests`):
-  `url_template` if set, else the OpenTofu registry's download endpoint,
-  for every namespace including `hashicorp/`, so rules_tofu vendors the
-  binaries `tofu init` would fetch. Don't reintroduce a special case for
-  releases.hashicorp.com: those are different builds with different
-  checksums. The registry's `shasum` is checked against a pin before the
-  zip is downloaded; the digest still gates the download itself. A tag
-  with `url_template` must pin `sha256`. Sources are lower-cased (as
-  OpenTofu normalizes addresses) for grouping, the repo name and the
-  plugin tree.
-- `tf_library` validates inline — the validate stamp goes in
+- Provider repos vendor the whole unpacked zip (`package_files`) and
+  `materialize_plugin_tree` symlinks all of it: a lock's `h1:` hash covers
+  the entire package directory, so a binary-only tree fails `tofu init`.
+- Where a zip comes from is the pure functions in `tf/providers/source.bzl`
+  (tested in `//tf/providers/tests`): `url_template` if set, else the
+  OpenTofu registry, for every namespace including `hashicorp/`. Don't
+  reintroduce a special case for releases.hashicorp.com: those are
+  different builds with different checksums. A tag with `url_template`
+  must pin `sha256`. Sources are lower-cased, as OpenTofu normalises them.
+- The per-provider `tf_providers_<ns>_<name>` repos are private: never
+  reported as direct deps, files private, `:provider` visible only to the
+  hub. BUILD files name providers as `@tf_providers//<ns>/<name>`; don't
+  document or reintroduce the per-provider labels (removing them was a
+  breaking change).
+
+### Modules
+
+- Modules are never fetched at build or run time (README, "How it works").
+  Every rule writes `.terraform/modules/modules.json` with the
+  `//tf/private/cmd/modules` action and runs `tofu init -get=false`. Don't
+  drop `-get=false`: without it a call whose `version` rejects the
+  manifest's is silently re-downloaded, and local calls rely on the
+  manifest too. The format is tofu's, so `module_dependency_<version>_test`
+  runs for every entry of `KNOWN_VERSIONS`.
+- Every module `source` is parsed by `tfconfig.ParseSource` in Go, as
+  OpenTofu's `addrs.ParseModuleSource` does: registry addresses through
+  OpenTofu's `registry-address/v2` (pinned to OpenTofu's version), the git
+  and archive forms by hand, tested against OpenTofu's cases. The extension
+  asks `modscan parse`; don't parse sources anywhere else, Starlark
+  included. go-getter is deliberately not a dependency: its root package
+  pulls the S3 and GCS SDKs into every user's host-tools build. Version
+  constraints are tofu's to check against `module_version`; don't
+  reimplement them. Matching calls to declared modules is `tfconfig.Match`,
+  shared by `modscan` and the manifest tool, never Starlark.
+- Files from other repositories sit at `external/<canonical repo>/`
+  (`work_tree_path`); a relative `source` may not cross that boundary,
+  since canonical names are Bazel's to change. Rule paths include
+  `label.workspace_root`, so a library in another repository builds on its
+  own.
+- `tf_modules` (`tf/modules/extensions.bzl`; usage in README, "Modules")
+  gives each module one `tf_library` (`:module`, with `//:files` as data)
+  aliased as `@tf_modules//<path>`; submodules are `//<subdir>` against it,
+  never targets of their own, because the hub can't list directories
+  without fetching every module. The per-module repos are private, like
+  the provider repos. Every fetch is pinned: git by commit (a `?ref=` is
+  resolved with `git ls-remote` and recorded as a fact), registry modules
+  by location plus commit or digest (a fact keyed `<path>@<version>`),
+  archives by a required `sha256`. Don't fetch by tag: tags move. A module
+  version bump therefore changes `MODULE.bazel.lock`, unlike a provider
+  lock update; the README tells bots to run
+  `bazel mod deps --lockfile_mode=update`. The repository rule deletes
+  upstream Bazel files and runs `modscan`; an undeclared call fails the
+  fetch naming the tag to add. Generated libraries name providers as
+  `@tf_providers//...`, which they can see only because rules_tofu's own
+  MODULE.bazel imports the hub through a non-dev `use_extension`; keep
+  that. `//tests/integration:tf_modules_test` covers git (with a moved
+  tag), archive and registry modules; `examples/modules/{label,stack,git}`
+  use real modules, which CI plans: keep them small (light providers only).
+
+### Extensions and the toolchain
+
+- All three extensions call `module_ctx.extension_metadata` with the
+  dev/non-dev split keyed on `root_module_has_non_dev_dependency`. Root
+  direct deps are the hubs only, `tofu_toolchains`, `tf_providers` and
+  `tf_modules`, never the internal per-platform, per-provider or
+  per-module repos. `bazel mod tidy` must leave
+  `MODULE.bazel` unchanged; CI's lint job checks it.
+- `tofu.version` is "root arbitrates": more than one root tag fails, one
+  root tag wins unconditionally, agreeing non-root requests are honoured,
+  disagreeing ones fail naming the versions and modules, no tags means
+  `DEFAULT_VERSION`. The branching is a pure function in
+  `toolchain/version_resolution.bzl` returning `struct(version, error)`,
+  tested from `//toolchain/tests`; the extension owns the `fail()`. Don't
+  fold it inline or make it last-write-wins. Providers stay "root wins,
+  else highest version": a provider is a per-configuration artefact, the
+  tofu binary is one global tool.
+- OpenTofu is downloaded, not built from source, and that is a decision,
+  not a gap (`versions.bzl` has the reasoning; README, "Non-goals"). Don't
+  reintroduce a from-source TODO. `toolchain/versions.bzl` is written by
+  `bazel run //tools:update_versions` after cosign verification
+  (CONTRIBUTING, "Pinning a new OpenTofu release"); don't paste digests in
+  by hand. The escape hatch is a root module registering its own
+  `opentofu_toolchain` (README, "The `tofu` binary");
+  `//tests/integration:custom_toolchain_test` guards that root
+  registrations keep winning. Running the `terraform` binary is a
+  documented non-goal, not a feature to add on request without redesigning
+  `tf/providers/source.bzl`.
+- `bazel_compatibility = [">=8.5.0"]` is the supported floor: 8.5 is the
+  first Bazel with extension facts, so `tf/providers/extensions.bzl` uses
+  `module_ctx.facts` unconditionally (no `hasattr` fallback). CI runs Linux
+  and macOS on the pinned version and 8.5.0; the uncommitted-changes check
+  runs only on the pinned jobs, because other versions rewrite
+  `MODULE.bazel.lock` in their own format. Raising the floor means bumping
+  `bazel_compatibility`, the CI matrix and the README together.
+
+### Rules and the runner
+
+- `tf_library` validates inline: the validate stamp is in
   `DefaultInfo.files` and `bazel build :foo_lib` is the validation
   contract. Don't add a `:foo.validate` sub-target or a `validate_test`
-  macro flag. The only test target a `tf_library` generates is
-  `:foo.fmt_check`.
-- `_ALLOWED_EXTS` in `library.bzl` / `deploy.bzl` includes `.hcl`, which
-  technically permits a user to list `.terraform.lock.hcl` in `srcs`.
-  The runtime rejection in `init_action.bzl` is the backstop — keep it.
-- The build-time validate action and the runtime runner both pick the
-  **exec-platform** provider binary. Cross-compilation to a different
-  target platform is out of scope and isn't worth designing around
-  speculatively.
-- The runner expects `--plugin-dir` to be required, and `os.MkdirAll`s
-  it on first use so the zero-providers case still presents tofu with
-  an extant directory. Don't make the flag optional.
-- The runner refuses `apply`/`destroy` when no backend/cloud block is
-  detected and `tf_deploy(allow_ephemeral_state = ...)` is unset: local
-  state under `bazel-bin` is machine-local and `bazel clean`-able, so
-  applying against it orphans live infra. The gate lives in the Go runner
-  (backend detection is a runtime filesystem scan), fires before any tofu
-  process starts or the state dir is created, and `plan` stays ungated.
-  Don't downgrade it to a warning.
-- Shared materialization helpers live in `tf/private/work_tree.bzl`
+  flag; the only generated test is `:foo.fmt_check`.
+- The validate action and the runner both pick the **exec-platform**
+  provider binary (README, "Known gaps"). Cross-compilation to another
+  target platform is out of scope; don't design around it speculatively.
+- The runner requires `--plugin-dir` and `os.MkdirAll`s it, so the
+  zero-providers case still gives tofu an extant directory. Don't make the
+  flag optional.
+- The runner refuses `apply`/`destroy` with no backend/cloud block unless
+  `allow_ephemeral_state` is set (README, "State and backends"): local
+  state under `bazel-bin` is `bazel clean`-able, so applying against it
+  orphans live infrastructure. The gate is in the Go runner (backend
+  detection is a filesystem scan), fires before any tofu process starts or
+  the state dir exists, and `plan` stays ungated. Don't downgrade it to a
+  warning.
+- Materialisation helpers live in `tf/private/work_tree.bzl`
   (`materialize`, `materialize_plugin_tree`, `work_tree_root`,
-  `plugin_tree_root`). Both `library.bzl` and `deploy.bzl` should go
-  through them; don't reintroduce inline copies. The plugin tree is a
-  sibling of the work tree (`<name>.plugins/`, not nested under
-  `<name>.work/`), so the validate action's work-tree copy never touches
-  provider binaries.
-- `module()` in `MODULE.bazel` deliberately has no `version`: the release
-  tag is the single source of truth, and publish-to-bcr (or BCR's
-  `add_module` on the manual path) patches the real version into the
-  registry entry. Don't add a version back, and don't hardcode release
-  versions in README/docstring snippets — use the `X.Y.Z` placeholder
-  plus a registry link. Keep comments out of the `module(...)` block:
-  publish-to-bcr inserts `version` before the first `)` after `module(`,
-  so a parenthesis in an in-block comment corrupts the BCR entry (this
-  broke 0.1.1's BCR submission).
-- `bazel_skylib` is a `dev_dependency`, so the Starlark unit tests that
-  load it live in the `//toolchain/tests`, `//tf/providers/tests` and
-  `//tf/modules/tests` subpackages: `toolchain/BUILD.bazel` (it holds
-  `:toolchain_type`), `tf/providers/BUILD.bazel` and
-  `tf/modules/BUILD.bazel` are loaded by downstream modules and must never
-  reference a dev-only repo.
-- `bazel_compatibility = [">=8.5.0"]` in `module()` is the supported
-  floor: 8.5 is the first Bazel with extension facts, so
-  `tf/providers/extensions.bzl` uses `module_ctx.facts` unconditionally
-  (no `hasattr` fallback). CI runs Linux and macOS on both the pinned
-  version and 8.5.0; the uncommitted-changes check only runs on the pinned
-  jobs, because other Bazel versions rewrite `MODULE.bazel.lock` in their
-  own format. Raising the floor means bumping `bazel_compatibility`, the CI
-  matrix and the README together.
-- Modules are never fetched. Every rule writes
-  `.terraform/modules/modules.json` (tofu's own install record) with the
-  `//tf/private/cmd/modules` action, listing every module call from the root
-  down, local ones included, and both the validate action and the runner
-  copy it into place and run `tofu init -get=false`. Don't drop
-  `-get=false`: without it a call whose `version` rejects the manifest's is
-  silently re-downloaded, and local calls rely on the manifest too. A
-  non-local call resolves to the `tf_library` in `deps` (transitive) whose
-  `module_source` is the same package, at the same `//<subdir>` or above it
-  (`tfconfig.Match`). Every `source` is read by `tfconfig.ParseSource`, as
-  OpenTofu's `addrs.ParseModuleSource` reads it: registry addresses through
-  OpenTofu's own `registry-address/v2` library (pinned to the version
-  OpenTofu's `go.mod` uses), and only the go-getter forms rules_tofu can
-  fetch (git and archives) by hand, tested against OpenTofu's own cases.
-  Don't parse sources anywhere else, Starlark included: the extension asks
-  `modscan parse`. go-getter itself is deliberately not a dependency: its
-  root package pulls in the S3 and GCS SDKs, which every user would download
-  when the host tools are compiled. Version constraints are tofu's to
-  check, against `module_version`; don't reimplement them. The manifest
-  format is internal to tofu, so `module_dependency_<version>_test` runs for
-  every entry of `KNOWN_VERSIONS`. Files from other repositories sit at
-  `external/<canonical repo>/` in the work tree (`work_tree_path`); a
-  relative `source` may not cross into or out of one, since canonical names
-  are Bazel's to change. Rule paths (`work_tree_root`, `package_dir`, the
-  runner's runfiles paths) include `label.workspace_root`, so a library
-  in another repository builds on its own.
-- `tf_modules` (`tf/modules/extensions.bzl`) gives each module one
-  `tf_library` (`:module`, in the module's directory, the rest of the files
-  as data via `//:files`), aliased by the hub as `@tf_modules//<path>`;
-  submodules are reached with `//<subdir>` against it, never with targets of
-  their own, because the hub can't list a module's directories without
-  fetching every module. The per-module `tf_modules_<path>` repos are
-  private, like the provider repos. Every fetch is pinned: git by commit
-  (`commit`, or the `?ref=` resolved with `git ls-remote` and recorded as a
-  fact keyed by the source), registry modules by the registry's location
-  plus its commit or digest (a fact keyed `<path>@<version>`), archives by a
-  required `sha256`. Don't fetch by tag at repository time: tags move.
-  Facts are validated on read (`valid_fact`). The repository rule deletes
-  upstream Bazel files, then runs `modscan` (compiled with `lockjson` by
-  `tf/private/host_tools.bzl` into `@rules_tofu_host_tools`, so its watched
-  sources include `tfconfig` and `flags`) to find the providers and calls of
-  the directories `tfconfig.ModuleDirs` gives (the module's own, its
-  `modules/**` and what they reach locally; `pin` uses the same); matching
-  calls to declared modules is `tfconfig.Match` in Go, shared with the
-  manifest tool, not reimplemented in Starlark. An undeclared call fails the
-  fetch naming the tag to add. Generated libraries name providers as
-  `@tf_providers//...`, which they can only see because rules_tofu's
-  MODULE.bazel imports the hub through a non-dev `use_extension`; keep that.
-  `//tests/integration:tf_modules_test` covers git (with a moved tag),
-  archive and registry modules offline but for the registry itself, and
-  `examples/modules/{label,stack,git}` use real modules from the registry and
-  GitHub, which CI plans: keep them small (light providers only). Unlike
-  a provider lock update, a module version bump changes MODULE.bazel.lock
-  (a new fact), so a bot's PR needs `bazel mod deps --lockfile_mode=update`;
-  the README says so. That is the price of pinning commits on first use:
-  tofu has no module lock to carry them instead.
-- The `.bazelversion` copies (root, `e2e/smoke`,
-  `tests/integration/broken_workspace`,
-  `tests/integration/broken_module`,
-  `tests/integration/lock_dependency`,
-  `tests/integration/lock_update`,
-  `tests/integration/module_dependency`,
-  `tests/integration/tf_modules`) must stay byte-identical: nested
+  `plugin_tree_root`); `library.bzl` and `deploy.bzl` go through them,
+  never inline copies. The plugin tree is a sibling of the work tree
+  (`<name>.plugins/`), so the validate action's work-tree copy never
+  touches provider binaries.
+
+### Repository hygiene
+
+- `module()` in `MODULE.bazel` has no `version`; the tag is the source of
+  truth (CONTRIBUTING, "Releasing"). Don't hardcode release versions in
+  README or docstrings: use `X.Y.Z` plus a registry link. Keep comments
+  out of the `module(...)` block: publish-to-bcr inserts `version` before
+  the first `)` after `module(`, so a parenthesis in a comment corrupts the
+  BCR entry (this broke 0.1.1's submission).
+- `bazel_skylib` is a `dev_dependency`, so Starlark unit tests live in the
+  `//toolchain/tests`, `//tf/providers/tests` and `//tf/modules/tests`
+  subpackages. `toolchain/BUILD.bazel` (it holds `:toolchain_type`),
+  `tf/providers/BUILD.bazel` and `tf/modules/BUILD.bazel` are loaded by
+  downstream modules and must never reference a dev-only repo.
+- The release tarball's exclusions are listed in CONTRIBUTING
+  ("Releasing") and `release_prep.sh`. The pathspecs are prefix-anchored,
+  so a `tests` package nested under a shipped directory needs its own
+  exclusion, and anything loading a `dev_dependency` must not ship. The
+  `//docs` targets (CONTRIBUTING, invariant 3) take `all_files` filegroups
+  as `deps`, not `bzl_library`, for the same reason.
+- The `.bazelversion` copies (root, `e2e/smoke` and every
+  `tests/integration/*` workspace) must stay byte-identical: nested
   modules are separate bazelisk boundaries that never see the root pin.
-  CI's lint job `cmp`s every nested copy against the root; bump them all
-  together.
+  CI's lint job `cmp`s them against the root; bump them all together.
 - The `--deleted_packages` lines in `.bazelrc` are owned by
   `bazel run @rules_bazel_integration_test//tools:update_deleted_packages`,
-  which rewrites *every* non-comment `--deleted_packages` line with an
-  auto-discovered list covering all nested workspaces (including
-  `e2e/smoke`). Rerun it after adding/removing nested packages; don't
-  hand-edit the lists or add separate one-off lines.
-- The release tarball (`release_prep.sh`) excludes `examples/`, `tests/`,
-  `tools/`, `toolchain/tests/`, `tf/providers/tests/`, `tf/modules/tests/`
-  and `docs/` but must keep `e2e/` and `.bcr/` — BCR presubmit
-  reads the test module and templates from the extracted archive. The
-  pathspecs are prefix-anchored, so a package named `tests` nested under a
-  shipped directory needs its own exclusion; anything loading a
-  `dev_dependency` must not ship.
-- `//docs` holds a `starlark_doc_extract` per public `.bzl` file;
-  `release_prep.sh` ships their `.binaryproto`s as
-  `rules_tofu-<tag>.docs.tar.gz`, the BCR entry's `docs_url`, which
-  registry.bazel.build renders. A new public `.bzl` entry point needs a
-  target there. Its `deps` are the `all_files` filegroups, not
-  `bzl_library`, so shipped packages stay free of dev-only repos.
-- OpenTofu is downloaded, not built from source, and that is a decision,
-  not a gap (the `versions.bzl` docstring has the reasoning: a bundled
-  `go_deps` build would push OpenTofu's ~300 modules and its `hcl`
-  `replace` into every downstream module graph). Don't reintroduce a
-  from-source TODO. The escape hatch is a root module registering its own
-  `opentofu_toolchain` (README, "The `tofu` binary"), which
-  `//tests/integration:custom_toolchain_test` guards: root registrations
-  must keep winning over the extension's. Running the `terraform` binary is
-  a documented non-goal (the registry hostname is baked into the plugin
-  tree and the lock), not a feature to add on request without redesigning
-  `tf/providers/source.bzl`.
+  which rewrites every non-comment line with an auto-discovered list
+  covering all nested workspaces. Rerun it after adding or removing nested
+  packages; don't hand-edit the lists or add one-off lines.
 
 ## Branch / PR conventions
 
