@@ -8,6 +8,11 @@ module "subnet" {
   cidr   = "10.0.0.0/24"
 }
 
+module "peering" {
+  source = "git::file://@FIXTURES@/network.git//vpc/peering?ref=v1.0.0"
+  peer   = "hub"
+}
+
 module "dns" {
   source = "file://@FIXTURES@/dns.tar.gz"
   zone   = "example.com"
@@ -20,5 +25,5 @@ module "label" {
 }
 
 output "summary" {
-  value = "${module.vpc.id} ${module.subnet.cidr} ${module.dns.fqdn} ${module.label.id}"
+  value = "${module.vpc.id} ${module.subnet.cidr} ${module.dns.fqdn} ${module.label.id} ${module.peering.peer}"
 }

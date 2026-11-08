@@ -97,6 +97,13 @@ func configFiles(dir string) (primary, overrides []string, err error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	primary, overrides = splitOverrides(files)
+	return primary, overrides, nil
+}
+
+// splitOverrides separates the `_override` files of files, which tofu
+// merges over the rest, from the primary ones. Each group keeps its order.
+func splitOverrides(files []string) (primary, overrides []string) {
 	for _, f := range files {
 		if isOverride(filepath.Base(f)) {
 			overrides = append(overrides, f)
@@ -104,7 +111,7 @@ func configFiles(dir string) (primary, overrides []string, err error) {
 			primary = append(primary, f)
 		}
 	}
-	return primary, overrides, nil
+	return primary, overrides
 }
 
 // HasConfig reports whether dir holds any configuration file.
@@ -139,6 +146,21 @@ func ReadCalls(dir string) ([]Call, error) {
 	if err != nil {
 		return nil, err
 	}
+	return readCalls(primary, overrides)
+}
+
+// ReadCallsFrom parses the module blocks of files, which share a module
+// directory, as ReadCalls does for a directory. A `.tf` or `.tf.json` file
+// that a `.tofu` or `.tofu.json` file of files shadows is skipped, as tofu
+// skips it (see Effective).
+func ReadCallsFrom(files []string) ([]Call, error) {
+	primary, overrides := splitOverrides(Effective(files))
+	sort.Strings(primary)
+	sort.Strings(overrides)
+	return readCalls(primary, overrides)
+}
+
+func readCalls(primary, overrides []string) ([]Call, error) {
 	parser := hclparse.NewParser()
 	var calls []Call
 	index := map[string]int{}
@@ -247,14 +269,7 @@ func RequiredProviders(dir string) ([]string, error) {
 // string. Other keys, like configuration_aliases, are references that can't
 // be evaluated here and don't name a provider, so they're skipped.
 func ReadRequiredProviders(files []string) (map[string]Requirement, error) {
-	var primary, overrides []string
-	for _, f := range Effective(files) {
-		if isOverride(filepath.Base(f)) {
-			overrides = append(overrides, f)
-		} else {
-			primary = append(primary, f)
-		}
-	}
+	primary, overrides := splitOverrides(Effective(files))
 	sort.Strings(primary)
 	sort.Strings(overrides)
 
@@ -355,15 +370,26 @@ func LiteralString(expr hcl.Expression) (string, bool) {
 // ModuleDirs lists the directories that a module's library serves, relative
 // to repo: the module's own (moduleDir, relative to repo, "" for its root),
 // every directory below its `modules/` (the standard place for submodules)
-// that holds configuration, and every directory those reach with local
-// `source` paths that stay inside repo. Examples and tests are left out
-// unless something calls them. The result is sorted.
-func ModuleDirs(repo, moduleDir string) ([]string, error) {
+// that holds configuration, each directory of called (relative to repo) that
+// holds configuration, and every directory those reach with local `source`
+// paths that stay inside repo. Examples and tests are left out unless
+// something calls them: called is for the submodules outside `modules/` that
+// callers reach with `//<subdir>`, which only the callers know. The result is
+// sorted.
+func ModuleDirs(repo, moduleDir string, called ...string) ([]string, error) {
 	moduleDir = strings.Trim(moduleDir, "/")
 	if !HasConfig(filepath.Join(repo, filepath.FromSlash(moduleDir))) {
 		return nil, fmt.Errorf("%q holds no .tf, .tf.json, .tofu or .tofu.json files", "/"+moduleDir)
 	}
 	pending := []string{moduleDir}
+	for _, dir := range called {
+		dir = strings.Trim(dir, "/")
+		// A called directory without configuration fails the caller's build,
+		// which says so; it isn't ours to report.
+		if HasConfig(filepath.Join(repo, filepath.FromSlash(dir))) {
+			pending = append(pending, dir)
+		}
+	}
 	submodules := filepath.Join(repo, filepath.FromSlash(path.Join(moduleDir, "modules")))
 	err := filepath.WalkDir(submodules, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {

@@ -206,8 +206,9 @@ func TestReadRequiredProviders_TofuShadowsTf(t *testing.T) {
 }
 
 // ModuleDirs lists the module's directory, the configured directories under
-// its modules/, and what local calls reach, backslash paths included; a call
-// out of the repository is ignored, and examples count only when called.
+// its modules/, the called directories that hold configuration, and what
+// local calls reach, backslash paths included; a call out of the repository
+// is ignored, and examples count only when called.
 func TestModuleDirs(t *testing.T) {
 	repo := t.TempDir()
 	for name, content := range map[string]string{
@@ -217,6 +218,9 @@ func TestModuleDirs(t *testing.T) {
 		"modules/README.md":        ``,
 		"examples/called/main.tf":  ``,
 		"examples/ignored/main.tf": ``,
+		"tools/main.tf":            `module "deep" { source = "./deep" }`,
+		"tools/deep/main.tf":       ``,
+		"docs/README.md":           ``,
 	} {
 		p := filepath.Join(repo, filepath.FromSlash(name))
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
@@ -233,6 +237,15 @@ func TestModuleDirs(t *testing.T) {
 	want := []string{"", "examples/called", "lib/a", "modules/sub"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %v, want %v", got, want)
+	}
+	// Called directories are followed too; one without configuration is skipped.
+	got, err = ModuleDirs(repo, "", "tools/", "docs", "examples/called")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = []string{"", "examples/called", "lib/a", "modules/sub", "tools", "tools/deep"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("with called dirs: got %v, want %v", got, want)
 	}
 }
 

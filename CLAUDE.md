@@ -130,15 +130,19 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   under `-mod=readonly` via `GOPROXY`: `go.mod` and `go.sum` must stay tidy
   for them too.
 - `pin` (`tf/private/cmd/pin`; behaviour in README, "Providers") finds
-  `required_providers` with one `bazel query` (`--output=location`,
-  `--keep_going`, exit 3 accepted: `deps()` follows `providers` into a hub
-  that has no package for a provider until it is locked; `$BAZEL`
-  overrides the binary). Don't reintroduce a filesystem walk, which would
-  have to duplicate Bazel's `.bazelignore`, deleted-package and
-  nested-workspace handling. Files from other repositories count only in
-  the directories `tfconfig.ModuleDirs` gives, the same ones `modscan`
-  reads, so a fetched module's examples never reach the lock
-  (`tf_modules_test`). It locks a scratch configuration from scratch,
+  `required_providers` with one `bazel query` (`--output=streamed_jsonproto`
+  with `module_source` as the only rule attribute, `--keep_going`, exit 3
+  accepted: `deps()` follows `providers` into a hub that has no package for
+  a provider until it is locked; `$BAZEL` overrides the binary). Don't
+  reintroduce a filesystem walk, which would have to duplicate Bazel's
+  `.bazelignore`, deleted-package and nested-workspace handling. Files from
+  other repositories count only in the directories `tfconfig.ModuleDirs`
+  gives, the ones `modscan` reads plus the submodules outside `modules/`
+  that counted files call with `//<subdir>` (resolved with `tfconfig.Match`
+  like the manifest, to a fixpoint), so a fetched module's examples never
+  reach the lock (`tf_modules_test`). Every `_tf_library` in `deps` is
+  queried, not only those with `module_source` (issue #60). It locks a
+  scratch configuration from scratch,
   because `tofu providers lock` keeps an existing lock's versions and has
   no `-upgrade`, and leaves out providers the root tags
   (`--exclude-source`). The `constraints` line it writes is the combined

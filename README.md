@@ -178,9 +178,11 @@ bazel run @tf_providers//:pin
 ```
 
 `pin` locks every provider that any `tf_library` or `tf_deploy` in the
-workspace requires, or any module they call (from `tf_modules` or another
-Bazel repository), for `linux_amd64`, `linux_arm64`, `darwin_amd64`,
-`darwin_arm64` and `windows_amd64` (`-platform=<os>_<arch>` chooses others).
+workspace requires, or any library they depend on (from `tf_modules` or
+another Bazel repository: the module itself, its `modules/`, the submodules
+they call with `//<subdir>`, and what those call locally, but not its
+examples), for `linux_amd64`, `linux_arm64`, `darwin_amd64`, `darwin_arm64`
+and `windows_amd64` (`-platform=<os>_<arch>` chooses others).
 Each provider is locked at the newest version that satisfies every
 `required_providers` constraint in the workspace. If the constraints
 conflict, `pin` lists them by directory and leaves the lock unchanged.
@@ -506,8 +508,10 @@ Each module is pinned, so a tag that moves later changes nothing:
 git sources are fetched with `git`, which must be on the `PATH`.
 
 A module's `tf_library` carries the providers its `required_providers`
-name, so callers don't list them. The root module still pins them, with
-tags or in its lock, which `pin` writes to cover them. A module that calls
+name, and its `modules/` submodules', so callers don't list them. The root
+module still pins them, with tags or in its lock, which `pin` writes to
+cover them (the submodules you call by `//<subdir>` outside `modules/`
+included; list those submodules' providers on the caller). A module that calls
 other modules by address needs them declared too: fetching it fails
 otherwise, naming the `tf_modules.module` to add. Each module has one
 version per build. For a registry module the root module's tag wins, else
