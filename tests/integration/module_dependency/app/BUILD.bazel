@@ -7,11 +7,11 @@ tf_deploy(
     deps = ["@network_module//vpc"],
 )
 
-# The deploy's test loads the network module from a `.tofutest.hcl` run block,
+# The deploy's test loads the dns module from a `.tofutest.hcl` run block,
 # so building it checks the manifest key tofu uses for that extension.
 tf_test(
     name = "app_test",
-    srcs = ["tests/vpc.tofutest.hcl"],
+    srcs = ["tests/dns.tofutest.hcl"],
     fmt_test = False,
     module = ":app",
 )
