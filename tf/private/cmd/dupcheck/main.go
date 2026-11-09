@@ -6,9 +6,13 @@
 // Inputs:
 //   - --vars-key=<name> (repeatable) — one entry per key in the deploy's
 //     `vars` dict, known statically.
-//   - --var-file=<label>:<path> (repeatable) — `label` is a human-readable
-//     identifier, typically the file's workspace-relative path; `path` points
-//     at a `.tfvars.json` or `.tfvars` file whose top-level keys are checked.
+//   - --var-file=<path> (repeatable) — a `.tfvars.json` or `.tfvars` file
+//     whose top-level keys are checked.
+//   - --var-file-label=<label> (repeatable) — a human-readable identifier
+//     for the --var-file at the same position, typically the file's
+//     workspace-relative path. Must be given exactly once per --var-file.
+//     The two travel separately because a colon is legal in a Bazel target
+//     name, and so in both, which makes a `label:path` string ambiguous.
 //   - --stamp=<path> — file touched on success.
 package main
 
@@ -25,23 +29,30 @@ import (
 )
 
 var (
-	stamp    = flag.String("stamp", "", "path to a stamp file to touch on success")
-	varsKeys = flags.StringList("vars-key", "key from the deploy's `vars` dict (repeatable)")
-	varFiles = flags.StringList("var-file", "`label:path` of a .tfvars.json or .tfvars file (repeatable)")
+	stamp         = flag.String("stamp", "", "path to a stamp file to touch on success")
+	varsKeys      = flags.StringList("vars-key", "key from the deploy's `vars` dict (repeatable)")
+	varFiles      = flags.StringList("var-file", "`path` of a .tfvars.json or .tfvars file (repeatable)")
+	varFileLabels = flags.StringList("var-file-label", "human-readable `label` for the --var-file at the same position (repeatable)")
 )
 
 func main() {
 	flag.Parse()
 
-	if err := run(*varsKeys, *varFiles, *stamp); err != nil {
+	if err := run(*varsKeys, *varFiles, *varFileLabels, *stamp); err != nil {
 		fmt.Fprintln(os.Stderr, "rules_tofu: "+err.Error())
 		os.Exit(1)
 	}
 }
 
-func run(varsKeys, varFiles []string, stamp string) error {
+func run(varsKeys, varFiles, varFileLabels []string, stamp string) error {
 	if stamp == "" {
 		return errors.New("--stamp is required")
+	}
+	if len(varFileLabels) != len(varFiles) {
+		return fmt.Errorf(
+			"--var-file-label must be given once per --var-file: got %d label(s) for %d file(s)",
+			len(varFileLabels), len(varFiles),
+		)
 	}
 
 	seen := make(map[string]string, len(varsKeys))
@@ -55,11 +66,8 @@ func run(varsKeys, varFiles []string, stamp string) error {
 		seen[k] = "vars"
 	}
 
-	for _, entry := range varFiles {
-		label, path, ok := strings.Cut(entry, ":")
-		if !ok {
-			return fmt.Errorf("--var-file expected `label:path`, got %q", entry)
-		}
+	for i, path := range varFiles {
+		label := varFileLabels[i]
 		keys, err := readVarFileKeys(path)
 		if err != nil {
 			return fmt.Errorf("read var_file %s: %w", label, err)

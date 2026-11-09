@@ -30,11 +30,7 @@ def tf_check_var_files(ctx, vars_keys, var_files):
     args = ctx.actions.args()
     args.add("--stamp", stamp)
     args.add_all(vars_keys, before_each = "--vars-key")
-    args.add_all(
-        var_files,
-        before_each = "--var-file",
-        map_each = _var_file_label_path,
-    )
+    args.add_all(var_files, map_each = _var_file_flags)
 
     ctx.actions.run(
         executable = checker,
@@ -46,8 +42,11 @@ def tf_check_var_files(ctx, vars_keys, var_files):
     )
     return stamp
 
-def _var_file_label_path(f):
+def _var_file_flags(f):
     # `short_path` is the workspace-relative path, which is the most
     # human-recognizable identifier we can hand the user in an error message.
     # `path` is the exec-root-relative path the action will actually read.
-    return "{label}:{path}".format(label = f.short_path, path = f.path)
+    # They travel as two flags, paired by position, because a colon is legal
+    # in a target name and so in both, which makes any `label:path` string
+    # ambiguous (issue #62).
+    return ["--var-file-label=" + f.short_path, "--var-file=" + f.path]
