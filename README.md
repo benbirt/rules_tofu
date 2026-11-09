@@ -211,8 +211,11 @@ they call with `//<subdir>`, and what those call locally, but not its
 examples), for `linux_amd64`, `linux_arm64`, `darwin_amd64`, `darwin_arm64`
 and `windows_amd64` (`-platform=<os>_<arch>` chooses others).
 Each provider is locked at the newest version that satisfies every
-`required_providers` constraint in the workspace. If the constraints
-conflict, `pin` lists them by directory and leaves the lock unchanged.
+`required_providers` constraint in the workspace. Constraints are combined
+by the provider's source, never by the local name, so two targets in one
+package can each require a provider in a file of their own. If the
+constraints conflict, `pin` lists them by directory and leaves the lock
+unchanged.
 
 **Recommended: pin exact versions in a `versions.tf` beside the lock.** This
 is optional, and follows

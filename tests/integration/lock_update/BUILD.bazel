@@ -7,3 +7,13 @@ tf_library(
     fmt_test = False,
     providers = ["@tf_providers//hashicorp/null"],
 )
+
+# A second root module in the package, requiring the provider under the same
+# local name with a constraint of its own: pin reads the package's files
+# together, and must lock against both (issue #99).
+tf_library(
+    name = "floor",
+    srcs = ["floor.tf"],
+    fmt_test = False,
+    providers = ["@tf_providers//hashicorp/null"],
+)

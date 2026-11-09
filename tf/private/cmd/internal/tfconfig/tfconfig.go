@@ -259,23 +259,36 @@ func RequiredProviders(dir string) ([]string, error) {
 	return sources, nil
 }
 
-// ReadRequiredProviders returns the required_providers entries in files,
-// which share a module directory, keyed by local name. A `.tf` or `.tf.json`
+// Declared is one required_providers entry as a file declares it.
+type Declared struct {
+	// Name is the entry's local name.
+	Name string
+	Requirement
+	// Range is where the entry is, for messages.
+	Range string
+	// Override is whether an `_override` file declares it.
+	Override bool
+}
+
+// ReadRequirements returns every required_providers entry in files, which
+// share a directory: the primary files' in file name order, then the
+// `_override` files', each file's in the order written. A `.tf` or `.tf.json`
 // file that a `.tofu` or `.tofu.json` file of files shadows is skipped, as
-// tofu skips it (see Effective). An entry in an `_override` file replaces the
-// primary files' entry of that name, as tofu merges it; two primary entries of one name are an error, as in tofu.
+// tofu skips it (see Effective). Nothing is merged and nothing rejected:
+// files of one directory may belong to several root modules (two tf_deploys
+// in a package), so two entries of one name needn't be a mistake.
+// ReadRequiredProviders reads a single module's.
 //
 // An entry is `{ source = ..., version = ... }`, or the legacy bare version
 // string. Other keys, like configuration_aliases, are references that can't
 // be evaluated here and don't name a provider, so they're skipped.
-func ReadRequiredProviders(files []string) (map[string]Requirement, error) {
+func ReadRequirements(files []string) ([]Declared, error) {
 	primary, overrides := splitOverrides(Effective(files))
 	sort.Strings(primary)
 	sort.Strings(overrides)
 
 	parser := hclparse.NewParser()
-	reqs := map[string]Requirement{}
-	where := map[string]string{}
+	var declared []Declared
 	for pass, group := range [][]string{primary, overrides} {
 		for _, file := range group {
 			f, err := parse(parser, file)
@@ -296,20 +309,52 @@ func ReadRequiredProviders(files []string) (map[string]Requirement, error) {
 					if diags.HasErrors() {
 						return nil, diags
 					}
-					for name, attr := range attrs {
+					// A map, so put the entries back in the order written.
+					names := make([]string, 0, len(attrs))
+					for name := range attrs {
+						names = append(names, name)
+					}
+					sort.Slice(names, func(i, j int) bool {
+						return attrs[names[i]].Range.Start.Byte < attrs[names[j]].Range.Start.Byte
+					})
+					for _, name := range names {
+						attr := attrs[name]
 						req, err := readRequirement(name, attr.Expr)
 						if err != nil {
 							return nil, fmt.Errorf("%s: %w", attr.Range, err)
 						}
-						if prior, ok := where[name]; ok && pass == 0 {
-							return nil, fmt.Errorf("%s: provider %q is already required in %s", attr.Range, name, prior)
-						}
-						where[name] = attr.Range.String()
-						reqs[name] = req
+						declared = append(declared, Declared{
+							Name:        name,
+							Requirement: req,
+							Range:       attr.Range.String(),
+							Override:    pass == 1,
+						})
 					}
 				}
 			}
 		}
+	}
+	return declared, nil
+}
+
+// ReadRequiredProviders returns the required_providers entries of one
+// module, whose configuration files are files, keyed by local name (see
+// ReadRequirements for how files are read). An entry in an `_override` file
+// replaces the entry of that name, as tofu merges it; two primary entries of
+// one name are an error, as in tofu.
+func ReadRequiredProviders(files []string) (map[string]Requirement, error) {
+	declared, err := ReadRequirements(files)
+	if err != nil {
+		return nil, err
+	}
+	reqs := map[string]Requirement{}
+	where := map[string]string{}
+	for _, d := range declared {
+		if prior, ok := where[d.Name]; ok && !d.Override {
+			return nil, fmt.Errorf("%s: provider %q is already required in %s", d.Range, d.Name, prior)
+		}
+		where[d.Name] = d.Range
+		reqs[d.Name] = d.Requirement
 	}
 	return reqs, nil
 }
