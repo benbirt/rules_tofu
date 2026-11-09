@@ -110,6 +110,15 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   Facts are validated on read (`valid_cached_sha256s`, `valid_fact`),
   treated as a miss if malformed, and only the facts in use are returned,
   so stale ones drop out.
+- The download repository rules (`_tofu_download`, `_tf_provider_download`,
+  `_tf_module_repo`) end with `return reproducible(repository_ctx)`
+  (`tf/private/repo_metadata.bzl`), so Bazel 9's repo contents cache
+  reuses their files across output bases: the nested integration tests
+  fetch each provider, tofu and module once per machine. That is sound
+  only while every download those rules make is checked against a digest
+  their attributes or the lock carry (the registry supplies URLs, never
+  contents); a rule that came to fetch anything unpinned must stop
+  declaring it. The hub repos are cheap and don't declare it.
 - A dependency's `from_lock` is silently ignored (README: libraries
   constrain, the root decides). The `@tf_providers` hub is always created,
   so a dependency's `use_repo` resolves, and a missing lock is an empty

@@ -29,6 +29,7 @@ registers it as the toolchain every rules_tofu target uses:
 # branching lives in //toolchain:version_resolution.bzl so it is unit-testable
 # without a module graph; this file collects the tags and owns the `fail()`.
 
+load("//tf/private:repo_metadata.bzl", "reproducible")
 load("//toolchain:version_resolution.bzl", "resolve_version")
 load("//toolchain:versions.bzl", "DEFAULT_VERSION", "KNOWN_VERSIONS", "PLATFORMS")
 
@@ -78,6 +79,10 @@ opentofu_toolchain(
 """.format(binary = binary_name, version = version, platform_key = platform_key),
         executable = False,
     )
+
+    # The zip was checked against `sha256`, so the attributes determine the
+    # contents.
+    return reproducible(repository_ctx)
 
 _tofu_download = repository_rule(
     implementation = _tofu_download_impl,

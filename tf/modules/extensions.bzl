@@ -57,6 +57,7 @@ identically wherever their `name` appears.
 """
 
 load("//tf/private:fetched_tree.bzl", "walk", "within")
+load("//tf/private:repo_metadata.bzl", "reproducible")
 load(
     ":source.bzl",
     "check_name",
@@ -321,6 +322,11 @@ tf_library(
         ),
         executable = False,
     )
+
+    # The files came from a git commit or an archive checked against `sha256`,
+    # and modscan is an input Bazel records, so the attributes determine the
+    # contents.
+    return reproducible(repository_ctx)
 
 _tf_module_repo = repository_rule(
     implementation = _tf_module_repo_impl,
