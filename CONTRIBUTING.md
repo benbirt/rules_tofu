@@ -102,6 +102,16 @@ and copies the five platform digests into
 hand. Build `//examples/hello:hello` afterwards to check the new binary
 downloads, and run the Starlark tests under `//toolchain/tests`.
 
+## Go version floor
+
+`tf_providers.from_lock` and `tf_modules.module` compile `lockjson` and
+`modscan` with the host Go SDK of the *downstream* workspace
+(`tf/private/host_tools.bzl`), so the `go` directive in `go.mod` is a floor
+for every user that registers a Go SDK, not only for this repository. It
+can't be lower than the pinned dependencies' own directives (`hcl/v2` sets
+it today), and Dependabot's `gomod` updates raise it with them. Call a
+raised floor out in the release notes.
+
 ## Releasing
 
 Releases are driven by SemVer tags and published to the

@@ -1,6 +1,9 @@
+load(":host_tools_error_test.bzl", "host_tools_error_test_suite")
 load(":lock_test.bzl", "lock_test_suite")
 load(":source_test.bzl", "source_test_suite")
 
 lock_test_suite(name = "lock_test")
 
 source_test_suite(name = "source_test")
+
+host_tools_error_test_suite(name = "host_tools_error_test")
