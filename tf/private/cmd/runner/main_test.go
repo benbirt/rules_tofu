@@ -1426,8 +1426,15 @@ func TestRunner_RunDir_MirrorsWorkTree(t *testing.T) {
 func TestRunner_RunDir_RelativeFlags(t *testing.T) {
 	cmd, addVarFile, invocations := setup(t, map[string]any{"region": "us-east-1"})
 	base := filepath.Dir(argValue(t, cmd, "--work-tree"))
+	// The runner makes them absolute against its working directory as the
+	// kernel names it, which is not always how t.TempDir() spells it (on
+	// macOS /var is a link to /private/var).
+	physBase, err := filepath.EvalSymlinks(base)
+	if err != nil {
+		t.Fatal(err)
+	}
 	cmd.Args = append(cmd.Args, "--var-file="+addVarFile(map[string]any{"env": "prod"}))
-	absArgs := append([]string{}, cmd.Args...)
+	want := map[string]string{}
 	for i, a := range cmd.Args {
 		for _, name := range []string{"--tofu", "--work-tree", "--plugin-dir", "--state-dir", "--output-root", "--var-file"} {
 			if v, ok := strings.CutPrefix(a, name+"="); ok {
@@ -1436,6 +1443,7 @@ func TestRunner_RunDir_RelativeFlags(t *testing.T) {
 					t.Fatal(err)
 				}
 				cmd.Args[i] = name + "=" + rel
+				want[name] = filepath.Join(physBase, rel)
 			}
 		}
 	}
@@ -1443,20 +1451,19 @@ func TestRunner_RunDir_RelativeFlags(t *testing.T) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
 	}
-	abs := exec.Command(absArgs[0], absArgs[1:]...)
 	invs := invocations()
 	if len(invs) != 2 {
 		t.Fatalf("expected 2 tofu invocations (init, plan), got %d: %+v", len(invs), invs)
 	}
-	if want := "-plugin-dir=" + argValue(t, abs, "--plugin-dir"); !invs[0].hasArg(want) {
-		t.Errorf("init args = %v, want %s", invs[0].args, want)
+	if arg := "-plugin-dir=" + want["--plugin-dir"]; !invs[0].hasArg(arg) {
+		t.Errorf("init args = %v, want %s", invs[0].args, arg)
 	}
-	if want := "-var-file=" + argValue(t, abs, "--var-file"); !invs[1].hasArg(want) {
-		t.Errorf("plan args = %v, want %s", invs[1].args, want)
+	if arg := "-var-file=" + want["--var-file"]; !invs[1].hasArg(arg) {
+		t.Errorf("plan args = %v, want %s", invs[1].args, arg)
 	}
 	assertLink(t,
-		filepath.Join(runDir(t, abs), "mypkg", "rules_tofu.auto.tfvars.json"),
-		filepath.Join(argValue(t, abs, "--work-tree"), "mypkg", "rules_tofu.auto.tfvars.json"))
+		filepath.Join(want["--state-dir"], "work", "mypkg", "rules_tofu.auto.tfvars.json"),
+		filepath.Join(want["--work-tree"], "mypkg", "rules_tofu.auto.tfvars.json"))
 }
 
 // The run directory follows the work tree from one run to the next: a file
