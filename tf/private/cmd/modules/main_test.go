@@ -565,7 +565,7 @@ func TestBuildManifest_TestRuns(t *testing.T) {
 		{Key: "test.tests.helper.remote", Source: "git::https://example.com/infra.git//vpc?ref=v1.0.0", Dir: "../external/infra+/vpc"},
 		{Key: "test.tests.helper.setup", Source: "./helper", Dir: "helper"},
 		{Key: "test.tests.helper.setup.kid", Source: "./child", Dir: "helper/child"},
-		{Key: "test.tests.shadow.tofu", Source: "./sub", Dir: "sub"},
+		{Key: "test.tests.shadow.tofutest.hcl.tofu", Source: "./sub", Dir: "sub"},
 	}
 	if !reflect.DeepEqual(got.Modules, want) {
 		t.Errorf("got\n%+v\nwant\n%+v", got.Modules, want)

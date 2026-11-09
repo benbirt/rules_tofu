@@ -1,8 +1,17 @@
-load("@rules_tofu//tf:defs.bzl", "tf_deploy")
+load("@rules_tofu//tf:defs.bzl", "tf_deploy", "tf_test")
 
 tf_deploy(
     name = "app",
     srcs = ["main.tf"],
     allow_ephemeral_state = True,
     deps = ["@network_module//vpc"],
+)
+
+# The deploy's test loads the network module from a `.tofutest.hcl` run block,
+# so building it checks the manifest key tofu uses for that extension.
+tf_test(
+    name = "app_test",
+    srcs = ["tests/vpc.tofutest.hcl"],
+    fmt_test = False,
+    module = ":app",
 )

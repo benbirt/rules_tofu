@@ -3,10 +3,14 @@ load("@rules_tofu//tf:defs.bzl", "tf_test")
 # The library's tests: `tofu test` on `greet_lib`, with the subject's name
 # from a helper module in `deps` that a `run` block loads. The test files sit
 # in the module's `tests/` directory, tofu's default, in a package of their
-# own; `bazel test` runs them offline, with the network blocked.
+# own; `bazel test` runs them offline, with the network blocked. One file is
+# a `.tofutest.hcl`, OpenTofu's own test extension.
 tf_test(
     name = "greet_test",
-    srcs = ["greet.tftest.hcl"],
+    srcs = [
+        "greet.tftest.hcl",
+        "subject.tofutest.hcl",
+    ],
     module = "//examples/hello:greet_lib",
     deps = ["//examples/hello/tests/subject"],
 )
