@@ -171,8 +171,8 @@ def tf_library(name, srcs = None, deps = None, data = None, providers = None, mo
                         the library's transitive files.
 
     When `srcs` is non-empty:
-      - `:<name>.fmt` — `bazel run` to reformat the .tf, .tofu, .tftest.hcl
-                        and .tofutest.hcl files in `srcs` in place.
+      - `:<name>.fmt` — `bazel run` to reformat the .tf and .tofu files in
+                        `srcs` in place.
 
     When additionally `fmt_test=True` (the default):
       - `:<name>.fmt_check`  — `bazel test` that fails if those files are not formatted.
