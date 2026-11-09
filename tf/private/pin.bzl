@@ -70,10 +70,12 @@ tf_pin = rule(
         "platforms": attr.string_list(
             doc = "`<os>_<arch>` platforms to lock for unless `-platform=` arguments are passed.",
         ),
+        # Built for the execution platform, like the other tools, since the
+        # script runs it on the host beside the exec-platform `tofu`.
         "_pin_bin": attr.label(
             default = "//tf/private/cmd/pin",
             executable = True,
-            cfg = "target",
+            cfg = "exec",
         ),
     },
     executable = True,

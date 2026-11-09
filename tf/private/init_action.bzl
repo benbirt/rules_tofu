@@ -60,8 +60,9 @@ def tf_init_validate(ctx, work_tree_files, work_tree_root, package_dir, plugin_t
     # a scratch dir under $TMPDIR (dereferencing symlinks) and run there.
     # Only the (small) config tree is copied — the provider binaries live in
     # the sibling plugin tree and are read in place via -plugin-dir, never
-    # copied. Bazel cleans up the action's sandbox on exit, so the copy is
-    # throwaway — no explicit `rm -rf` needed.
+    # copied. The copy is removed when the script exits: only linux-sandbox
+    # gives an action a fresh $TMPDIR, while the darwin sandbox and local
+    # execution write to the host's and clean nothing up (issue #90).
     ctx.actions.run_shell(
         inputs = depset(direct = [tofu.binary, modules_manifest] + ([lock] if lock else []), transitive = [work_tree_files]),
         outputs = [stamp],
@@ -90,6 +91,7 @@ fi
 # action's exec root. The script never cd's, so capturing $PWD inline is safe.
 PLUGIN_DIR="$PWD/$PLUGIN_TREE_ROOT"
 SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/rules_tofu-validate-XXXXXX")
+trap 'rm -rf "$SCRATCH"' EXIT
 cp -RL "$WORK_TREE_ROOT"/. "$SCRATCH"/
 # Zero-providers case: no files are declared under the plugin root, so its
 # input directory is absent from the sandbox. Fall back to an empty dir so

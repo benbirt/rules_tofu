@@ -314,6 +314,10 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
 - The validate action and the runner both pick the **exec-platform**
   provider binary (README, "Known gaps"). Cross-compilation to another
   target platform is out of scope; don't design around it speculatively.
+  The `tofu` toolchains are therefore constrained on the exec platform only
+  (`exec_compatible_with`, no `target_compatible_with`), so a `--platforms`
+  other than the host's still resolves one (issue #105); the Go tools the
+  rules run are all `cfg = "exec"`.
 - The runner requires `--plugin-dir` and `os.MkdirAll`s it, so the
   zero-providers case still gives tofu an extant directory. Don't make the
   flag optional.
