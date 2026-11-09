@@ -24,7 +24,11 @@ updates:
       bazel:
         patterns: ["*"]
 
-  # go.mod: the .terraform.lock.hcl reader's dependencies.
+  # go.mod: the dependencies of the Go tools, two of which (lockjson and
+  # modscan) downstream workspaces compile with their own host Go SDK. The
+  # `go` directive is therefore a floor for users too; a bump that raises
+  # it (hcl/v2 sets it today) is a user-visible change (CONTRIBUTING, "Go
+  # version floor").
   - package-ecosystem: gomod
     directory: /
     schedule:

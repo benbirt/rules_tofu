@@ -247,6 +247,11 @@ A few rules follow from OpenTofu's own model:
   depend on is ignored: libraries constrain, the root decides.
 - If the lock no longer satisfies a library's constraints, building that
   library fails and tells you to run `pin`.
+- `from_lock` reads the lock with a small Go helper compiled by the Go SDK
+  rules_go selects for the host. A workspace that configures no Go SDK uses
+  the one rules_tofu pins; one that registers its own (or whose earlier
+  `bazel_dep` does) must select a Go at least as new as the `go` directive in
+  rules_tofu's [`go.mod`](go.mod), or the helper fails to build, saying so.
 
 [`examples/lock`](examples/lock) is a complete example.
 
@@ -600,6 +605,10 @@ Each module is pinned, so a tag that moves later changes nothing:
 | Archive URL | `sha256`, which is required. |
 
 git sources are fetched with `git`, which must be on the `PATH`.
+Fetched modules are described by a small Go helper compiled, like
+`from_lock`'s, by the host Go SDK rules_go selects, which must be at least as
+new as the `go` directive in rules_tofu's [`go.mod`](go.mod) when the
+workspace registers a Go SDK of its own.
 
 A module's files are its own. A symlink to a file of the module is kept and
 read as that file; a symlink to a directory, to nothing or to anything

@@ -68,7 +68,7 @@ def _host_tools_impl(repository_ctx):
         timeout = 900,
     )
     if result.return_code != 0:
-        fail("Could not build rules_tofu's host tools with {}:\n{}".format(go, result.stderr))
+        fail(host_tools_error(go, result.stderr))
     repository_ctx.delete(scratch)
 
     repository_ctx.file(
@@ -76,6 +76,35 @@ def _host_tools_impl(repository_ctx):
         "exports_files([{}])\n".format(", ".join(['"bin/{}{}"'.format(tool, exe) for tool in _TOOLS])),
         executable = False,
     )
+
+# What `go build` prints when the SDK is older than go.mod's `go` directive;
+# Go checks that before compiling anything.
+_SDK_TOO_OLD = "requires go >="
+
+def host_tools_error(go, stderr):
+    """The message for a `go build` of the host tools that failed.
+
+    Pure, so //tf/providers/tests can check it. Go's own diagnostics are kept.
+    When the SDK is older than rules_tofu's `go.mod` requires, a hint says
+    where that SDK comes from and how to choose a newer one, neither of which
+    the Go line says (issue #101).
+
+    Args:
+        go: The `go` binary that was run.
+        stderr: What it wrote to stderr.
+
+    Returns:
+        The string to `fail` with.
+    """
+    hint = ""
+    if _SDK_TOO_OLD in stderr:
+        hint = (
+            "\nrules_tofu's lockjson and modscan are compiled with rules_go's host Go SDK: the first " +
+            "host-compatible SDK in the module graph, the root module's first. Choose one at least as new " +
+            "as the `go` directive in rules_tofu's go.mod, with `go_sdk.download(version = \"...\")` in the " +
+            "root MODULE.bazel or a newer `go` directive in the file given to `go_sdk.from_file`."
+        )
+    return "Could not build rules_tofu's host tools with {}:\n{}{}".format(go, stderr.strip(), hint)
 
 host_tools = repository_rule(
     implementation = _host_tools_impl,
