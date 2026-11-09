@@ -9,9 +9,9 @@
 
 Bazel rules for [OpenTofu](https://opentofu.org/) and Terraform-compatible
 configuration. Your `.tf` files become ordinary build targets: `bazel build`
-validates them, `bazel test` checks their formatting, and `bazel run` plans,
-applies and destroys them, with providers and the `tofu` binary vendored by
-Bazel.
+validates them, `bazel test` checks their formatting and runs their
+`tofu test` tests, and `bazel run` plans, applies and destroys them, with
+providers and the `tofu` binary vendored by Bazel.
 
 ## Why
 
@@ -87,7 +87,7 @@ providers. To use providers, continue with [Providers](#providers).
 
 ## The rules
 
-Both rules load from `@rules_tofu//tf:defs.bzl`. The full API reference,
+The rules load from `@rules_tofu//tf:defs.bzl`. The full API reference,
 including the module extensions' tags, is on the
 [Bazel Central Registry](https://registry.bazel.build/modules/rules_tofu/latest/docs).
 
@@ -123,13 +123,30 @@ and destroys.
 | `allow_ephemeral_state` | Let `apply` and `destroy` run with no backend. See [State](#state-and-backends). |
 | `fmt_test`              | Generate the `.fmt_check` test (default `True`). |
 
+### `tf_test`
+
+A module's OpenTofu tests, the `.tftest.hcl` files `tofu test` runs, as a
+Bazel test. See [Tests](#tests-).
+
+| Attribute       | Purpose |
+|-----------------|---------|
+| `srcs`          | The test files: `.tftest.hcl`, `.tofutest.hcl`, `.tftest.json` and `.tofutest.json`, all in one directory. |
+| `module`        | The `tf_library` or `tf_deploy` under test. |
+| `deps`          | Helper `tf_library` targets that `run { module { ... } }` blocks load. |
+| `providers`     | Providers the tests need beyond the module's and helpers' own. |
+| `var_files`     | `.tfvars` or `.tfvars.json` files passed with `-var-file`. |
+| `data`          | Extra files placed in the work tree. |
+| `allow_network` | Let the tests reach the network (default `False`; see [Tests](#tests-)). |
+| `fmt_test`      | Generate the `.fmt_check` test (default `True`). |
+
 ### Generated targets
 
 | Target             | Rule    | Command      | Does |
 |--------------------|---------|--------------|------|
-| `:name`            | both    | `bazel build`| Materialises the work tree and runs `tofu init -backend=false && tofu validate`. |
-| `:name.fmt_check`  | both    | `bazel test` | Fails if the `.tf`, `.tofu`, `.tftest.hcl` and `.tofutest.hcl` files in `srcs` are not `tofu fmt` clean. |
-| `:name.fmt`        | both    | `bazel run`  | Reformats those files in place. |
+| `:name`            | library, deploy | `bazel build`| Materialises the work tree and runs `tofu init -backend=false && tofu validate`. |
+| `:name`            | test    | `bazel test` | Runs `tofu test` offline against the module under test; `bazel build` validates it with the test files. |
+| `:name.fmt_check`  | all     | `bazel test` | Fails if the `.tf`, `.tofu`, `.tftest.hcl` and `.tofutest.hcl` files in `srcs` are not `tofu fmt` clean. |
+| `:name.fmt`        | all     | `bazel run`  | Reformats those files in place. |
 | `:name.plan`       | deploy  | `bazel run`  | `tofu plan`, saving the plan to the state directory. |
 | `:name.apply`      | deploy  | `bazel run`  | `tofu apply`. Prompts for confirmation unless the command is followed by `-- --auto-approve`. |
 | `:name.destroy`    | deploy  | `bazel run`  | `tofu destroy`. Prompts for confirmation unless the command is followed by `-- --auto-approve`. |
@@ -393,6 +410,83 @@ tf_deploy(
 )
 ```
 
+## Tests 🧪
+
+`tofu test` runs a module's `.tftest.hcl` files: `run` blocks that plan or
+apply the module and check `assert` conditions, with mock providers and
+helper modules as fixtures. `tf_test` runs them with `bazel test`, offline,
+against the vendored providers:
+
+```python
+tf_test(
+    name = "network_test",
+    srcs = glob(["tests/*.tftest.hcl"]),
+    module = ":network",                 # the tf_library or tf_deploy under test
+    deps = ["//network/tests/fixtures:subnet_names"],  # a tf_library a run block loads
+)
+```
+
+```hcl
+# tests/subnets.tftest.hcl
+run "names" {
+  module {
+    source = "./tests/fixtures"   # relative to the module's directory, network/
+  }
+}
+
+run "plans_a_subnet_per_name" {
+  command = plan
+
+  variables {
+    subnet_names = run.names.names
+  }
+
+  assert {
+    condition     = length(aws_subnet.this) == length(run.names.names)
+    error_message = "expected one subnet per name"
+  }
+}
+```
+
+The test files go in `srcs` of the `tf_test`, never of a `tf_library` or
+`tf_deploy`: tofu reads them from the root module's directory, so a test in
+a library's `srcs` would be shipped to and loaded by every dependant. They
+may be in the module's own directory or one subdirectory of it (`tests/`,
+tofu's default, or another, passed as `-test-directory`), and a `tf_test`
+holds one directory's files. The tests can live in a Bazel package of their
+own, as [`examples/hello/tests`](examples/hello/tests) does. A `.tofutest.hcl`
+is read in place of the `.tftest.hcl` of the same name.
+
+**Helper modules.** A `run` block's `module { source = ... }` loads a module
+in place of the one under test. Like every module, it comes from a
+`tf_library` in `deps`: by a path relative to the module under test's
+directory, or by its `module_source`, including a `@tf_modules//...` module.
+Nothing is fetched; the module manifest records what tofu would have
+installed.
+
+**Providers.** The test's plugin tree holds the module's providers, the
+helpers' and any in `providers`. A `mock_provider` still needs the real
+provider package, for its schema, so a mocked test is offline but not
+provider-free.
+
+**Variables.** Testing a `tf_deploy`, its `vars` and `var_files` are in
+force. The test's own `var_files` come after them, and a test file's
+`variables` blocks win over both.
+
+**Real infrastructure.** A `run` block applies by default, which creates real
+resources. A `tf_test` carries Bazel's `block-network` tag, so plans and
+mocked applies run in the sandbox while a run that reaches a cloud API fails
+fast. Set `allow_network = True` for tests that must apply real
+infrastructure: the test then carries `external` and `requires-network`, so
+it is never cached.
+
+**Output.** `tofu test`'s JSON log is in the test's undeclared outputs as
+`tofu-test.json`. When a run's destroy fails, tofu writes the resources it
+could not remove to `errored_test.tfstate` and still exits 0; the test fails
+and keeps that file with its outputs. Extra arguments reach `tofu test`
+through `--test_arg`, as in
+`bazel test //network:network_test --test_arg=-verbose`.
+
 ## State and backends 🔒
 
 A deploy that manages real infrastructure should declare a `backend "..." {}`
@@ -636,11 +730,18 @@ At run time a small Go launcher enters the work tree and runs
 disables module and plugin installation, then the requested command.
 `var_files` are passed to every command with `-var-file`.
 
+A `tf_test` builds the same work tree for the module under test, with the
+test files and the helper libraries in `deps` added, validates it with the
+test directory, and at test time copies it into `$TEST_TMPDIR`, runs the
+same offline `tofu init` with `-backend=false` (`tofu test` keeps its state
+in memory and ignores backends), then `tofu test`.
+
 ## Restrictions
 
 - `srcs` accepts `.tf`, `.tf.json`, `.tofu`, `.tofu.json`, `.tftpl` and
   `.hcl` only. Variable files are rejected there: values come through
-  `vars` or `var_files`.
+  `vars` or `var_files`. Test files are rejected too: they go in a
+  `tf_test`, whose `srcs` must be in one directory.
 - `apply` and `destroy` need a backend block or `allow_ephemeral_state`.
 - A module call can't use a relative path to reach files in another Bazel
   repository; it uses the library's `module_source`.

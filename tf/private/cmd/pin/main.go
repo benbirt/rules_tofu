@@ -193,9 +193,9 @@ func hasPlatformArg(args []string) bool {
 	return false
 }
 
-// rootRules is every tf_library and tf_deploy in the main repository (their
-// underlying rules are `_tf_library` and `tf_deploy_rule`).
-const rootRules = `kind("^(_tf_library|tf_deploy_rule) rule$", //...)`
+// rootRules is every tf_library, tf_deploy and tf_test in the main repository
+// (their underlying rules are `_tf_library`, `tf_deploy_rule` and `_tf_test`).
+const rootRules = `kind("^(_tf_library|tf_deploy_rule|_tf_test) rule$", //...)`
 
 // configQuery lists the configuration files of those rules, including those
 // reached through filegroups and library deps, in any repository.
@@ -205,6 +205,10 @@ const configQuery = `filter("\.(tf|tofu)(\.json)?$", kind("source file", deps(` 
 // repositories: the modules tf_modules generates, and the libraries of other
 // Bazel modules, with or without a module_source.
 const libraryQuery = `kind("^_tf_library rule$", deps(` + rootRules + `))`
+
+// testQuery lists the test files of the tf_tests: a `run` block's module may
+// be a library's submodule, which then counts (see queryConfigFiles).
+const testQuery = `filter("\.(tftest|tofutest)\.(hcl|json)$", kind("source file", deps(kind("^_tf_test rule$", //...))))`
 
 // queryPartialExitCode is Bazel's exit code for a --keep_going command that
 // produced results despite errors.
@@ -223,6 +227,8 @@ const queryPartialExitCode = 3
 // the submodules outside `modules/` that the files counted so far call with
 // `//<subdir>` (resolved as the modules manifest resolves a call: the dep
 // whose module_source matches, the longest winning), which may call others.
+// A module that a `run` block of a tf_test's test file loads counts as such a
+// call from the root module; the tests themselves hold no required_providers.
 //
 // The query runs with --keep_going because `deps()` also follows each
 // rule's `providers` into @tf_providers, which can't load before they are
@@ -230,18 +236,35 @@ const queryPartialExitCode = 3
 // and a lock entry that can't be used makes its provider's repo fail when
 // fetched. Neither has .tf files to find, and pin is how both are fixed.
 func queryConfigFiles(bazel, workspace string, log io.Writer) (map[string][]string, error) {
-	targets, err := query(bazel, workspace, configQuery+" + "+libraryQuery, log)
+	targets, err := query(bazel, workspace, configQuery+" + "+libraryQuery+" + "+testQuery, log)
 	if err != nil {
 		return nil, err
 	}
 	var files []target
+	var tests []string
 	var libraries []*library
 	for _, t := range targets {
 		switch {
+		case t.Kind == "source file" && tfconfig.IsTestFile(t.Name):
+			if t.Repo == "" {
+				tests = append(tests, t.Path)
+			}
 		case t.Kind == "source file":
 			files = append(files, t)
 		case t.Repo != "":
 			libraries = append(libraries, newLibrary(t))
+		}
+	}
+
+	// A tf_test's run blocks load modules as the root module calls them: a
+	// library's submodule one loads is served from the start.
+	testCalls, err := tfconfig.ReadTestCalls(tests)
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range testCalls {
+		if l, subdir := lookup(libraries, c.Source); l != nil && subdir != "" {
+			l.called[subdir] = true
 		}
 	}
 

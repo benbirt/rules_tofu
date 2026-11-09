@@ -1,0 +1,19 @@
+load("@rules_tofu//tf:defs.bzl", "tf_test")
+
+# The library's tests: `tofu test` on `greet_lib`, with the subject's name
+# from a helper module in `deps` that a `run` block loads. The test files sit
+# in the module's `tests/` directory, tofu's default, in a package of their
+# own; `bazel test` runs them offline, with the network blocked.
+tf_test(
+    name = "greet_test",
+    srcs = ["greet.tftest.hcl"],
+    module = "//examples/hello:greet_lib",
+    deps = ["//examples/hello/tests/subject"],
+)
+
+# The deploy's tests: its `vars` bind `name`, so the test file sets nothing.
+tf_test(
+    name = "hello_test",
+    srcs = ["hello.tftest.hcl"],
+    module = "//examples/hello:hello",
+)

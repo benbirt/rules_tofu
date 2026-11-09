@@ -515,3 +515,73 @@ terraform {
 		t.Errorf("locked %v, want %v", locked, want)
 	}
 }
+
+// A tf_test's test file loads a library's submodule outside modules/ with a
+// run block: that directory is served, so its providers are locked, as if
+// the root module called it. The test file itself is not a configuration
+// file, so it is read for its run blocks only.
+func TestRun_TestFileLoadsSubmodule(t *testing.T) {
+	ws := t.TempDir()
+	writeFile(t, filepath.Join(ws, "app/main.tf"), nullFloor)
+	writeFile(t, filepath.Join(ws, "app/tests/setup.tftest.hcl"), `run "setup" {
+  module {
+    source = "git::https://example.com/net.git//vpc/fixtures?ref=v1"
+  }
+}
+
+run "main" {
+  command = plan
+}
+`)
+	ext := filepath.Join(t.TempDir(), "rules_tofu++tf_modules+tf_modules_vpc")
+	writeFile(t, filepath.Join(ext, "vpc/main.tf"), `terraform {
+  required_providers {
+    time = { source = "hashicorp/time" }
+  }
+}
+`)
+	writeFile(t, filepath.Join(ext, "vpc/fixtures/main.tf"), `terraform {
+  required_providers {
+    http = { source = "hashicorp/http" }
+  }
+}
+`)
+	writeFile(t, filepath.Join(ext, "vpc/examples/complete/main.tf"), `terraform {
+  required_providers {
+    random = { source = "hashicorp/random" }
+  }
+}
+`)
+	repo := "@@rules_tofu++tf_modules+tf_modules_vpc"
+	targets := []string{
+		sourceFile("//app:main.tf", filepath.Join(ws, "app/main.tf")),
+		sourceFile("//app:tests/setup.tftest.hcl", filepath.Join(ws, "app/tests/setup.tftest.hcl")),
+	}
+	for _, f := range []string{"vpc:main.tf", "vpc:fixtures/main.tf", "vpc:examples/complete/main.tf"} {
+		pkg, name, _ := strings.Cut(f, ":")
+		targets = append(targets, sourceFile(repo+"//"+f, filepath.Join(ext, pkg, name)))
+	}
+	targets = append(targets, libraryRule(repo+"//vpc:module", filepath.Join(ext, "vpc/BUILD.bazel"), "git::https://example.com/net.git//vpc?ref=v1"))
+	bazel := fakeBazelOutput(t, targets...)
+	tofu, _ := fakeTofu(t)
+
+	var log strings.Builder
+	if err := run(ws, "", tofu, bazel, nil, nil, nil, &log); err != nil {
+		t.Fatalf("run: %v\n%s", err, log.String())
+	}
+	lock, err := os.ReadFile(filepath.Join(ws, ".terraform.lock.hcl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, children := lockedModules(t, lock)
+	locked := map[string]bool{}
+	for _, c := range children {
+		for name := range c {
+			locked[name] = true
+		}
+	}
+	want := map[string]bool{"null": true, "time": true, "http": true}
+	if !reflect.DeepEqual(locked, want) {
+		t.Errorf("locked %v, want %v", locked, want)
+	}
+}

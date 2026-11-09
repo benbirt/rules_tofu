@@ -17,6 +17,7 @@ load(
     ":work_tree.bzl",
     "ALLOWED_SRC_EXTS",
     "MODULES_BIN",
+    _check_no_test_files = "check_no_test_files",
     _files_entries = "files_entries",
     _library_module = "library_module",
     _materialize = "materialize",
@@ -29,6 +30,7 @@ load(
 )
 
 def _tf_library_impl(ctx):
+    _check_no_test_files(ctx, ctx.files.srcs)
     direct = _files_entries(ctx.files.srcs + ctx.files.data)
     transitive = [
         d[TfLibraryInfo].transitive_files
@@ -63,7 +65,12 @@ def _tf_library_impl(ctx):
         work_tree_root = _work_tree_root(ctx),
         package_dir = _package_dir(ctx.label),
         plugin_tree_root = _plugin_tree_root(ctx),
-        modules_manifest = _modules_manifest(ctx, work_tree_outputs, ctx.attr.deps, providers_depset),
+        modules_manifest = _modules_manifest(
+            ctx,
+            work_tree_outputs,
+            [d[TfLibraryInfo] for d in ctx.attr.deps],
+            providers_depset,
+        ),
         lock = _provider_lock(ctx, providers_depset),
     )
 
@@ -86,7 +93,8 @@ _tf_library = rule(
     attrs = {
         "srcs": attr.label_list(
             allow_files = ALLOWED_SRC_EXTS,
-            doc = "Source files belonging to this library (.tf, .tf.json, .tofu, .tofu.json, .tftpl, .hcl).",
+            doc = "Source files belonging to this library (.tf, .tf.json, .tofu, .tofu.json, .tftpl, .hcl). " +
+                  "Test files (.tftest.hcl, .tofutest.hcl) go in a `tf_test`.",
         ),
         "deps": attr.label_list(
             providers = [TfLibraryInfo],
@@ -163,15 +171,16 @@ def tf_library(name, srcs = None, deps = None, data = None, providers = None, mo
                         the library's transitive files.
 
     When `srcs` is non-empty:
-      - `:<name>.fmt` — `bazel run` to reformat the .tf, .tofu, .tftest.hcl
-                        and .tofutest.hcl files in `srcs` in place.
+      - `:<name>.fmt` — `bazel run` to reformat the .tf and .tofu files in
+                        `srcs` in place.
 
     When additionally `fmt_test=True` (the default):
       - `:<name>.fmt_check`  — `bazel test` that fails if those files are not formatted.
 
     Args:
       name: target name.
-      srcs: source .tf/.tf.json/.tofu/.tofu.json/.tftpl/.hcl files.
+      srcs: source .tf/.tf.json/.tofu/.tofu.json/.tftpl/.hcl files. Test files
+          (`.tftest.hcl`, `.tofutest.hcl`) belong in a `tf_test` instead.
       deps: other `tf_library` targets to compose with.
       data: arbitrary files to include in the work tree for `file()` calls.
       providers: providers (`@tf_providers//<namespace>/<name>`, from the

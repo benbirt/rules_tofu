@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -1001,5 +1002,223 @@ func TestRunner_NoLockFile_LeavesWorkTreeAlone(t *testing.T) {
 	lock := filepath.Join(argValue(t, cmd, "--work-tree"), "mypkg", ".terraform.lock.hcl")
 	if _, err := os.Stat(lock); !os.IsNotExist(err) {
 		t.Errorf("expected no lock at %s, got err=%v", lock, err)
+	}
+}
+
+// setupTest builds a `--command=test` invocation, as the launcher a tf_test
+// generates makes it: no --state-dir and no BUILD_WORKSPACE_DIRECTORY, a
+// TEST_TMPDIR to copy the work tree into, and a TEST_UNDECLARED_OUTPUTS_DIR.
+// The fake tofu logs its calls and, when FAKE_ERRORED is set, leaves an
+// errored_test.tfstate behind on `test`. It returns the command, the work
+// tree in runfiles, the scratch directory and the outputs directory.
+func setupTest(t *testing.T) (cmd *exec.Cmd, workTree, scratch, outputs string, invocations func() []invocation) {
+	t.Helper()
+	bin := runnerBin(t)
+	dir := t.TempDir()
+
+	logPath := filepath.Join(dir, "tofu-invocations.log")
+	fakeTofuSh := filepath.Join(dir, "tofu.sh")
+	script := "#!/bin/sh\n" +
+		"{ printf 'cwd=%s\\n' \"$(pwd)\"; for a in \"$@\"; do printf 'arg=%s\\n' \"$a\"; done; printf -- '---\\n'; } >> \"$TOFU_LOG\"\n" +
+		"if [ \"$1\" = test ] && [ -n \"${FAKE_ERRORED:-}\" ]; then echo '{}' > errored_test.tfstate; fi\n" +
+		"exit 0\n"
+	if err := os.WriteFile(fakeTofuSh, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// The work tree as runfiles hold it: symlinks to the sources, at their
+	// workspace-relative paths.
+	sources := filepath.Join(dir, "sources")
+	workTree = filepath.Join(dir, "work")
+	if err := os.MkdirAll(filepath.Join(workTree, "mypkg", "tests"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"mypkg/main.tf", "mypkg/tests/t.tftest.hcl", "mypkg/test.tfvars"} {
+		src := filepath.Join(sources, f)
+		if err := os.MkdirAll(filepath.Dir(src), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(src, []byte("# "+f+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(src, filepath.Join(workTree, f)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeJSON(t, filepath.Join(workTree, "mypkg", "rules_tofu.auto.tfvars.json"), map[string]any{"name": "x"})
+
+	modulesManifest := filepath.Join(dir, "modules.json")
+	if err := os.WriteFile(modulesManifest, []byte(testManifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	scratch = filepath.Join(dir, "tmp")
+	outputs = filepath.Join(dir, "outputs")
+	for _, d := range []string{scratch, outputs} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	invocations = func() []invocation {
+		t.Helper()
+		data, err := os.ReadFile(logPath)
+		if err != nil {
+			t.Fatalf("read tofu invocation log: %v", err)
+		}
+		return parseInvocations(data)
+	}
+
+	cmd = exec.Command(bin,
+		"--tofu="+fakeTofuSh,
+		"--work-tree="+workTree,
+		"--package-dir=mypkg",
+		"--plugin-dir="+filepath.Join(workTree, "mypkg.plugins"),
+		"--modules-manifest="+modulesManifest,
+		"--command=test",
+		"--test-dir=tests",
+		"--var-file=mypkg/test.tfvars",
+	)
+	cmd.Env = append(os.Environ(),
+		"TOFU_LOG="+logPath,
+		"TEST_TMPDIR="+scratch,
+		"TEST_UNDECLARED_OUTPUTS_DIR="+outputs,
+	)
+	for i, e := range cmd.Env {
+		if strings.HasPrefix(e, "BUILD_WORKSPACE_DIRECTORY=") {
+			cmd.Env[i] = "BUILD_WORKSPACE_DIRECTORY="
+		}
+	}
+	return cmd, workTree, scratch, outputs, invocations
+}
+
+// `--command=test` copies the work tree into TEST_TMPDIR, inits it offline
+// with -backend=false and the test directory, and runs `tofu test` there with
+// the JSON log in the outputs, the var files re-based onto the copy and the
+// extra arguments last. The runfiles work tree is left as it was.
+func TestRunner_Test_InitsAndTestsACopy(t *testing.T) {
+	cmd, workTree, scratch, outputs, invocations := setupTest(t)
+	cmd.Args = append(cmd.Args, "--", "-verbose")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
+	}
+	invs := invocations()
+	if len(invs) != 2 {
+		t.Fatalf("got %d tofu invocations, want init then test: %+v", len(invs), invs)
+	}
+	copyPkg := filepath.Join(scratch, "rules_tofu.work", "mypkg")
+	// The fake tofu logs $(pwd), a resolved path: on macOS /var is a symlink
+	// to /private/var.
+	wantCwd, err := filepath.EvalSymlinks(copyPkg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	init, test := invs[0], invs[1]
+	if init.cwd != wantCwd || test.cwd != wantCwd {
+		t.Errorf("cwd = %q and %q, want %q", init.cwd, test.cwd, wantCwd)
+	}
+	for _, arg := range []string{"init", "-backend=false", "-input=false", "-get=false", "-test-directory=tests"} {
+		if !init.hasArg(arg) {
+			t.Errorf("init lacks %q: %v", arg, init.args)
+		}
+	}
+	if !init.hasArgWithPrefix("-plugin-dir=") {
+		t.Errorf("init lacks -plugin-dir: %v", init.args)
+	}
+	wantTest := []string{"test", "-no-color", "-test-directory=tests", "-json-into=" + filepath.Join(outputs, "tofu-test.json"),
+		"-var-file=" + filepath.Join(scratch, "rules_tofu.work", "mypkg", "test.tfvars"), "-verbose"}
+	if !reflect.DeepEqual(test.args, wantTest) {
+		t.Errorf("test args = %q, want %q", test.args, wantTest)
+	}
+	// The copy holds the sources' contents, the manifest and the generated
+	// tfvars; the runfiles tree gained nothing.
+	if data, err := os.ReadFile(filepath.Join(copyPkg, "tests", "t.tftest.hcl")); err != nil || string(data) != "# mypkg/tests/t.tftest.hcl\n" {
+		t.Errorf("copied test file = %q, %v", data, err)
+	}
+	for _, f := range []string{".terraform/modules/modules.json", "rules_tofu.auto.tfvars.json"} {
+		if _, err := os.Stat(filepath.Join(copyPkg, f)); err != nil {
+			t.Errorf("copy lacks %s: %v", f, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(workTree, "mypkg", ".terraform")); !os.IsNotExist(err) {
+		t.Errorf("runfiles work tree gained .terraform: err=%v", err)
+	}
+}
+
+// With no providers in scope the plugin tree is absent from runfiles: tofu
+// gets an empty directory under TEST_TMPDIR, and nothing is created in the
+// runfiles tree.
+func TestRunner_Test_MissingPluginDirFallsBack(t *testing.T) {
+	cmd, workTree, scratch, _, invocations := setupTest(t)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
+	}
+	pluginDir := strings.TrimPrefix(argValue(t, cmd, "--plugin-dir"), "")
+	if _, err := os.Stat(pluginDir); !os.IsNotExist(err) {
+		t.Errorf("plugin dir %s was created in runfiles: err=%v", pluginDir, err)
+	}
+	init := invocations()[0]
+	var got string
+	for _, a := range init.args {
+		if strings.HasPrefix(a, "-plugin-dir=") {
+			got = strings.TrimPrefix(a, "-plugin-dir=")
+		}
+	}
+	if want := filepath.Join(scratch, "rules_tofu.plugins"); got != want {
+		t.Errorf("-plugin-dir = %q, want %q", got, want)
+	}
+	if info, err := os.Stat(got); err != nil || !info.IsDir() {
+		t.Errorf("fallback plugin dir: %v", err)
+	}
+	_ = workTree
+}
+
+// A plugin tree that is present is used in place.
+func TestRunner_Test_PluginDirUsedInPlace(t *testing.T) {
+	cmd, _, _, _, invocations := setupTest(t)
+	pluginDir := argValue(t, cmd, "--plugin-dir")
+	if err := os.MkdirAll(filepath.Join(pluginDir, "registry.opentofu.org"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
+	}
+	if init := invocations()[0]; !init.hasArg("-plugin-dir=" + pluginDir) {
+		t.Errorf("init args = %v, want -plugin-dir=%s", init.args, pluginDir)
+	}
+}
+
+// An errored_test.tfstate left by a failed destroy fails the test, even
+// though tofu exited 0, and is kept with the test's outputs.
+func TestRunner_Test_ErroredStateFails(t *testing.T) {
+	cmd, _, _, outputs, _ := setupTest(t)
+	cmd.Env = append(cmd.Env, "FAKE_ERRORED=1")
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("runner succeeded despite errored_test.tfstate:\n%s", out)
+	}
+	kept := filepath.Join(outputs, "errored_test.tfstate")
+	if !strings.Contains(string(out), "left resources in state") || !strings.Contains(string(out), kept) {
+		t.Errorf("output = %q, want the errored-state message naming %s", out, kept)
+	}
+	if _, err := os.Stat(kept); err != nil {
+		t.Errorf("errored state not kept: %v", err)
+	}
+}
+
+// `--command=test` needs no --state-dir; the other commands still do.
+func TestRunner_Test_StateDirNotRequired(t *testing.T) {
+	cmd, _, _, _, _ := setupTest(t)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
+	}
+	for i, a := range cmd.Args {
+		if a == "--command=test" {
+			cmd.Args[i] = "--command=plan"
+		}
+	}
+	plan := exec.Command(cmd.Args[0], cmd.Args[1:]...)
+	plan.Env = cmd.Env
+	out, err := plan.CombinedOutput()
+	if err == nil || !strings.Contains(string(out), "--state-dir is required") {
+		t.Errorf("plan without --state-dir: err=%v out=%q", err, out)
 	}
 }

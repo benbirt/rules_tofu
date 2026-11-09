@@ -533,3 +533,115 @@ func TestBuild_RequiredProviderFromAnotherRegistry(t *testing.T) {
 		t.Errorf("got %v, want an error containing %q", err, want)
 	}
 }
+
+// A tf_test's test files: each run block's module is recorded under tofu's
+// key and walked like a call from the root module. A local source resolves
+// against the root module's directory, not the test file's; a .tofutest.hcl
+// shadows the .tftest.hcl of its name; a direct dep only a run uses is used.
+func TestBuildManifest_TestRuns(t *testing.T) {
+	tree := writeTree(t, map[string]string{
+		"app/main.tf":                   `module "s" { source = "./sub" }`,
+		"app/sub/main.tf":               ``,
+		"app/helper/main.tf":            `module "kid" { source = "./child" }`,
+		"app/helper/child/main.tf":      ``,
+		"app/root.tftest.hcl":           "run \"rootsetup\" {\n  module {\n    source = \"./helper\"\n  }\n}\n",
+		"app/tests/helper.tftest.hcl":   "run \"setup\" {\n  module {\n    source = \"./helper\"\n  }\n}\nrun \"remote\" {\n  module {\n    source = \"git::https://example.com/infra.git//vpc?ref=v1.0.0\"\n  }\n}\nrun \"main\" {\n  command = plan\n}\n",
+		"app/tests/shadow.tftest.hcl":   "run \"tf\" {\n  module {\n    source = \"./missing\"\n  }\n}\n",
+		"app/tests/shadow.tofutest.hcl": "run \"tofu\" {\n  module {\n    source = \"./sub\"\n  }\n}\n",
+		"external/infra+/vpc/main.tf":   ``,
+	})
+	deps := []dep{
+		{Label: "@infra//vpc", Source: "git::https://example.com/infra.git//vpc?ref=v1.0.0", Dir: "external/infra+/vpc", Direct: true},
+	}
+	got, err := buildManifest(tree, "app", "//app:app_test", deps, nil, nil, "tests")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Record{
+		{Key: "", Source: "", Dir: "."},
+		{Key: "s", Source: "./sub", Dir: "sub"},
+		{Key: "test.root.rootsetup", Source: "./helper", Dir: "helper"},
+		{Key: "test.root.rootsetup.kid", Source: "./child", Dir: "helper/child"},
+		{Key: "test.tests.helper.remote", Source: "git::https://example.com/infra.git//vpc?ref=v1.0.0", Dir: "../external/infra+/vpc"},
+		{Key: "test.tests.helper.setup", Source: "./helper", Dir: "helper"},
+		{Key: "test.tests.helper.setup.kid", Source: "./child", Dir: "helper/child"},
+		{Key: "test.tests.shadow.tofu", Source: "./sub", Dir: "sub"},
+	}
+	if !reflect.DeepEqual(got.Modules, want) {
+		t.Errorf("got\n%+v\nwant\n%+v", got.Modules, want)
+	}
+
+	// Without --test-dir the test files are not read, so the dep is unused.
+	if _, err := build(tree, "app", "//app:app", deps, nil, nil); err == nil || !strings.Contains(err.Error(), "no module call uses @infra//vpc") {
+		t.Errorf("build without tests: err = %v, want the unused dep", err)
+	}
+}
+
+// Test files in the root module's directory only: "." reads no other.
+func TestBuildManifest_TestRunsRootOnly(t *testing.T) {
+	tree := writeTree(t, map[string]string{
+		"main.tf":              ``,
+		"helper/main.tf":       ``,
+		"x.tftest.hcl":         "run \"a\" {\n  module {\n    source = \"./helper\"\n  }\n}\n",
+		"tests/y.tftest.hcl":   "run \"b\" {\n  module {\n    source = \"./nowhere\"\n  }\n}\n",
+		"tests/helper/main.tf": ``,
+	})
+	got, err := buildManifest(tree, "", "//:root_test", nil, nil, nil, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Record{
+		{Key: "", Source: "", Dir: "."},
+		{Key: "test.x.a", Source: "./helper", Dir: "helper"},
+	}
+	if !reflect.DeepEqual(got.Modules, want) {
+		t.Errorf("got\n%+v\nwant\n%+v", got.Modules, want)
+	}
+}
+
+func TestBuildManifest_TestRunErrors(t *testing.T) {
+	for name, tc := range map[string]struct {
+		files map[string]string
+		deps  []dep
+		want  string
+	}{
+		"helper_missing": {
+			files: map[string]string{
+				"app/main.tf":            ``,
+				"app/tests/t.tftest.hcl": "run \"setup\" {\n  module {\n    source = \"./helper\"\n  }\n}\n",
+			},
+			want: `run "setup" (app/tests/t.tftest.hcl:3): source "./helper" is not in the work tree`,
+		},
+		"source_unprovided": {
+			files: map[string]string{
+				"app/main.tf":            ``,
+				"app/tests/t.tftest.hcl": "run \"setup\" {\n  module {\n    source = \"acme/net/aws\"\n  }\n}\n",
+			},
+			want: `no dep provides source "acme/net/aws"`,
+		},
+		"helper_requires_provider": {
+			files: map[string]string{
+				"app/main.tf":            ``,
+				"app/helper/main.tf":     "terraform {\n  required_providers {\n    time = { source = \"hashicorp/time\" }\n  }\n}\n",
+				"app/tests/t.tftest.hcl": "run \"setup\" {\n  module {\n    source = \"./helper\"\n  }\n}\n",
+			},
+			want: `module "test.tests.t.setup" requires hashicorp/time`,
+		},
+		"cycle_back_to_root": {
+			files: map[string]string{
+				"app/main.tf":            ``,
+				"app/helper/main.tf":     `module "back" { source = "../" }`,
+				"app/tests/t.tftest.hcl": "run \"setup\" {\n  module {\n    source = \"./helper\"\n  }\n}\n",
+			},
+			want: "form a cycle",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			tree := writeTree(t, tc.files)
+			_, err := buildManifest(tree, "app", "//app:app_test", tc.deps, nil, nil, "tests")
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("err = %v, want containing %q", err, tc.want)
+			}
+		})
+	}
+}

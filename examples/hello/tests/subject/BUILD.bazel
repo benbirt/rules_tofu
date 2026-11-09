@@ -1,0 +1,9 @@
+load("@rules_tofu//tf:defs.bzl", "tf_library")
+
+# A helper module for examples/hello/tests: a `run` block loads it to get a
+# name for the greeting.
+tf_library(
+    name = "subject",
+    srcs = ["main.tf"],
+    visibility = ["//examples/hello:__subpackages__"],
+)

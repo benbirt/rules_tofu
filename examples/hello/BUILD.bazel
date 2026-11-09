@@ -1,5 +1,6 @@
 load("@rules_tofu//tf:defs.bzl", "tf_deploy", "tf_library")
 
+# Both targets' `tofu test` tests are in tests/ (see tests/BUILD.bazel).
 package(default_visibility = ["//visibility:public"])
 
 tf_library(

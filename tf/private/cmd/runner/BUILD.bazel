@@ -4,7 +4,10 @@ package(default_visibility = ["//tf/private:__subpackages__"])
 
 go_library(
     name = "runner_lib",
-    srcs = ["main.go"],
+    srcs = [
+        "main.go",
+        "test.go",
+    ],
     importpath = "github.com/benbirt/rules_tofu/tf/private/cmd/runner",
     deps = [
         "//tf/private/cmd/internal/flags",
