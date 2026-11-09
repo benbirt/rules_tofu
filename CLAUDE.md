@@ -330,10 +330,13 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   orphans live infrastructure. The gate is in the Go runner (backend
   detection is a filesystem scan), fires before any tofu process starts or
   the state dir exists, and `plan` stays ungated. Don't downgrade it to a
-  warning. A `backend "local"` counts as a backend only with an absolute,
-  literal `path` (and `workspace_dir`); otherwise every command is refused,
-  `plan` included, ahead of the gate (`localBackendProblem`, issue #86):
-  tofu would resolve the path against the runfiles work tree. The runner
+  warning. A `backend "local"` counts as a backend; its `path` and
+  `workspace_dir`, defaults included, are resolved against the
+  configuration's directory in the checkout and pinned with
+  `-backend-config` (`localBackendConfig`, issue #86), since tofu would
+  otherwise resolve them against the per-target runfiles work tree. An
+  expression, or a relative path for a deploy from another repository, is
+  refused for every command, `plan` included, ahead of the gate. The runner
   sets `TF_DATA_DIR` to the work tree's `.terraform`, drops
   `TF_PLUGIN_CACHE_DIR` (`tofuEnv`) and inits with `-reconfigure` (issue
   #92); keep all three.

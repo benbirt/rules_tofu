@@ -358,9 +358,12 @@ func NormalizeProvider(source string) (string, error) {
 	return p.String(), nil
 }
 
-// LiteralString evaluates expr with no variables in scope, as a string.
+// LiteralString evaluates expr with no variables in scope, as a string. The
+// context is empty rather than nil: with a nil one the JSON syntax returns a
+// template such as "${path.module}/x" as the literal text, where the native
+// syntax reports the unknown variable, and both must be rejected alike.
 func LiteralString(expr hcl.Expression) (string, bool) {
-	v, diags := expr.Value(nil)
+	v, diags := expr.Value(&hcl.EvalContext{})
 	if diags.HasErrors() || v.IsNull() || !v.IsKnown() || v.Type().FriendlyName() != "string" {
 		return "", false
 	}

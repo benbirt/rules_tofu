@@ -19,6 +19,7 @@ go_library(
 go_test(
     name = "tfconfig_test",
     srcs = [
+        "literal_test.go",
         "source_test.go",
         "tests_test.go",
         "tfconfig_test.go",

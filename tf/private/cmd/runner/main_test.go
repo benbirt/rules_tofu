@@ -410,16 +410,7 @@ func TestRunner_StateFlags_Destroy(t *testing.T) {
 // tree, and returns the path written.
 func backendTFContent(t *testing.T, cmd *exec.Cmd, content string) {
 	t.Helper()
-	var workTree string
-	for _, arg := range cmd.Args {
-		if strings.HasPrefix(arg, "--work-tree=") {
-			workTree = strings.TrimPrefix(arg, "--work-tree=")
-		}
-	}
-	if workTree == "" {
-		t.Fatal("could not find --work-tree flag in runner cmd args")
-	}
-	tfPath := filepath.Join(workTree, "mypkg", "backend_override.tf")
+	tfPath := filepath.Join(argValue(t, cmd, "--work-tree"), argValue(t, cmd, "--package-dir"), "backend_override.tf")
 	if err := os.WriteFile(tfPath, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -428,8 +419,7 @@ func backendTFContent(t *testing.T, cmd *exec.Cmd, content string) {
 // backendJSONContent is backendTFContent for a `.tf.json` file.
 func backendJSONContent(t *testing.T, cmd *exec.Cmd, content string) {
 	t.Helper()
-	workTree := argValue(t, cmd, "--work-tree")
-	if err := os.WriteFile(filepath.Join(workTree, "mypkg", "backend_override.tf.json"), []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(argValue(t, cmd, "--work-tree"), argValue(t, cmd, "--package-dir"), "backend_override.tf.json"), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -1245,115 +1235,6 @@ func TestRunner_Test_StateDirNotRequired(t *testing.T) {
 	}
 }
 
-// assertRefusedLocalBackend asserts that the runner refused a command because
-// of a `backend "local"` block it can't honour: it exited non-zero, named the
-// block and the alternatives, ran no tofu process and created no state dir.
-func assertRefusedLocalBackend(t *testing.T, cmd *exec.Cmd, problem string) {
-	t.Helper()
-	logPath := envValue(t, cmd, "TOFU_LOG")
-	stateDir := argValue(t, cmd, "--state-dir")
-
-	out, err := cmd.CombinedOutput()
-	if err == nil {
-		t.Fatalf("expected the runner to refuse the local backend, but it succeeded:\n%s", out)
-	}
-	msg := string(out)
-	for _, want := range []string{`backend "local" block at backend_override.tf`, problem, "allow_ephemeral_state = True", "absolute"} {
-		if !strings.Contains(msg, want) {
-			t.Errorf("expected the refusal to contain %q, got: %s", want, msg)
-		}
-	}
-	if _, err := os.Stat(logPath); !os.IsNotExist(err) {
-		t.Errorf("expected no tofu invocations, got err=%v", err)
-	}
-	if _, err := os.Stat(stateDir); !os.IsNotExist(err) {
-		t.Errorf("state dir %s should not have been created, got err=%v", stateDir, err)
-	}
-}
-
-// A `backend "local"` with no path is refused for every command, plan
-// included, and the ephemeral-state opt-in doesn't let it through: tofu would
-// keep the state in the launcher's runfiles tree.
-func TestRunner_LocalBackend_NoPathRefused(t *testing.T) {
-	for _, command := range []string{"plan", "apply", "destroy"} {
-		for _, allow := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%s/allow=%v", command, allow), func(t *testing.T) {
-				cmd, _, _ := setup(t, map[string]any{"region": "us-east-1"})
-				backendTFContent(t, cmd, "terraform {\n  backend \"local\" {}\n}\n")
-				cmd.Args = append(cmd.Args, "--command="+command)
-				if allow {
-					cmd.Args = append(cmd.Args, "--allow-ephemeral-state")
-				}
-				assertRefusedLocalBackend(t, cmd, "sets no `path`")
-			})
-		}
-	}
-}
-
-// Relative paths, a `workspace_dir` without a `path`, a relative
-// `workspace_dir` beside an absolute `path`, and a `path` that isn't a
-// literal are all refused; `.tf.json` syntax too.
-func TestRunner_LocalBackend_RelativeOrUnknownPathRefused(t *testing.T) {
-	cases := []struct {
-		name, hcl, json, problem string
-	}{
-		{"relative path", "terraform {\n  backend \"local\" {\n    path = \"rel.tfstate\"\n  }\n}\n", "", "`path` \"rel.tfstate\" is relative"},
-		{"workspace_dir only", "terraform {\n  backend \"local\" {\n    workspace_dir = \"/abs/ws\"\n  }\n}\n", "", "sets no `path`"},
-		{"relative workspace_dir", "terraform {\n  backend \"local\" {\n    path          = \"/abs/x.tfstate\"\n    workspace_dir = \"ws\"\n  }\n}\n", "", "`workspace_dir` \"ws\" is relative"},
-		{"expression path", "terraform {\n  backend \"local\" {\n    path = \"${path.module}/x.tfstate\"\n  }\n}\n", "", "`path` is not a literal string"},
-		{"json relative path", "", `{"terraform": {"backend": {"local": {"path": "rel.tfstate"}}}}`, "`path` \"rel.tfstate\" is relative"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			cmd, _, _ := setup(t, map[string]any{"region": "us-east-1"})
-			if tc.json != "" {
-				backendJSONContent(t, cmd, tc.json)
-			} else {
-				backendTFContent(t, cmd, tc.hcl)
-			}
-			out, err := cmd.CombinedOutput()
-			if err == nil {
-				t.Fatalf("expected a refusal, got success:\n%s", out)
-			}
-			// The file is backend_override.tf or backend_override.tf.json.
-			if !strings.Contains(string(out), tc.problem) || !strings.Contains(string(out), `backend "local" block at backend_override.tf`) {
-				t.Errorf("refusal = %s, want it to name backend_override.tf and %q", out, tc.problem)
-			}
-		})
-	}
-}
-
-// A `backend "local"` whose paths are absolute is a real backend: the runner
-// defers to it like a remote one, with no -state flags and no gate, in HCL
-// and JSON alike.
-func TestRunner_LocalBackend_AbsolutePathDefers(t *testing.T) {
-	for _, tc := range []struct{ name, hcl, json string }{
-		{"hcl", "terraform {\n  backend \"local\" {\n    path          = \"/abs/x.tfstate\"\n    workspace_dir = \"/abs/ws\"\n  }\n}\n", ""},
-		{"json", "", `{"terraform": {"backend": {"local": {"path": "/abs/x.tfstate"}}}}`},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
-			if tc.json != "" {
-				backendJSONContent(t, cmd, tc.json)
-			} else {
-				backendTFContent(t, cmd, tc.hcl)
-			}
-			// apply, with no opt-in: the backend is the configuration's.
-			cmd.Args = append(cmd.Args, "--command=apply")
-			if out, err := cmd.CombinedOutput(); err != nil {
-				t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
-			}
-			invs := invocations()
-			if len(invs) != 2 {
-				t.Fatalf("expected 2 tofu invocations (init, apply), got %d: %+v", len(invs), invs)
-			}
-			if apply := invs[1]; apply.hasArgWithPrefix("-state=") || apply.hasArgWithPrefix("-state-out=") {
-				t.Errorf("apply should pass no -state flags with an absolute local backend, got %v", apply.args)
-			}
-		})
-	}
-}
-
 // init runs with -reconfigure in plan, apply and destroy, so an edited backend
 // block isn't refused on the strength of the `.terraform/` an earlier run left
 // in the runfiles tree.
@@ -1410,4 +1291,184 @@ func TestRunner_Test_EnvAndInitFlags(t *testing.T) {
 			t.Errorf("%s: TF_PLUGIN_CACHE_DIR = %q, want it unset", inv.args[0], inv.env["TF_PLUGIN_CACHE_DIR"])
 		}
 	}
+}
+
+// backendConfigs returns the `-backend-config=<name>=<value>` pairs among an
+// invocation's arguments.
+func backendConfigs(inv invocation) map[string]string {
+	got := map[string]string{}
+	for _, a := range inv.args {
+		if kv, ok := strings.CutPrefix(a, "-backend-config="); ok {
+			k, v, _ := strings.Cut(kv, "=")
+			got[k] = v
+		}
+	}
+	return got
+}
+
+// assertRefusedLocalBackend asserts that the runner refused a command because
+// of a `backend "local"` block it can't resolve: it exited non-zero, named the
+// block, the problem and the alternatives, ran no tofu process and created no
+// state dir.
+func assertRefusedLocalBackend(t *testing.T, cmd *exec.Cmd, problem string) {
+	t.Helper()
+	logPath := envValue(t, cmd, "TOFU_LOG")
+	stateDir := argValue(t, cmd, "--state-dir")
+
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected the runner to refuse the local backend, but it succeeded:\n%s", out)
+	}
+	msg := string(out)
+	for _, want := range []string{`backend "local" block at backend_override.tf`, problem, "allow_ephemeral_state = True"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("expected the refusal to contain %q, got: %s", want, msg)
+		}
+	}
+	if _, err := os.Stat(logPath); !os.IsNotExist(err) {
+		t.Errorf("expected no tofu invocations, got err=%v", err)
+	}
+	if _, err := os.Stat(stateDir); !os.IsNotExist(err) {
+		t.Errorf("state dir %s should not have been created, got err=%v", stateDir, err)
+	}
+}
+
+// A `backend "local"`'s paths are resolved as `tofu -chdir=<pkg>` would
+// resolve them, against the configuration's directory in the checkout, and
+// pinned with -backend-config: a relative or unset `path` or `workspace_dir`
+// lands there, an absolute one is kept. No -state flags follow, in HCL and
+// JSON alike.
+func TestRunner_LocalBackend_ResolvedAgainstCheckout(t *testing.T) {
+	cases := []struct{ name, hcl, json, path, workspaceDir string }{
+		{"empty block", "terraform {\n  backend \"local\" {}\n}\n", "", "terraform.tfstate", "terraform.tfstate.d"},
+		{"relative path", "terraform {\n  backend \"local\" {\n    path = \"sub/my.tfstate\"\n  }\n}\n", "", "sub/my.tfstate", "terraform.tfstate.d"},
+		{"parent path", "terraform {\n  backend \"local\" {\n    path = \"../shared/my.tfstate\"\n  }\n}\n", "", "../shared/my.tfstate", "terraform.tfstate.d"},
+		{"absolute path only", "terraform {\n  backend \"local\" {\n    path = \"/abs/my.tfstate\"\n  }\n}\n", "", "/abs/my.tfstate", "terraform.tfstate.d"},
+		{"both set", "terraform {\n  backend \"local\" {\n    path          = \"/abs/my.tfstate\"\n    workspace_dir = \"ws\"\n  }\n}\n", "", "/abs/my.tfstate", "ws"},
+		{"json empty", "", `{"terraform": {"backend": {"local": {}}}}`, "terraform.tfstate", "terraform.tfstate.d"},
+		{"json relative", "", `{"terraform": {"backend": {"local": {"path": "rel.tfstate"}}}}`, "rel.tfstate", "terraform.tfstate.d"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
+			if tc.json != "" {
+				backendJSONContent(t, cmd, tc.json)
+			} else {
+				backendTFContent(t, cmd, tc.hcl)
+			}
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
+			}
+			invs := invocations()
+			if len(invs) != 2 {
+				t.Fatalf("expected 2 tofu invocations (init, plan), got %d: %+v", len(invs), invs)
+			}
+			pkgDir := filepath.Join(envValue(t, cmd, "BUILD_WORKSPACE_DIRECTORY"), "mypkg")
+			resolve := func(p string) string {
+				if filepath.IsAbs(p) {
+					return p
+				}
+				return filepath.Join(pkgDir, p)
+			}
+			got := backendConfigs(invs[0])
+			if got["path"] != resolve(tc.path) || got["workspace_dir"] != resolve(tc.workspaceDir) {
+				t.Errorf("init -backend-config = %v, want path=%s workspace_dir=%s", got, resolve(tc.path), resolve(tc.workspaceDir))
+			}
+			if plan := invs[1]; plan.hasArgWithPrefix("-state=") || plan.hasArgWithPrefix("-state-out=") || plan.hasArgWithPrefix("-backend-config=") {
+				t.Errorf("plan should pass neither -state flags nor -backend-config with a local backend, got %v", plan.args)
+			}
+		})
+	}
+}
+
+// A deploy in the root package resolves against the checkout's root.
+func TestRunner_LocalBackend_RootPackage(t *testing.T) {
+	cmd, _, invocations := setupPkg(t, map[string]any{"region": "us-east-1"}, "")
+	backendTFContent(t, cmd, "terraform {\n  backend \"local\" {}\n}\n")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
+	}
+	want := filepath.Join(envValue(t, cmd, "BUILD_WORKSPACE_DIRECTORY"), "terraform.tfstate")
+	if got := backendConfigs(invocations()[0]); got["path"] != want {
+		t.Errorf("init -backend-config path = %q, want %q", got["path"], want)
+	}
+}
+
+// A local backend is the configuration's own choice of backend: apply and
+// destroy are not gated on allow_ephemeral_state.
+func TestRunner_LocalBackend_NotGated(t *testing.T) {
+	for _, command := range []string{"apply", "destroy"} {
+		t.Run(command, func(t *testing.T) {
+			cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
+			backendTFContent(t, cmd, "terraform {\n  backend \"local\" {}\n}\n")
+			cmd.Args = append(cmd.Args, "--command="+command)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
+			}
+			invs := invocations()
+			if len(invs) != 2 {
+				t.Fatalf("expected 2 tofu invocations (init, %s), got %d: %+v", command, len(invs), invs)
+			}
+			if inv := invs[1]; inv.hasArgWithPrefix("-state=") || inv.hasArgWithPrefix("-state-out=") {
+				t.Errorf("%s should pass no -state flags with a local backend, got %v", command, inv.args)
+			}
+		})
+	}
+}
+
+// A path given as an expression can't be resolved: tofu would evaluate
+// `path.module` against the runfiles tree, and a variable can't be read here.
+// Refused for every command, with or without the ephemeral-state opt-in, in
+// HCL and JSON.
+func TestRunner_LocalBackend_ExpressionRefused(t *testing.T) {
+	for _, command := range []string{"plan", "apply", "destroy"} {
+		for _, allow := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/allow=%v", command, allow), func(t *testing.T) {
+				cmd, _, _ := setup(t, map[string]any{"region": "us-east-1"})
+				backendTFContent(t, cmd, "terraform {\n  backend \"local\" {\n    path = \"${path.module}/x.tfstate\"\n  }\n}\n")
+				cmd.Args = append(cmd.Args, "--command="+command)
+				if allow {
+					cmd.Args = append(cmd.Args, "--allow-ephemeral-state")
+				}
+				assertRefusedLocalBackend(t, cmd, "`path` is not a literal string")
+			})
+		}
+	}
+	t.Run("workspace_dir", func(t *testing.T) {
+		cmd, _, _ := setup(t, map[string]any{"region": "us-east-1"})
+		backendTFContent(t, cmd, "terraform {\n  backend \"local\" {\n    path          = \"/abs/x.tfstate\"\n    workspace_dir = \"${path.module}/ws\"\n  }\n}\n")
+		assertRefusedLocalBackend(t, cmd, "`workspace_dir` is not a literal string")
+	})
+	t.Run("json", func(t *testing.T) {
+		cmd, _, _ := setup(t, map[string]any{"region": "us-east-1"})
+		backendJSONContent(t, cmd, `{"terraform": {"backend": {"local": {"path": "${path.module}/x.tfstate"}}}}`)
+		assertRefusedLocalBackend(t, cmd, "`path` is not a literal string")
+	})
+}
+
+// A deploy from another repository has no directory in the checkout, so a
+// relative path (the defaults included) can't be resolved and is refused;
+// absolute paths for both attributes are honoured.
+func TestRunner_LocalBackend_ExternalRepository(t *testing.T) {
+	const pkg = "external/other+/pkg"
+	t.Run("default path refused", func(t *testing.T) {
+		cmd, _, _ := setupPkg(t, map[string]any{"region": "us-east-1"}, pkg)
+		backendTFContent(t, cmd, "terraform {\n  backend \"local\" {}\n}\n")
+		assertRefusedLocalBackend(t, cmd, "`path` (\"terraform.tfstate\") is relative and the deploy is in another repository")
+	})
+	t.Run("default workspace_dir refused", func(t *testing.T) {
+		cmd, _, _ := setupPkg(t, map[string]any{"region": "us-east-1"}, pkg)
+		backendTFContent(t, cmd, "terraform {\n  backend \"local\" {\n    path = \"/abs/x.tfstate\"\n  }\n}\n")
+		assertRefusedLocalBackend(t, cmd, "`workspace_dir` (\"terraform.tfstate.d\") is relative and the deploy is in another repository")
+	})
+	t.Run("absolute paths honoured", func(t *testing.T) {
+		cmd, _, invocations := setupPkg(t, map[string]any{"region": "us-east-1"}, pkg)
+		backendTFContent(t, cmd, "terraform {\n  backend \"local\" {\n    path          = \"/abs/x.tfstate\"\n    workspace_dir = \"/abs/ws\"\n  }\n}\n")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
+		}
+		if got := backendConfigs(invocations()[0]); got["path"] != "/abs/x.tfstate" || got["workspace_dir"] != "/abs/ws" {
+			t.Errorf("init -backend-config = %v, want the absolute paths unchanged", got)
+		}
+	})
 }
