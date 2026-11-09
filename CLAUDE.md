@@ -330,7 +330,13 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   orphans live infrastructure. The gate is in the Go runner (backend
   detection is a filesystem scan), fires before any tofu process starts or
   the state dir exists, and `plan` stays ungated. Don't downgrade it to a
-  warning.
+  warning. A `backend "local"` counts as a backend only with an absolute,
+  literal `path` (and `workspace_dir`); otherwise every command is refused,
+  `plan` included, ahead of the gate (`localBackendProblem`, issue #86):
+  tofu would resolve the path against the runfiles work tree. The runner
+  sets `TF_DATA_DIR` to the work tree's `.terraform`, drops
+  `TF_PLUGIN_CACHE_DIR` (`tofuEnv`) and inits with `-reconfigure` (issue
+  #92); keep all three.
 - Materialisation helpers live in `tf/private/work_tree.bzl`
   (`materialize`, `materialize_plugin_tree`, `work_tree_root`,
   `plugin_tree_root`); `library.bzl` and `deploy.bzl` go through them,

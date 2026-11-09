@@ -59,7 +59,7 @@ func runTest(extraArgs []string) error {
 		return err
 	}
 
-	env := append(os.Environ(), "TF_IN_AUTOMATION=1")
+	env := tofuEnv(cwd)
 	// The test files' directory, which tofu reads alongside the root module's
 	// own. Absent, tofu reads its default, `tests`.
 	var dirArgs []string

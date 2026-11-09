@@ -40,6 +40,9 @@ func runnerBin(t *testing.T) string {
 type invocation struct {
 	cwd  string
 	args []string
+	// env holds the variables the fake tofu logs (TF_DATA_DIR,
+	// TF_PLUGIN_CACHE_DIR), with "<unset>" for one not in its environment.
+	env map[string]string
 }
 
 func (inv invocation) hasArg(arg string) bool {
@@ -66,30 +69,46 @@ func (inv invocation) hasArgWithPrefix(prefix string) bool {
 //	cwd=<working directory>
 //	arg=<arg1>
 //	arg=<arg2>
+//	env=<NAME>=<value or <unset>>
 //	---
 func parseInvocations(data []byte) []invocation {
 	var invs []invocation
 	var cur *invocation
 	for _, line := range strings.Split(string(data), "\n") {
-		switch {
-		case line == "---":
+		if line == "---" {
 			if cur != nil {
 				invs = append(invs, *cur)
 				cur = nil
 			}
+			continue
+		}
+		if cur == nil {
+			cur = &invocation{env: map[string]string{}}
+		}
+		switch {
 		case strings.HasPrefix(line, "cwd="):
-			if cur == nil {
-				cur = &invocation{}
-			}
 			cur.cwd = strings.TrimPrefix(line, "cwd=")
 		case strings.HasPrefix(line, "arg="):
-			if cur == nil {
-				cur = &invocation{}
-			}
 			cur.args = append(cur.args, strings.TrimPrefix(line, "arg="))
+		case strings.HasPrefix(line, "env="):
+			name, value, _ := strings.Cut(strings.TrimPrefix(line, "env="), "=")
+			cur.env[name] = value
 		}
 	}
 	return invs
+}
+
+// fakeTofuScript is the stand-in for tofu: it logs its working directory,
+// arguments and the environment variables the runner is meant to control,
+// then runs `extra` (shell) and exits 0.
+func fakeTofuScript(extra string) string {
+	return "#!/bin/sh\n" +
+		"{ printf 'cwd=%s\\n' \"$(pwd)\"; for a in \"$@\"; do printf 'arg=%s\\n' \"$a\"; done; " +
+		"printf 'env=TF_DATA_DIR=%s\\n' \"${TF_DATA_DIR-<unset>}\"; " +
+		"printf 'env=TF_PLUGIN_CACHE_DIR=%s\\n' \"${TF_PLUGIN_CACHE_DIR-<unset>}\"; " +
+		"printf -- '---\\n'; } >> \"$TOFU_LOG\"\n" +
+		extra +
+		"exit 0\n"
 }
 
 // setup creates a temporary work tree with the given vars written to
@@ -121,10 +140,7 @@ func setupPkg(t *testing.T, vars map[string]any, pkgDir string) (
 
 	logPath := filepath.Join(dir, "tofu-invocations.log")
 	fakeTofuSh := filepath.Join(dir, "tofu.sh")
-	script := "#!/bin/sh\n" +
-		"{ printf 'cwd=%s\\n' \"$(pwd)\"; for a in \"$@\"; do printf 'arg=%s\\n' \"$a\"; done; printf -- '---\\n'; } >> \"$TOFU_LOG\"\n" +
-		"exit 0\n"
-	if err := os.WriteFile(fakeTofuSh, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(fakeTofuSh, []byte(fakeTofuScript("")), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -409,6 +425,15 @@ func backendTFContent(t *testing.T, cmd *exec.Cmd, content string) {
 	}
 }
 
+// backendJSONContent is backendTFContent for a `.tf.json` file.
+func backendJSONContent(t *testing.T, cmd *exec.Cmd, content string) {
+	t.Helper()
+	workTree := argValue(t, cmd, "--work-tree")
+	if err := os.WriteFile(filepath.Join(workTree, "mypkg", "backend_override.tf.json"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestRunner_BackendBlock_OmitsStateFlags verifies that when a terraform{}
 // backend "..." {} block is present, the runner does not pass -state= or
 // -state-out= to tofu.
@@ -416,7 +441,7 @@ func TestRunner_BackendBlock_OmitsStateFlags(t *testing.T) {
 	cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
 	backendTFContent(t, cmd, `
 terraform {
-  backend "local" {}
+  backend "s3" {}
 }
 `)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -1018,10 +1043,7 @@ func setupTest(t *testing.T) (cmd *exec.Cmd, workTree, scratch, outputs string, 
 
 	logPath := filepath.Join(dir, "tofu-invocations.log")
 	fakeTofuSh := filepath.Join(dir, "tofu.sh")
-	script := "#!/bin/sh\n" +
-		"{ printf 'cwd=%s\\n' \"$(pwd)\"; for a in \"$@\"; do printf 'arg=%s\\n' \"$a\"; done; printf -- '---\\n'; } >> \"$TOFU_LOG\"\n" +
-		"if [ \"$1\" = test ] && [ -n \"${FAKE_ERRORED:-}\" ]; then echo '{}' > errored_test.tfstate; fi\n" +
-		"exit 0\n"
+	script := fakeTofuScript("if [ \"$1\" = test ] && [ -n \"${FAKE_ERRORED:-}\" ]; then echo '{}' > errored_test.tfstate; fi\n")
 	if err := os.WriteFile(fakeTofuSh, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1220,5 +1242,172 @@ func TestRunner_Test_StateDirNotRequired(t *testing.T) {
 	out, err := plan.CombinedOutput()
 	if err == nil || !strings.Contains(string(out), "--state-dir is required") {
 		t.Errorf("plan without --state-dir: err=%v out=%q", err, out)
+	}
+}
+
+// assertRefusedLocalBackend asserts that the runner refused a command because
+// of a `backend "local"` block it can't honour: it exited non-zero, named the
+// block and the alternatives, ran no tofu process and created no state dir.
+func assertRefusedLocalBackend(t *testing.T, cmd *exec.Cmd, problem string) {
+	t.Helper()
+	logPath := envValue(t, cmd, "TOFU_LOG")
+	stateDir := argValue(t, cmd, "--state-dir")
+
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected the runner to refuse the local backend, but it succeeded:\n%s", out)
+	}
+	msg := string(out)
+	for _, want := range []string{`backend "local" block at backend_override.tf`, problem, "allow_ephemeral_state = True", "absolute"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("expected the refusal to contain %q, got: %s", want, msg)
+		}
+	}
+	if _, err := os.Stat(logPath); !os.IsNotExist(err) {
+		t.Errorf("expected no tofu invocations, got err=%v", err)
+	}
+	if _, err := os.Stat(stateDir); !os.IsNotExist(err) {
+		t.Errorf("state dir %s should not have been created, got err=%v", stateDir, err)
+	}
+}
+
+// A `backend "local"` with no path is refused for every command, plan
+// included, and the ephemeral-state opt-in doesn't let it through: tofu would
+// keep the state in the launcher's runfiles tree.
+func TestRunner_LocalBackend_NoPathRefused(t *testing.T) {
+	for _, command := range []string{"plan", "apply", "destroy"} {
+		for _, allow := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/allow=%v", command, allow), func(t *testing.T) {
+				cmd, _, _ := setup(t, map[string]any{"region": "us-east-1"})
+				backendTFContent(t, cmd, "terraform {\n  backend \"local\" {}\n}\n")
+				cmd.Args = append(cmd.Args, "--command="+command)
+				if allow {
+					cmd.Args = append(cmd.Args, "--allow-ephemeral-state")
+				}
+				assertRefusedLocalBackend(t, cmd, "sets no `path`")
+			})
+		}
+	}
+}
+
+// Relative paths, a `workspace_dir` without a `path`, a relative
+// `workspace_dir` beside an absolute `path`, and a `path` that isn't a
+// literal are all refused; `.tf.json` syntax too.
+func TestRunner_LocalBackend_RelativeOrUnknownPathRefused(t *testing.T) {
+	cases := []struct {
+		name, hcl, json, problem string
+	}{
+		{"relative path", "terraform {\n  backend \"local\" {\n    path = \"rel.tfstate\"\n  }\n}\n", "", "`path` \"rel.tfstate\" is relative"},
+		{"workspace_dir only", "terraform {\n  backend \"local\" {\n    workspace_dir = \"/abs/ws\"\n  }\n}\n", "", "sets no `path`"},
+		{"relative workspace_dir", "terraform {\n  backend \"local\" {\n    path          = \"/abs/x.tfstate\"\n    workspace_dir = \"ws\"\n  }\n}\n", "", "`workspace_dir` \"ws\" is relative"},
+		{"expression path", "terraform {\n  backend \"local\" {\n    path = \"${path.module}/x.tfstate\"\n  }\n}\n", "", "`path` is not a literal string"},
+		{"json relative path", "", `{"terraform": {"backend": {"local": {"path": "rel.tfstate"}}}}`, "`path` \"rel.tfstate\" is relative"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd, _, _ := setup(t, map[string]any{"region": "us-east-1"})
+			if tc.json != "" {
+				backendJSONContent(t, cmd, tc.json)
+			} else {
+				backendTFContent(t, cmd, tc.hcl)
+			}
+			out, err := cmd.CombinedOutput()
+			if err == nil {
+				t.Fatalf("expected a refusal, got success:\n%s", out)
+			}
+			// The file is backend_override.tf or backend_override.tf.json.
+			if !strings.Contains(string(out), tc.problem) || !strings.Contains(string(out), `backend "local" block at backend_override.tf`) {
+				t.Errorf("refusal = %s, want it to name backend_override.tf and %q", out, tc.problem)
+			}
+		})
+	}
+}
+
+// A `backend "local"` whose paths are absolute is a real backend: the runner
+// defers to it like a remote one, with no -state flags and no gate, in HCL
+// and JSON alike.
+func TestRunner_LocalBackend_AbsolutePathDefers(t *testing.T) {
+	for _, tc := range []struct{ name, hcl, json string }{
+		{"hcl", "terraform {\n  backend \"local\" {\n    path          = \"/abs/x.tfstate\"\n    workspace_dir = \"/abs/ws\"\n  }\n}\n", ""},
+		{"json", "", `{"terraform": {"backend": {"local": {"path": "/abs/x.tfstate"}}}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
+			if tc.json != "" {
+				backendJSONContent(t, cmd, tc.json)
+			} else {
+				backendTFContent(t, cmd, tc.hcl)
+			}
+			// apply, with no opt-in: the backend is the configuration's.
+			cmd.Args = append(cmd.Args, "--command=apply")
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
+			}
+			invs := invocations()
+			if len(invs) != 2 {
+				t.Fatalf("expected 2 tofu invocations (init, apply), got %d: %+v", len(invs), invs)
+			}
+			if apply := invs[1]; apply.hasArgWithPrefix("-state=") || apply.hasArgWithPrefix("-state-out=") {
+				t.Errorf("apply should pass no -state flags with an absolute local backend, got %v", apply.args)
+			}
+		})
+	}
+}
+
+// init runs with -reconfigure in plan, apply and destroy, so an edited backend
+// block isn't refused on the strength of the `.terraform/` an earlier run left
+// in the runfiles tree.
+func TestRunner_Init_Reconfigure(t *testing.T) {
+	cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
+	}
+	if init := invocations()[0]; !init.hasArg("init") || !init.hasArg("-reconfigure") {
+		t.Errorf("init args = %v, want -reconfigure", init.args)
+	}
+}
+
+// tofu runs with TF_DATA_DIR fixed to the work tree's `.terraform` and no
+// TF_PLUGIN_CACHE_DIR, whatever the parent environment holds.
+func TestRunner_Env_DataDirAndNoPluginCache(t *testing.T) {
+	cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
+	cmd.Env = append(cmd.Env, "TF_DATA_DIR=/bogus/data", "TF_PLUGIN_CACHE_DIR=/bogus/cache")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
+	}
+	want := filepath.Join(argValue(t, cmd, "--work-tree"), "mypkg", ".terraform")
+	for _, inv := range invocations() {
+		if inv.env["TF_DATA_DIR"] != want {
+			t.Errorf("%s: TF_DATA_DIR = %q, want %q", inv.args[0], inv.env["TF_DATA_DIR"], want)
+		}
+		if inv.env["TF_PLUGIN_CACHE_DIR"] != "<unset>" {
+			t.Errorf("%s: TF_PLUGIN_CACHE_DIR = %q, want it unset", inv.args[0], inv.env["TF_PLUGIN_CACHE_DIR"])
+		}
+	}
+}
+
+// The same holds in test mode, where init keeps -backend=false and gains no
+// -reconfigure, and TF_DATA_DIR is the copy's `.terraform`.
+func TestRunner_Test_EnvAndInitFlags(t *testing.T) {
+	cmd, _, scratch, _, invocations := setupTest(t)
+	cmd.Env = append(cmd.Env, "TF_DATA_DIR=/bogus/data", "TF_PLUGIN_CACHE_DIR=/bogus/cache")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
+	}
+	invs := invocations()
+	if len(invs) != 2 {
+		t.Fatalf("got %d tofu invocations, want init then test: %+v", len(invs), invs)
+	}
+	if init := invs[0]; init.hasArg("-reconfigure") || !init.hasArg("-backend=false") {
+		t.Errorf("test-mode init args = %v, want -backend=false and no -reconfigure", init.args)
+	}
+	want := filepath.Join(scratch, "rules_tofu.work", "mypkg", ".terraform")
+	for _, inv := range invs {
+		if inv.env["TF_DATA_DIR"] != want {
+			t.Errorf("%s: TF_DATA_DIR = %q, want %q", inv.args[0], inv.env["TF_DATA_DIR"], want)
+		}
+		if inv.env["TF_PLUGIN_CACHE_DIR"] != "<unset>" {
+			t.Errorf("%s: TF_PLUGIN_CACHE_DIR = %q, want it unset", inv.args[0], inv.env["TF_PLUGIN_CACHE_DIR"])
+		}
 	}
 }

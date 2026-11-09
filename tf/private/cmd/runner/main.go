@@ -6,11 +6,13 @@
 //   - Validate we were invoked via `bazel run` (BUILD_WORKSPACE_DIRECTORY set).
 //   - Refuse apply/destroy when the deploy declares no state backend and has
 //     not opted in via --allow-ephemeral-state, since local state under
-//     bazel-bin does not survive `bazel clean`.
-//   - Run `tofu init -get=false` inside the pre-materialized work tree, after
-//     copying in the module manifest (every module is already in the work
-//     tree) and the provider lock when providers come from
-//     tf_providers.from_lock.
+//     bazel-bin does not survive `bazel clean`; refuse every command when it
+//     declares a `backend "local"` whose paths aren't absolute, which tofu
+//     would resolve against the runfiles work tree.
+//   - Run `tofu init -get=false -reconfigure` inside the pre-materialized
+//     work tree, with TF_DATA_DIR fixed to its `.terraform`, after copying in
+//     the module manifest (every module is already in the work tree) and the
+//     provider lock when providers come from tf_providers.from_lock.
 //   - For plan: emit a plan artifact and stop.
 //   - For apply/destroy: delegate to tofu, passing through any extra args.
 //   - For test (tf_test): copy the work tree into $TEST_TMPDIR, init it with
@@ -113,17 +115,27 @@ func run() error {
 
 	// Backend detection is a read-only scan of the root module's .tf files, so
 	// it does not depend on init having run. Compute it once, up front: the
-	// ephemeral-state gate below needs the answer before any tofu process is
-	// started or any directory is created, and the state flags reuse it.
-	backend := hasBackend(cwd)
+	// gates below need the answer before any tofu process is started or any
+	// directory is created, and the state flags reuse it.
+	backend := detectBackend(cwd)
 	planFile := filepath.Join(*stateDir, "tfplan")
 	stateFile := filepath.Join(*stateDir, "terraform.tfstate")
+
+	// A `backend "local"` whose paths aren't absolute can never mean what it
+	// says here: tofu would resolve them against the launcher's runfiles work
+	// tree, a per-target directory Bazel owns. Refuse every command, plan
+	// included, since a plan against a state file in the wrong place misleads
+	// rather than destroys. Ahead of the ephemeral-state gate, so the opt-in
+	// doesn't let it through either.
+	if backend.problem != "" {
+		return localBackendError(*command, backend)
+	}
 
 	// Refuse to mutate real infrastructure against throwaway local state.
 	// Deliberately fails ahead of everything else: no tofu runs and the state
 	// directory is not created. `plan` is ungated — planning against empty
 	// local state destroys nothing.
-	if (*command == "apply" || *command == "destroy") && !backend && !*allowEphemeralState {
+	if (*command == "apply" || *command == "destroy") && !backend.present && !*allowEphemeralState {
 		return ephemeralStateError(*command, stateFile)
 	}
 
@@ -131,12 +143,7 @@ func run() error {
 		return fmt.Errorf("create %s: %w", *stateDir, err)
 	}
 
-	// TF_IN_AUTOMATION=1 suppresses usage-hint lines in tofu output that
-	// don't apply in our wrapped invocation (e.g. "Run `terraform plan`…").
-	// We deliberately do NOT set TF_INPUT=0 globally: variable prompts are
-	// suppressed per-command via -input=false, but the apply/destroy
-	// approval prompt must remain reachable.
-	env := append(os.Environ(), "TF_IN_AUTOMATION=1")
+	env := tofuEnv(cwd)
 
 	// Ensure the vendored plugin tree exists even when zero providers are in
 	// scope (the deploy declares no symlinks under the sibling <name>.plugins/
@@ -154,14 +161,18 @@ func run() error {
 	if err := installModulesManifest(*modulesManifest, cwd); err != nil {
 		return err
 	}
-	if err := runTofu(env, cwd, "init", "-input=false", "-get=false", "-plugin-dir="+*pluginDir); err != nil {
+	// -reconfigure: the runfiles work tree keeps the `.terraform/` of earlier
+	// runs, whose saved backend configuration would otherwise make init refuse
+	// an edited backend block (the only way out being `bazel clean`). It
+	// resets that saved copy from the configuration and never migrates state.
+	if err := runTofu(env, cwd, "init", "-input=false", "-get=false", "-reconfigure", "-plugin-dir="+*pluginDir); err != nil {
 		if *lockFile != "" {
 			log.Print("if the provider versions in required_providers changed, run `bazel run @tf_providers//:pin` to update the lock file.")
 		}
 		return fmt.Errorf("tofu init: %w", err)
 	}
 	stateArgs := []string{"-state=" + stateFile, "-state-out=" + stateFile}
-	if backend {
+	if backend.present {
 		stateArgs = nil
 	}
 	varFileArgs := make([]string, len(*varFiles))
@@ -263,8 +274,9 @@ deploy's srcs:
       }
     }
 
-(Any backend, or a cloud {} block, will do.) With one present, the runner
-defers to it entirely and this check no longer applies.
+(Any remote backend, a cloud {} block, or a backend "local" whose path is
+absolute will do.) With one present, the runner defers to it entirely and this
+check no longer applies.
 
 If disposable state is the point — a demo or example, a throwaway sandbox, or
 bootstrapping the bucket that will later hold real state — opt in explicitly by
@@ -279,6 +291,50 @@ bucket exists and move the existing state into it with:
 
 The deploy's .plan target is never gated, so planning still works either way.`,
 		command, stateFile)
+}
+
+// localBackendError is the refusal for a `backend "local"` block whose paths
+// aren't literal absolute ones. It names the block, says why the runner can't
+// honour it, and lists the configurations that do work.
+func localBackendError(command string, backend backendInfo) error {
+	return fmt.Errorf(`rules_tofu: refusing to run "tofu %s": the backend "local" block at %s can't be used from Bazel: %s.
+
+tofu's working directory here is the launcher's runfiles work tree, a
+per-target directory that Bazel owns and prunes, so a relative state path
+means a different, disposable state file for each of .plan, .apply and
+.destroy, and a plan or apply against the wrong one.
+
+Use one of:
+
+  - a remote backend (s3, gcs, ...) or a cloud {} block;
+  - backend "local" with an absolute, literal path (and workspace_dir, if
+    set), which the runner then defers to;
+  - no backend block, with allow_ephemeral_state = True on the tf_deploy, for
+    state under bazel-bin that is disposable by design.`,
+		command, backend.where, backend.problem)
+}
+
+// tofuEnv is the environment tofu runs with: the user's, less the variables
+// that would move tofu's data directory or plugin cache away from the work
+// tree, plus TF_IN_AUTOMATION and a TF_DATA_DIR fixed to the work tree's own
+// `.terraform`, where the module manifest and the lock are installed. A user's
+// TF_DATA_DIR would otherwise make `init -get=false` miss the manifest at run
+// time only (the validate action runs with a clean environment), and a plugin
+// cache would be consulted and written to beside the vendored plugin tree.
+//
+// TF_IN_AUTOMATION=1 suppresses usage-hint lines in tofu output that don't
+// apply in our wrapped invocation (e.g. "Run `terraform plan`…"). TF_INPUT is
+// deliberately not set: variable prompts are suppressed per-command via
+// -input=false, but the apply/destroy approval prompt must remain reachable.
+func tofuEnv(cwd string) []string {
+	var env []string
+	for _, e := range os.Environ() {
+		if strings.HasPrefix(e, "TF_DATA_DIR=") || strings.HasPrefix(e, "TF_PLUGIN_CACHE_DIR=") || strings.HasPrefix(e, "TF_IN_AUTOMATION=") {
+			continue
+		}
+		env = append(env, e)
+	}
+	return append(env, "TF_IN_AUTOMATION=1", "TF_DATA_DIR="+filepath.Join(cwd, ".terraform"))
 }
 
 func runTofu(env []string, cwd string, args ...string) error {
@@ -306,14 +362,34 @@ var (
 			{Type: "cloud"},
 		},
 	}
+	// The attributes of a `backend "local"` block that name a path: `path`
+	// holds the default workspace's state, `workspace_dir` the others'.
+	localBackendSchema = &hcl.BodySchema{
+		Attributes: []hcl.AttributeSchema{{Name: "path"}, {Name: "workspace_dir"}},
+	}
 )
 
-// hasBackend reports whether any configuration file tofu reads in the deploy's
+// backendInfo is what the root module's configuration says about where state
+// lives.
+type backendInfo struct {
+	// present is whether a `backend "..." {}` or `cloud {}` block was found;
+	// the runner then defers to it and passes no -state flags.
+	present bool
+	// where names the block, as `<file>:<line>` relative to the package dir.
+	where string
+	// problem is set for a `backend "local"` the runner can't honour: one
+	// whose `path` is missing or, like its `workspace_dir`, not a literal
+	// absolute path. It says what is wrong.
+	problem string
+}
+
+// detectBackend scans the configuration files tofu reads in the deploy's
 // package directory (tfconfig.ConfigFiles: a `.tofu` file shadows the `.tf`
-// file of the same name) declares a `backend "..." {}` or `cloud {}` block
-// nested inside a top-level `terraform {}` block. Either construct means the workspace uses a
-// remote/cloud state backend, and local -state/-state-out flags should be
-// omitted from the runner invocation.
+// file of the same name) for a `backend "..." {}` or `cloud {}` block nested
+// inside a top-level `terraform {}` block, and returns what it finds. Either
+// construct means the configuration chooses its own state backend, and the
+// local -state/-state-out flags are omitted; a `backend "local"` is honoured
+// only when its paths are absolute (see backendInfo.problem).
 //
 // A file that fails to parse is treated as backend-less. The build-time validate
 // action already guarantees well-formed files at runtime, so a parse error here
@@ -325,10 +401,10 @@ var (
 // materialised at their own workspace-relative paths (e.g. sibling directories)
 // and are not the root module, so backend blocks in those files do not affect
 // the root module's state backend.
-func hasBackend(cwd string) bool {
+func detectBackend(cwd string) backendInfo {
 	files, err := tfconfig.ConfigFiles(cwd)
 	if err != nil {
-		return false
+		return backendInfo{}
 	}
 	parser := hclparse.NewParser()
 	for _, path := range files {
@@ -347,26 +423,60 @@ func hasBackend(cwd string) bool {
 		if diags.HasErrors() {
 			continue
 		}
-		if containsBackendBlock(file) {
-			return true
+		if info, ok := backendIn(file, name); ok {
+			return info
 		}
 	}
-	return false
+	return backendInfo{}
 }
 
-func containsBackendBlock(file *hcl.File) bool {
+// backendIn returns the first backend or cloud block of file, if any.
+func backendIn(file *hcl.File, name string) (backendInfo, bool) {
 	content, _, diags := file.Body.PartialContent(terraformBlockSchema)
 	if diags.HasErrors() {
-		return false
+		return backendInfo{}, false
 	}
 	for _, block := range content.Blocks {
 		inner, _, diags := block.Body.PartialContent(backendBlockSchema)
 		if diags.HasErrors() {
 			continue
 		}
-		if len(inner.Blocks) > 0 {
-			return true
+		for _, b := range inner.Blocks {
+			info := backendInfo{present: true, where: fmt.Sprintf("%s:%d", name, b.DefRange.Start.Line)}
+			if b.Type == "backend" && b.Labels[0] == "local" {
+				info.problem = localBackendProblem(b.Body)
+			}
+			return info, true
 		}
 	}
-	return false
+	return backendInfo{}, false
+}
+
+// localBackendProblem says what keeps the runner from honouring a `backend
+// "local"` block, or "" if its `path`, and its `workspace_dir` when set, are
+// literal absolute paths. tofu resolves relative ones against its working
+// directory, which here is the runfiles work tree; and since OpenTofu 1.8 a
+// backend attribute may be an expression, which can't be checked here.
+func localBackendProblem(body hcl.Body) string {
+	content, _, diags := body.PartialContent(localBackendSchema)
+	if diags.HasErrors() {
+		return "its configuration could not be read"
+	}
+	if _, ok := content.Attributes["path"]; !ok {
+		return "it sets no `path`, so tofu would keep terraform.tfstate in its working directory"
+	}
+	for _, attr := range []string{"path", "workspace_dir"} {
+		a, ok := content.Attributes[attr]
+		if !ok {
+			continue
+		}
+		v, ok := tfconfig.LiteralString(a.Expr)
+		if !ok {
+			return fmt.Sprintf("its `%s` is not a literal string, so the runner can't tell where it leads", attr)
+		}
+		if !filepath.IsAbs(v) {
+			return fmt.Sprintf("its `%s` %q is relative, so tofu would resolve it against its working directory", attr, v)
+		}
+	}
+	return ""
 }

@@ -501,6 +501,13 @@ A deploy that manages real infrastructure should declare a `backend "..." {}`
 or `cloud {}` block in its own `srcs`. The runner then defers to that
 backend entirely.
 
+A `backend "local"` block is honoured only when its `path` (and
+`workspace_dir`, if set) is an absolute, literal path: tofu resolves a
+relative one against its working directory, which under `bazel run` is the
+launcher's runfiles work tree, a per-target directory Bazel owns and prunes.
+So `backend "local" {}` or a relative `path` is refused, for `plan` too, with
+a message naming the alternatives.
+
 Without one, state falls back to
 `bazel-bin/<pkg>/<name>.rules_tofu-state/`. That location is disposable by
 construction: `bazel clean` deletes it, a different build configuration
@@ -738,9 +745,13 @@ work tree, and a generated `.terraform/modules/modules.json` records the
 directory of every module call.
 
 At run time a small Go launcher enters the work tree and runs
-`tofu init -input=false -get=false -plugin-dir=<vendored providers>`, which
-disables module and plugin installation, then the requested command.
-`var_files` are passed to every command with `-var-file`.
+`tofu init -input=false -get=false -reconfigure -plugin-dir=<vendored providers>`,
+which disables module and plugin installation and re-reads the backend block
+rather than the copy a previous run saved, then the requested command.
+`var_files` are passed to every command with `-var-file`. tofu runs with
+`TF_DATA_DIR` set to the work tree's own `.terraform` and without any
+`TF_PLUGIN_CACHE_DIR`, so a shell's settings can't move the module manifest
+or bypass the vendored providers.
 
 A `tf_test` builds the same work tree for the module under test, with the
 test files and the helper libraries in `deps` added, validates it with the
