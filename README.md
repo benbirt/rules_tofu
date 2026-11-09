@@ -175,7 +175,10 @@ Versions come from one of two places:
   digests you pin yourself or a download mirror.
 
 The two can be mixed, but a provider can't be both tagged in the root module
-and locked. Every tag and attribute is described in the
+and locked: if one is, builds that use it fail, naming the conflict, until
+`bazel run @tf_providers//:pin` has rewritten the lock without it (tagged
+providers are left out) or the tag is removed. Every tag and attribute is
+described in the
 [`tf_providers` reference](https://registry.bazel.build/modules/rules_tofu/latest/docs/tf/providers/extensions.bzl).
 
 ### Pinning with a lock file

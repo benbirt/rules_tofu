@@ -11,6 +11,12 @@
 #      versions.tf and .terraform.lock.hcl, and nowhere else.
 #   4. The build passes with --lockfile_mode=error and leaves MODULE.bazel.lock
 #      byte-identical, so the bot's change is complete on its own.
+#   5. A root `tf_providers.provider` tag for hashicorp/null, still in the
+#      lock, fails the build naming the conflict, in the provider's fetch and
+#      not in the extension.
+#   6. So `pin` still runs: it leaves the tagged provider out, and with
+#      nothing else to lock writes an empty lock.
+#   7. The tag alone pins the provider, and the build passes.
 
 set -euo pipefail
 
@@ -65,4 +71,28 @@ echo "--- 4. build with --lockfile_mode=error ---" >&2
 cmp MODULE.bazel.lock "${_TMPDIR}/MODULE.bazel.lock.before" >&2 ||
   fail "MODULE.bazel.lock changed after a lock-only bump"
 
-echo "OK: the first pin worked, and a lock-only bump needed no MODULE.bazel.lock change" >&2
+echo "--- 5. a root tag for the locked provider fails the build, not the extension ---" >&2
+cat >>MODULE.bazel <<'EOF'
+tf_providers.provider(
+    source = "hashicorp/null",
+    version = "3.2.4",
+)
+EOF
+if out="$("${BAZEL}" build //:versions 2>&1)"; then
+  fail "the build passed with hashicorp/null both tagged and locked"
+fi
+echo "${out}" >&2
+grep -q -F 'is pinned both by a tf_providers.provider tag' <<<"${out}" ||
+  fail "the failure doesn't name the conflict"
+
+echo "--- 6. pin still runs, and leaves the tagged provider out of the lock ---" >&2
+"${BAZEL}" run @tf_providers//:pin >&2 || fail "pin failed with a provider both tagged and locked"
+cat .terraform.lock.hcl >&2
+if grep -q 'hashicorp/null' .terraform.lock.hcl; then
+  fail "the lock still pins hashicorp/null after pin"
+fi
+
+echo "--- 7. the tag alone pins the provider ---" >&2
+"${BAZEL}" build //:versions >&2 || fail "the build with the provider tagged failed"
+
+echo "OK: the first pin worked, a lock-only bump needed no MODULE.bazel.lock change, and a tag conflict left pin runnable" >&2
