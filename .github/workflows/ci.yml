@@ -48,6 +48,12 @@ jobs:
       # Only pushes to main save caches: pull requests restore from them
       # (via the key prefix) without adding a set per commit, which kept the
       # repository at the Actions cache limit and evicted what main had saved.
+      # A cache is saved only while its key is new, so the repository cache
+      # is keyed on every file that decides what gets downloaded: the
+      # nested workspaces' modules and the lockfile (module facts) as well as
+      # the root MODULE.bazel, and the pinned tofu releases. With the default
+      # key (MODULE.bazel alone) a dependency bump through the lockfile, or a
+      # provider the integration tests fetch, was never saved.
       - name: Set up Bazel
         uses: bazel-contrib/setup-bazel@0.19.1
         with:
@@ -55,7 +61,12 @@ jobs:
           cache-save: ${{ github.ref == 'refs/heads/main' }}
           cache-version: ${{ matrix.bazel }}
           disk-cache: ${{ github.workflow }}-${{ matrix.os }}-${{ matrix.bazel }}
-          repository-cache: true
+          repository-cache: |
+            - MODULE.bazel
+            - MODULE.bazel.lock
+            - e2e/smoke/MODULE.bazel
+            - tests/integration/*/MODULE.bazel
+            - toolchain/versions.bzl
 
       # On the pinned version, a MODULE.bazel.lock that needs any update
       # (e.g. a provider digest not yet recorded as a fact) fails the build
@@ -143,7 +154,9 @@ jobs:
           bazelisk-cache: true
           cache-save: ${{ github.ref == 'refs/heads/main' }}
           disk-cache: ${{ github.workflow }}
-          repository-cache: true
+          repository-cache: |
+            - MODULE.bazel
+            - MODULE.bazel.lock
 
       - name: Run buildifier (format check)
         run: bazel run @buildifier_prebuilt//:buildifier -- -mode=check -r .
