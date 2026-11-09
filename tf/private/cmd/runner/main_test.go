@@ -40,6 +40,9 @@ func runnerBin(t *testing.T) string {
 type invocation struct {
 	cwd  string
 	args []string
+	// env holds the variables the fake tofu logs (TF_DATA_DIR,
+	// TF_PLUGIN_CACHE_DIR), with "<unset>" for one not in its environment.
+	env map[string]string
 }
 
 func (inv invocation) hasArg(arg string) bool {
@@ -66,30 +69,46 @@ func (inv invocation) hasArgWithPrefix(prefix string) bool {
 //	cwd=<working directory>
 //	arg=<arg1>
 //	arg=<arg2>
+//	env=<NAME>=<value or <unset>>
 //	---
 func parseInvocations(data []byte) []invocation {
 	var invs []invocation
 	var cur *invocation
 	for _, line := range strings.Split(string(data), "\n") {
-		switch {
-		case line == "---":
+		if line == "---" {
 			if cur != nil {
 				invs = append(invs, *cur)
 				cur = nil
 			}
+			continue
+		}
+		if cur == nil {
+			cur = &invocation{env: map[string]string{}}
+		}
+		switch {
 		case strings.HasPrefix(line, "cwd="):
-			if cur == nil {
-				cur = &invocation{}
-			}
 			cur.cwd = strings.TrimPrefix(line, "cwd=")
 		case strings.HasPrefix(line, "arg="):
-			if cur == nil {
-				cur = &invocation{}
-			}
 			cur.args = append(cur.args, strings.TrimPrefix(line, "arg="))
+		case strings.HasPrefix(line, "env="):
+			name, value, _ := strings.Cut(strings.TrimPrefix(line, "env="), "=")
+			cur.env[name] = value
 		}
 	}
 	return invs
+}
+
+// fakeTofuScript is the stand-in for tofu: it logs its working directory,
+// arguments and the environment variables the runner is meant to control,
+// then runs `extra` (shell) and exits 0.
+func fakeTofuScript(extra string) string {
+	return "#!/bin/sh\n" +
+		"{ printf 'cwd=%s\\n' \"$(pwd)\"; for a in \"$@\"; do printf 'arg=%s\\n' \"$a\"; done; " +
+		"printf 'env=TF_DATA_DIR=%s\\n' \"${TF_DATA_DIR-<unset>}\"; " +
+		"printf 'env=TF_PLUGIN_CACHE_DIR=%s\\n' \"${TF_PLUGIN_CACHE_DIR-<unset>}\"; " +
+		"printf -- '---\\n'; } >> \"$TOFU_LOG\"\n" +
+		extra +
+		"exit 0\n"
 }
 
 // setup creates a temporary work tree with the given vars written to
@@ -109,7 +128,10 @@ func setup(t *testing.T, vars map[string]any) (
 
 // setupPkg is like setup but places the deploy at the given workspace-relative
 // package directory. An empty pkgDir models a deploy in the workspace root
-// package, where the work tree root itself is the cwd.
+// package, where the work tree root itself holds the root module.
+//
+// The runner is given a state directory `<tmp>/state`, so tofu runs in
+// `<tmp>/state/work/<pkgDir>` (see runDir), and an output root `<tmp>/out`.
 func setupPkg(t *testing.T, vars map[string]any, pkgDir string) (
 	cmd *exec.Cmd,
 	addVarFile func(map[string]any) string,
@@ -121,10 +143,7 @@ func setupPkg(t *testing.T, vars map[string]any, pkgDir string) (
 
 	logPath := filepath.Join(dir, "tofu-invocations.log")
 	fakeTofuSh := filepath.Join(dir, "tofu.sh")
-	script := "#!/bin/sh\n" +
-		"{ printf 'cwd=%s\\n' \"$(pwd)\"; for a in \"$@\"; do printf 'arg=%s\\n' \"$a\"; done; printf -- '---\\n'; } >> \"$TOFU_LOG\"\n" +
-		"exit 0\n"
-	if err := os.WriteFile(fakeTofuSh, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(fakeTofuSh, []byte(fakeTofuScript("")), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -151,7 +170,7 @@ func setupPkg(t *testing.T, vars map[string]any, pkgDir string) (
 		return parseInvocations(data)
 	}
 
-	pluginDir := filepath.Join(workTree, pkgDir, ".rules_tofu-plugins")
+	pluginDir := filepath.Join(dir, "plugins")
 	modulesManifest := filepath.Join(dir, "modules.json")
 	if err := os.WriteFile(modulesManifest, []byte(testManifest), 0o644); err != nil {
 		t.Fatal(err)
@@ -164,12 +183,17 @@ func setupPkg(t *testing.T, vars map[string]any, pkgDir string) (
 		"--plugin-dir="+pluginDir,
 		"--modules-manifest="+modulesManifest,
 		"--state-dir="+filepath.Join(dir, "state"),
+		"--output-root="+filepath.Join(dir, "out"),
 		"--command=plan",
 	)
-	cmd.Env = append(os.Environ(),
-		"BUILD_WORKSPACE_DIRECTORY="+dir,
-		"TOFU_LOG="+logPath,
-	)
+	// The runner must not depend on the checkout: BUILD_WORKSPACE_DIRECTORY is
+	// taken out of its environment, as when a built launcher is run directly.
+	for _, e := range os.Environ() {
+		if !strings.HasPrefix(e, "BUILD_WORKSPACE_DIRECTORY=") {
+			cmd.Env = append(cmd.Env, e)
+		}
+	}
+	cmd.Env = append(cmd.Env, "TOFU_LOG="+logPath)
 	return cmd, addVarFile, invocations
 }
 
@@ -394,17 +418,16 @@ func TestRunner_StateFlags_Destroy(t *testing.T) {
 // tree, and returns the path written.
 func backendTFContent(t *testing.T, cmd *exec.Cmd, content string) {
 	t.Helper()
-	var workTree string
-	for _, arg := range cmd.Args {
-		if strings.HasPrefix(arg, "--work-tree=") {
-			workTree = strings.TrimPrefix(arg, "--work-tree=")
-		}
-	}
-	if workTree == "" {
-		t.Fatal("could not find --work-tree flag in runner cmd args")
-	}
-	tfPath := filepath.Join(workTree, "mypkg", "backend_override.tf")
+	tfPath := filepath.Join(argValue(t, cmd, "--work-tree"), argValue(t, cmd, "--package-dir"), "backend_override.tf")
 	if err := os.WriteFile(tfPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// backendJSONContent is backendTFContent for a `.tf.json` file.
+func backendJSONContent(t *testing.T, cmd *exec.Cmd, content string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(argValue(t, cmd, "--work-tree"), argValue(t, cmd, "--package-dir"), "backend_override.tf.json"), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -416,7 +439,7 @@ func TestRunner_BackendBlock_OmitsStateFlags(t *testing.T) {
 	cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
 	backendTFContent(t, cmd, `
 terraform {
-  backend "local" {}
+  backend "s3" {}
 }
 `)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -590,26 +613,28 @@ func TestRunner_MalformedJSON_KeepsStateFlags(t *testing.T) {
 	}
 }
 
-// TestRunner_MissingBuildWorkspaceDirectory verifies that the runner exits
-// non-zero and prints an actionable message when BUILD_WORKSPACE_DIRECTORY
-// is not set (i.e. it was invoked outside of `bazel run`).
-func TestRunner_MissingBuildWorkspaceDirectory(t *testing.T) {
-	cmd, _, _ := setup(t, map[string]any{"region": "us-east-1"})
-	// Strip BUILD_WORKSPACE_DIRECTORY from the environment.
-	filtered := cmd.Env[:0]
+// TestRunner_NoCheckoutNeeded verifies that the runner is an ordinary
+// executable: it runs with no BUILD_WORKSPACE_DIRECTORY (setup removes it, as
+// when a built launcher is run directly rather than through `bazel run`) and
+// from an unrelated working directory, and tofu still runs in the deploy's
+// run directory.
+func TestRunner_NoCheckoutNeeded(t *testing.T) {
+	cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
 	for _, e := range cmd.Env {
-		if !strings.HasPrefix(e, "BUILD_WORKSPACE_DIRECTORY=") {
-			filtered = append(filtered, e)
+		if strings.HasPrefix(e, "BUILD_WORKSPACE_DIRECTORY=") {
+			t.Fatalf("setup left %s in the runner's environment", e)
 		}
 	}
-	cmd.Env = filtered
-	out, err := cmd.CombinedOutput()
-	if err == nil {
-		t.Fatal("expected runner to fail when BUILD_WORKSPACE_DIRECTORY is unset, but it succeeded")
+	cmd.Dir = t.TempDir()
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
 	}
-	msg := string(out)
-	if !strings.Contains(msg, "BUILD_WORKSPACE_DIRECTORY") && !strings.Contains(msg, "bazel run") {
-		t.Errorf("expected output to mention BUILD_WORKSPACE_DIRECTORY or bazel run, got: %s", msg)
+	invs := invocations()
+	if len(invs) != 2 {
+		t.Fatalf("expected 2 tofu invocations (init, plan), got %d: %+v", len(invs), invs)
+	}
+	for _, inv := range invs {
+		assertSameDir(t, inv.cwd, filepath.Join(runDir(t, cmd), "mypkg"))
 	}
 }
 
@@ -621,6 +646,7 @@ func TestRunner_MissingRequiredFlags(t *testing.T) {
 		"--work-tree",
 		"--command",
 		"--state-dir",
+		"--output-root",
 		"--plugin-dir",
 		"--modules-manifest",
 	}
@@ -912,11 +938,11 @@ terraform {
 	}
 }
 
-// TestRunner_EmptyPackageDir_RunsAtWorkTreeRoot verifies that an empty
+// TestRunner_EmptyPackageDir_RunsAtRunDirRoot verifies that an empty
 // --package-dir is valid: it models a deploy in the workspace root package, so
-// tofu runs with the work tree root itself as its cwd. (The BCR test module
-// e2e/smoke has exactly this shape.)
-func TestRunner_EmptyPackageDir_RunsAtWorkTreeRoot(t *testing.T) {
+// tofu runs with the run directory's root itself as its cwd. (The BCR test
+// module e2e/smoke has exactly this shape.)
+func TestRunner_EmptyPackageDir_RunsAtRunDirRoot(t *testing.T) {
 	cmd, _, invocations := setupPkg(t, map[string]any{"region": "us-east-1"}, "")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("runner failed unexpectedly with empty --package-dir: %v\n%s", err, out)
@@ -932,40 +958,23 @@ func TestRunner_EmptyPackageDir_RunsAtWorkTreeRoot(t *testing.T) {
 	if !invs[1].hasArg("plan") {
 		t.Errorf("second invocation should be 'plan', got args: %v", invs[1].args)
 	}
-
-	var workTree string
-	for _, arg := range cmd.Args {
-		if strings.HasPrefix(arg, "--work-tree=") {
-			workTree = strings.TrimPrefix(arg, "--work-tree=")
-		}
-	}
-	if workTree == "" {
-		t.Fatal("could not find --work-tree flag in runner cmd args")
-	}
-	// The recorded cwd must be the work tree root itself, not a package
-	// subdirectory. Resolve symlinks on both sides: the fake tofu records the
-	// physical path, while --work-tree carries the logical path.
-	wantCwd, err := filepath.EvalSymlinks(workTree)
-	if err != nil {
-		t.Fatalf("resolve work tree root: %v", err)
-	}
+	// The recorded cwd must be the run directory's root itself, not a package
+	// subdirectory.
 	for _, inv := range invs {
-		gotCwd, err := filepath.EvalSymlinks(inv.cwd)
-		if err != nil {
-			t.Fatalf("resolve recorded cwd %q: %v", inv.cwd, err)
-		}
-		if gotCwd != wantCwd {
-			t.Errorf("tofu cwd = %q, want work tree root %q", gotCwd, wantCwd)
-		}
+		assertSameDir(t, inv.cwd, runDir(t, cmd))
 	}
+	assertLink(t, filepath.Join(runDir(t, cmd), "rules_tofu.auto.tfvars.json"), filepath.Join(argValue(t, cmd, "--work-tree"), "rules_tofu.auto.tfvars.json"))
 }
 
 // TestRunner_LockFile_CopiedBeforeInit verifies that --lock-file lands at
-// <cwd>/.terraform.lock.hcl, replacing a lock left by an earlier run (as tofu
-// leaves one in the runfiles tree), so init checks against the pinned lock.
+// <cwd>/.terraform.lock.hcl in the run directory, replacing a lock left by an
+// earlier run, so init checks against the pinned lock.
 func TestRunner_LockFile_CopiedBeforeInit(t *testing.T) {
 	cmd, _, invocations := setup(t, map[string]any{})
-	cwd := filepath.Join(argValue(t, cmd, "--work-tree"), "mypkg")
+	cwd := filepath.Join(runDir(t, cmd), "mypkg")
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	stale := filepath.Join(cwd, ".terraform.lock.hcl")
 	if err := os.WriteFile(stale, []byte("# stale\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -985,28 +994,39 @@ func TestRunner_LockFile_CopiedBeforeInit(t *testing.T) {
 		t.Fatalf("read copied lock: %v", err)
 	}
 	if string(got) != want {
-		t.Errorf("lock in work tree = %q, want %q", got, want)
+		t.Errorf("lock in the run directory = %q, want %q", got, want)
 	}
 	if invs := invocations(); len(invs) == 0 || !invs[0].hasArg("init") {
 		t.Errorf("expected init to run, got %+v", invs)
 	}
+	assertWorkTreeUntouched(t, cmd)
 }
 
-// TestRunner_NoLockFile_LeavesWorkTreeAlone verifies that without --lock-file
-// the runner writes no lock of its own.
-func TestRunner_NoLockFile_LeavesWorkTreeAlone(t *testing.T) {
+// TestRunner_NoLockFile_RemovesLeftoverLock verifies that without --lock-file
+// the runner writes no lock of its own and removes the one tofu wrote on an
+// earlier run: it records that build's provider versions, and would make init
+// refuse a provider bumped since.
+func TestRunner_NoLockFile_RemovesLeftoverLock(t *testing.T) {
 	cmd, _, _ := setup(t, map[string]any{})
+	cwd := filepath.Join(runDir(t, cmd), "mypkg")
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lock := filepath.Join(cwd, ".terraform.lock.hcl")
+	if err := os.WriteFile(lock, []byte("# from an earlier run\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
 	}
-	lock := filepath.Join(argValue(t, cmd, "--work-tree"), "mypkg", ".terraform.lock.hcl")
-	if _, err := os.Stat(lock); !os.IsNotExist(err) {
+	if _, err := os.Lstat(lock); !os.IsNotExist(err) {
 		t.Errorf("expected no lock at %s, got err=%v", lock, err)
 	}
+	assertWorkTreeUntouched(t, cmd)
 }
 
 // setupTest builds a `--command=test` invocation, as the launcher a tf_test
-// generates makes it: no --state-dir and no BUILD_WORKSPACE_DIRECTORY, a
+// generates makes it: no --state-dir and no --output-root, a
 // TEST_TMPDIR to copy the work tree into, and a TEST_UNDECLARED_OUTPUTS_DIR.
 // The fake tofu logs its calls and, when FAKE_ERRORED is set, leaves an
 // errored_test.tfstate behind on `test`. It returns the command, the work
@@ -1018,10 +1038,7 @@ func setupTest(t *testing.T) (cmd *exec.Cmd, workTree, scratch, outputs string, 
 
 	logPath := filepath.Join(dir, "tofu-invocations.log")
 	fakeTofuSh := filepath.Join(dir, "tofu.sh")
-	script := "#!/bin/sh\n" +
-		"{ printf 'cwd=%s\\n' \"$(pwd)\"; for a in \"$@\"; do printf 'arg=%s\\n' \"$a\"; done; printf -- '---\\n'; } >> \"$TOFU_LOG\"\n" +
-		"if [ \"$1\" = test ] && [ -n \"${FAKE_ERRORED:-}\" ]; then echo '{}' > errored_test.tfstate; fi\n" +
-		"exit 0\n"
+	script := fakeTofuScript("if [ \"$1\" = test ] && [ -n \"${FAKE_ERRORED:-}\" ]; then echo '{}' > errored_test.tfstate; fi\n")
 	if err := os.WriteFile(fakeTofuSh, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1082,11 +1099,6 @@ func setupTest(t *testing.T) (cmd *exec.Cmd, workTree, scratch, outputs string, 
 		"TEST_TMPDIR="+scratch,
 		"TEST_UNDECLARED_OUTPUTS_DIR="+outputs,
 	)
-	for i, e := range cmd.Env {
-		if strings.HasPrefix(e, "BUILD_WORKSPACE_DIRECTORY=") {
-			cmd.Env[i] = "BUILD_WORKSPACE_DIRECTORY="
-		}
-	}
 	return cmd, workTree, scratch, outputs, invocations
 }
 
@@ -1220,5 +1232,498 @@ func TestRunner_Test_StateDirNotRequired(t *testing.T) {
 	out, err := plan.CombinedOutput()
 	if err == nil || !strings.Contains(string(out), "--state-dir is required") {
 		t.Errorf("plan without --state-dir: err=%v out=%q", err, out)
+	}
+}
+
+// init runs with -reconfigure in plan, apply and destroy, so an edited backend
+// block isn't refused on the strength of the `.terraform/` an earlier run left
+// in the run directory.
+func TestRunner_Init_Reconfigure(t *testing.T) {
+	cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
+	}
+	if init := invocations()[0]; !init.hasArg("init") || !init.hasArg("-reconfigure") {
+		t.Errorf("init args = %v, want -reconfigure", init.args)
+	}
+}
+
+// tofu runs with TF_DATA_DIR fixed to the run directory's `.terraform` and no
+// TF_PLUGIN_CACHE_DIR, whatever the parent environment holds.
+func TestRunner_Env_DataDirAndNoPluginCache(t *testing.T) {
+	cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
+	cmd.Env = append(cmd.Env, "TF_DATA_DIR=/bogus/data", "TF_PLUGIN_CACHE_DIR=/bogus/cache")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
+	}
+	want := filepath.Join(runDir(t, cmd), "mypkg", ".terraform")
+	for _, inv := range invocations() {
+		if inv.env["TF_DATA_DIR"] != want {
+			t.Errorf("%s: TF_DATA_DIR = %q, want %q", inv.args[0], inv.env["TF_DATA_DIR"], want)
+		}
+		if inv.env["TF_PLUGIN_CACHE_DIR"] != "<unset>" {
+			t.Errorf("%s: TF_PLUGIN_CACHE_DIR = %q, want it unset", inv.args[0], inv.env["TF_PLUGIN_CACHE_DIR"])
+		}
+	}
+}
+
+// The same holds in test mode, where init keeps -backend=false and gains no
+// -reconfigure, and TF_DATA_DIR is the copy's `.terraform`.
+func TestRunner_Test_EnvAndInitFlags(t *testing.T) {
+	cmd, _, scratch, _, invocations := setupTest(t)
+	cmd.Env = append(cmd.Env, "TF_DATA_DIR=/bogus/data", "TF_PLUGIN_CACHE_DIR=/bogus/cache")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
+	}
+	invs := invocations()
+	if len(invs) != 2 {
+		t.Fatalf("got %d tofu invocations, want init then test: %+v", len(invs), invs)
+	}
+	if init := invs[0]; init.hasArg("-reconfigure") || !init.hasArg("-backend=false") {
+		t.Errorf("test-mode init args = %v, want -backend=false and no -reconfigure", init.args)
+	}
+	want := filepath.Join(scratch, "rules_tofu.work", "mypkg", ".terraform")
+	for _, inv := range invs {
+		if inv.env["TF_DATA_DIR"] != want {
+			t.Errorf("%s: TF_DATA_DIR = %q, want %q", inv.args[0], inv.env["TF_DATA_DIR"], want)
+		}
+		if inv.env["TF_PLUGIN_CACHE_DIR"] != "<unset>" {
+			t.Errorf("%s: TF_PLUGIN_CACHE_DIR = %q, want it unset", inv.args[0], inv.env["TF_PLUGIN_CACHE_DIR"])
+		}
+	}
+}
+
+// runDir returns the deploy's run directory, `<state-dir>/work`: the mirror
+// of the work tree that tofu runs in.
+func runDir(t *testing.T, cmd *exec.Cmd) string {
+	t.Helper()
+	return filepath.Join(argValue(t, cmd, "--state-dir"), "work")
+}
+
+// setFakeTofu replaces the fake tofu with one that also runs `extra` (shell,
+// in tofu's working directory, with the subcommand as $1).
+func setFakeTofu(t *testing.T, cmd *exec.Cmd, extra string) {
+	t.Helper()
+	if err := os.WriteFile(argValue(t, cmd, "--tofu"), []byte(fakeTofuScript(extra)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// withCommand returns a fresh copy of cmd (an exec.Cmd runs once) with its
+// --command replaced and the given extra flags added.
+func withCommand(cmd *exec.Cmd, command string, flags ...string) *exec.Cmd {
+	args := []string{}
+	for _, a := range cmd.Args[1:] {
+		if !strings.HasPrefix(a, "--command=") {
+			args = append(args, a)
+		}
+	}
+	args = append(args, "--command="+command)
+	c := exec.Command(cmd.Args[0], append(args, flags...)...)
+	c.Env = cmd.Env
+	c.Dir = cmd.Dir
+	return c
+}
+
+// assertSameDir asserts that got and want name the same directory. Symlinks
+// are resolved on both sides: the fake tofu records the physical path, while
+// the flags carry the logical one.
+func assertSameDir(t *testing.T, got, want string) {
+	t.Helper()
+	g, err := filepath.EvalSymlinks(got)
+	if err != nil {
+		t.Fatalf("resolve %q: %v", got, err)
+	}
+	w, err := filepath.EvalSymlinks(want)
+	if err != nil {
+		t.Fatalf("resolve %q: %v", want, err)
+	}
+	if g != w {
+		t.Errorf("directory = %q, want %q", g, w)
+	}
+}
+
+// assertLink asserts that link is a symlink whose target is exactly target.
+func assertLink(t *testing.T, link, target string) {
+	t.Helper()
+	got, err := os.Readlink(link)
+	if err != nil {
+		t.Errorf("%s should be a symlink into the work tree: %v", link, err)
+		return
+	}
+	if got != target {
+		t.Errorf("%s links to %q, want %q", link, got, target)
+	}
+}
+
+// assertWorkTreeUntouched asserts that the run left nothing of tofu's in the
+// work tree's package directory: tofu runs in the run directory, and the work
+// tree is Bazel's.
+func assertWorkTreeUntouched(t *testing.T, cmd *exec.Cmd) {
+	t.Helper()
+	pkg := filepath.Join(argValue(t, cmd, "--work-tree"), argValue(t, cmd, "--package-dir"))
+	for _, name := range []string{".terraform", ".terraform.lock.hcl", "terraform.tfstate"} {
+		if _, err := os.Lstat(filepath.Join(pkg, name)); !os.IsNotExist(err) {
+			t.Errorf("%s appeared in the work tree (err=%v)", filepath.Join(pkg, name), err)
+		}
+	}
+}
+
+// writeWorkTreeFile writes a file at the given path relative to the work tree
+// root, creating its directory.
+func writeWorkTreeFile(t *testing.T, cmd *exec.Cmd, rel, content string) string {
+	t.Helper()
+	path := filepath.Join(argValue(t, cmd, "--work-tree"), rel)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// tofu runs in `<state-dir>/work/<package-dir>` for plan, apply and destroy
+// alike: one directory per deploy, mirroring the work tree file for file with
+// absolute symlinks, so the root module, its data files and the modules beside
+// it are all where tofu expects them. Nothing is written into the work tree.
+func TestRunner_RunDir_MirrorsWorkTree(t *testing.T) {
+	cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
+	// The lock and the data directory are what tofu writes beside the
+	// configuration.
+	setFakeTofu(t, cmd, ": > .terraform.lock.hcl; mkdir -p .terraform/providers\n")
+	files := []string{
+		"mypkg/rules_tofu.auto.tfvars.json",
+		"mypkg/main.tf",
+		"mypkg/templates/a.tftpl",
+		"modules/net/main.tf",
+	}
+	for _, f := range files[1:] {
+		writeWorkTreeFile(t, cmd, f, "# "+f+"\n")
+	}
+
+	for _, command := range []string{"plan", "apply", "destroy"} {
+		if out, err := withCommand(cmd, command, "--allow-ephemeral-state").CombinedOutput(); err != nil {
+			t.Fatalf("%s failed unexpectedly: %v\n%s", command, err, out)
+		}
+	}
+	invs := invocations()
+	if len(invs) != 6 {
+		t.Fatalf("expected 6 tofu invocations (init and the command, three times), got %d: %+v", len(invs), invs)
+	}
+	for _, inv := range invs {
+		assertSameDir(t, inv.cwd, filepath.Join(runDir(t, cmd), "mypkg"))
+	}
+	for _, f := range files {
+		assertLink(t, filepath.Join(runDir(t, cmd), f), filepath.Join(argValue(t, cmd, "--work-tree"), f))
+	}
+	assertWorkTreeUntouched(t, cmd)
+}
+
+// Paths given relative to the runner's own working directory are made
+// absolute before tofu, which runs elsewhere, sees them, and before they
+// become link targets.
+func TestRunner_RunDir_RelativeFlags(t *testing.T) {
+	cmd, addVarFile, invocations := setup(t, map[string]any{"region": "us-east-1"})
+	base := filepath.Dir(argValue(t, cmd, "--work-tree"))
+	// The runner makes them absolute against its working directory as the
+	// kernel names it, which is not always how t.TempDir() spells it (on
+	// macOS /var is a link to /private/var).
+	physBase, err := filepath.EvalSymlinks(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd.Args = append(cmd.Args, "--var-file="+addVarFile(map[string]any{"env": "prod"}))
+	want := map[string]string{}
+	for i, a := range cmd.Args {
+		for _, name := range []string{"--tofu", "--work-tree", "--plugin-dir", "--state-dir", "--output-root", "--var-file"} {
+			if v, ok := strings.CutPrefix(a, name+"="); ok {
+				rel, err := filepath.Rel(base, v)
+				if err != nil {
+					t.Fatal(err)
+				}
+				cmd.Args[i] = name + "=" + rel
+				want[name] = filepath.Join(physBase, rel)
+			}
+		}
+	}
+	cmd.Dir = base
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
+	}
+	invs := invocations()
+	if len(invs) != 2 {
+		t.Fatalf("expected 2 tofu invocations (init, plan), got %d: %+v", len(invs), invs)
+	}
+	if arg := "-plugin-dir=" + want["--plugin-dir"]; !invs[0].hasArg(arg) {
+		t.Errorf("init args = %v, want %s", invs[0].args, arg)
+	}
+	if arg := "-var-file=" + want["--var-file"]; !invs[1].hasArg(arg) {
+		t.Errorf("plan args = %v, want %s", invs[1].args, arg)
+	}
+	assertLink(t,
+		filepath.Join(want["--state-dir"], "work", "mypkg", "rules_tofu.auto.tfvars.json"),
+		filepath.Join(want["--work-tree"], "mypkg", "rules_tofu.auto.tfvars.json"))
+}
+
+// The run directory follows the work tree from one run to the next: a file
+// that left the work tree loses its link, a new one gains a link, and what
+// tofu wrote there (here the state of a `backend "local"` with a relative
+// path, issue #86) is kept, so the command after sees it.
+func TestRunner_RunDir_FollowsWorkTreeAndKeepsState(t *testing.T) {
+	cmd, _, _ := setup(t, map[string]any{"region": "us-east-1"})
+	backendTFContent(t, cmd, "terraform {\n  backend \"local\" {\n    path = \"state/dev.tfstate\"\n  }\n}\n")
+	// apply writes the state where tofu would for that block; destroy fails
+	// unless it finds it.
+	setFakeTofu(t, cmd, `case "$1" in
+  apply) mkdir -p state && echo applied > state/dev.tfstate ;;
+  destroy) [ "$(cat state/dev.tfstate)" = applied ] || { echo "no state" >&2; exit 1; } ;;
+esac
+`)
+	gone := writeWorkTreeFile(t, cmd, "mypkg/gone.tf", "# gone\n")
+	if out, err := withCommand(cmd, "apply", "--allow-ephemeral-state").CombinedOutput(); err != nil {
+		t.Fatalf("apply failed unexpectedly: %v\n%s", err, out)
+	}
+	cwd := filepath.Join(runDir(t, cmd), "mypkg")
+	assertLink(t, filepath.Join(cwd, "gone.tf"), gone)
+
+	if err := os.Remove(gone); err != nil {
+		t.Fatal(err)
+	}
+	added := writeWorkTreeFile(t, cmd, "mypkg/added.tf", "# added\n")
+	if out, err := withCommand(cmd, "destroy", "--allow-ephemeral-state").CombinedOutput(); err != nil {
+		t.Fatalf("destroy failed unexpectedly: %v\n%s", err, out)
+	}
+	if _, err := os.Lstat(filepath.Join(cwd, "gone.tf")); !os.IsNotExist(err) {
+		t.Errorf("the link to a file no longer in the work tree should be gone, got err=%v", err)
+	}
+	assertLink(t, filepath.Join(cwd, "added.tf"), added)
+	if got, err := os.ReadFile(filepath.Join(cwd, "state", "dev.tfstate")); err != nil || string(got) != "applied\n" {
+		t.Errorf("state in the run directory = %q, %v; want it kept", got, err)
+	}
+	assertWorkTreeUntouched(t, cmd)
+}
+
+// A regular file where a link must go is never overwritten: it is tofu's or
+// the user's, and the runner stops before running tofu. An empty directory
+// holds nothing and gives way.
+func TestRunner_RunDir_FileInTheWay(t *testing.T) {
+	cmd, _, _ := setup(t, map[string]any{"region": "us-east-1"})
+	writeWorkTreeFile(t, cmd, "mypkg/main.tf", "# main\n")
+	writeWorkTreeFile(t, cmd, "mypkg/was_a_dir", "now a file\n")
+	cwd := filepath.Join(runDir(t, cmd), "mypkg")
+	if err := os.MkdirAll(filepath.Join(cwd, "was_a_dir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	inTheWay := filepath.Join(cwd, "main.tf")
+	if err := os.WriteFile(inTheWay, []byte("precious\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected the runner to stop at the file in the way, but it succeeded:\n%s", out)
+	}
+	if !strings.Contains(string(out), inTheWay) {
+		t.Errorf("expected the error to name %s, got: %s", inTheWay, out)
+	}
+	if got, _ := os.ReadFile(inTheWay); string(got) != "precious\n" {
+		t.Errorf("the file in the way was changed to %q", got)
+	}
+	if _, err := os.Stat(envValue(t, cmd, "TOFU_LOG")); !os.IsNotExist(err) {
+		t.Errorf("expected no tofu invocations, got err=%v", err)
+	}
+
+	if err := os.Remove(inTheWay); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := withCommand(cmd, "plan").CombinedOutput(); err != nil {
+		t.Fatalf("runner failed unexpectedly once the file was moved away: %v\n%s", err, out)
+	}
+	assertLink(t, filepath.Join(cwd, "was_a_dir"), filepath.Join(argValue(t, cmd, "--work-tree"), "mypkg", "was_a_dir"))
+}
+
+// Of the `.terraform/` an earlier run left, `providers` goes (its links lead
+// into that launcher's plugin tree, and init relinks them) and the rest
+// stays: the workspace selection in `environment` is the user's.
+func TestRunner_RunDir_DataDirAcrossRuns(t *testing.T) {
+	cmd, _, _ := setup(t, map[string]any{"region": "us-east-1"})
+	dataDir := filepath.Join(runDir(t, cmd), "mypkg", ".terraform")
+	stale := filepath.Join(dataDir, "providers", "registry.opentofu.org", "hashicorp", "null")
+	if err := os.MkdirAll(filepath.Dir(stale), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/nonexistent/plugins/null", stale); err != nil {
+		t.Fatal(err)
+	}
+	environment := filepath.Join(dataDir, "environment")
+	if err := os.WriteFile(environment, []byte("staging"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
+	}
+	if _, err := os.Lstat(filepath.Join(dataDir, "providers")); !os.IsNotExist(err) {
+		t.Errorf("the previous run's .terraform/providers should be gone, got err=%v", err)
+	}
+	if got, err := os.ReadFile(environment); err != nil || string(got) != "staging" {
+		t.Errorf(".terraform/environment = %q, %v; want it kept", got, err)
+	}
+}
+
+// assertRefusedLocalBackend asserts that the runner refused a mutating
+// command because of a `backend "local"` block that doesn't provably keep
+// state outside Bazel's output tree: it exited non-zero, named the block, the
+// reason, the run directory and the opt-in, ran no tofu process and created
+// no state dir.
+func assertRefusedLocalBackend(t *testing.T, cmd *exec.Cmd, block, reason string) {
+	t.Helper()
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected the runner to refuse the local backend, but it succeeded:\n%s", out)
+	}
+	msg := string(out)
+	for _, want := range []string{
+		`backend "local" block at ` + block,
+		reason,
+		filepath.Join(runDir(t, cmd), "mypkg"),
+		"allow_ephemeral_state = True",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("expected the refusal to contain %q, got: %s", want, msg)
+		}
+	}
+	if _, err := os.Stat(envValue(t, cmd, "TOFU_LOG")); !os.IsNotExist(err) {
+		t.Errorf("expected no tofu invocations, got err=%v", err)
+	}
+	stateDir := argValue(t, cmd, "--state-dir")
+	if _, err := os.Stat(stateDir); !os.IsNotExist(err) {
+		t.Errorf("state dir %s should not have been created, got err=%v", stateDir, err)
+	}
+}
+
+// assertLocalBackendLeftToTofu asserts that the last two invocations are init
+// and the given command, and that neither overrides the backend block: no
+// -backend-config for init, no -state flags for the command.
+func assertLocalBackendLeftToTofu(t *testing.T, invs []invocation, command string) {
+	t.Helper()
+	if len(invs) < 2 {
+		t.Fatalf("expected init and %s, got %+v", command, invs)
+	}
+	init, run := invs[len(invs)-2], invs[len(invs)-1]
+	if !init.hasArg("init") || !run.hasArg(command) {
+		t.Fatalf("expected init then %s, got %v then %v", command, init.args, run.args)
+	}
+	if init.hasArgWithPrefix("-backend-config") {
+		t.Errorf("init args = %v, want no -backend-config: the block is tofu's to resolve", init.args)
+	}
+	if run.hasArgWithPrefix("-state=") || run.hasArgWithPrefix("-state-out=") {
+		t.Errorf("%s args = %v, want no -state flags with a backend block present", command, run.args)
+	}
+}
+
+// One rule decides whether a `backend "local"` needs allow_ephemeral_state for
+// apply and destroy: its state is durable only when `path` and `workspace_dir`
+// are both literal absolute paths that don't lead into Bazel's output tree.
+// Everything else (an attribute left to its relative default, a relative
+// path, an expression, a path into the output tree, directly or through a
+// symlink, existing yet or not) is ephemeral: refused without the opt-in,
+// naming the block and the attribute, and run with it. plan always runs. The
+// runner never overrides the block, in HCL and JSON alike.
+func TestRunner_LocalBackend_Gate(t *testing.T) {
+	type file struct {
+		json    bool
+		content string
+	}
+	hclBlock := func(attrs string) file {
+		return file{false, "terraform {\n  backend \"local\" {\n" + attrs + "  }\n}\n"}
+	}
+	cases := []struct {
+		name string
+		// config builds the backend file from a directory outside the output
+		// tree, the output tree, and a symlink that leads into it.
+		config func(outside, outputRoot, link string) file
+		// reason is why the state is ephemeral; empty when it is durable.
+		reason string
+	}{
+		{"both absolute", func(o, _, _ string) file {
+			return hclBlock(fmt.Sprintf("    path          = %q\n    workspace_dir = %q\n", o+"/prod.tfstate", o+"/workspaces"))
+		}, ""},
+		{"both absolute, json", func(o, _, _ string) file {
+			return file{true, fmt.Sprintf(`{"terraform": {"backend": {"local": {"path": %q, "workspace_dir": %q}}}}`, o+"/prod.tfstate", o+"/workspaces")}
+		}, ""},
+		{"empty block", func(_, _, _ string) file { return hclBlock("") },
+			"its `path` is not set, and tofu's default for it (\"terraform.tfstate\") is relative"},
+		{"relative path", func(_, _, _ string) file { return hclBlock("    path = \"state/dev.tfstate\"\n") },
+			"its `path` (\"state/dev.tfstate\") is relative"},
+		{"workspace_dir unset", func(o, _, _ string) file {
+			return hclBlock(fmt.Sprintf("    path = %q\n", o+"/prod.tfstate"))
+		}, "its `workspace_dir` is not set, and tofu's default for it (\"terraform.tfstate.d\") is relative"},
+		{"relative workspace_dir", func(o, _, _ string) file {
+			return hclBlock(fmt.Sprintf("    path          = %q\n    workspace_dir = \"ws\"\n", o+"/prod.tfstate"))
+		}, "its `workspace_dir` (\"ws\") is relative"},
+		{"expression", func(o, _, _ string) file {
+			return hclBlock(fmt.Sprintf("    path          = \"${path.module}/dev.tfstate\"\n    workspace_dir = %q\n", o+"/workspaces"))
+		}, "its `path` is not a literal string"},
+		{"expression, json", func(o, _, _ string) file {
+			return file{true, fmt.Sprintf(`{"terraform": {"backend": {"local": {"path": "${path.module}/dev.tfstate", "workspace_dir": %q}}}}`, o+"/workspaces")}
+		}, "its `path` is not a literal string"},
+		{"inside the output tree", func(o, root, _ string) file {
+			return hclBlock(fmt.Sprintf("    path          = %q\n    workspace_dir = %q\n", root+"/cfg/bin/pkg/prod.tfstate", o+"/workspaces"))
+		}, "is inside Bazel's output tree"},
+		{"workspace_dir inside the output tree", func(o, root, _ string) file {
+			return hclBlock(fmt.Sprintf("    path          = %q\n    workspace_dir = %q\n", o+"/prod.tfstate", root+"/ws"))
+		}, "its `workspace_dir` (\"" + "%ROOT%" + "/ws\") is inside Bazel's output tree"},
+		// As through the `bazel-bin` link in a checkout, to a state file and a
+		// directory that don't exist yet.
+		{"through a symlink into the output tree", func(o, _, link string) file {
+			return hclBlock(fmt.Sprintf("    path          = %q\n    workspace_dir = %q\n", link+"/not/yet/prod.tfstate", o+"/workspaces"))
+		}, "is inside Bazel's output tree"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
+			base := filepath.Dir(argValue(t, cmd, "--work-tree"))
+			outside := filepath.Join(base, "durable")
+			outputRoot := argValue(t, cmd, "--output-root")
+			link := filepath.Join(base, "bazel-bin")
+			if err := os.MkdirAll(filepath.Join(outputRoot, "cfg", "bin"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(filepath.Join(outputRoot, "cfg", "bin"), link); err != nil {
+				t.Fatal(err)
+			}
+			f := tc.config(outside, outputRoot, link)
+			block := "backend_override.tf:2"
+			if f.json {
+				backendJSONContent(t, cmd, f.content)
+				block = "backend_override.tf.json:1"
+			} else {
+				backendTFContent(t, cmd, f.content)
+			}
+			reason := strings.ReplaceAll(tc.reason, "%ROOT%", outputRoot)
+
+			if tc.reason != "" {
+				for _, command := range []string{"apply", "destroy"} {
+					assertRefusedLocalBackend(t, withCommand(cmd, command), block, reason)
+				}
+			}
+			// plan is never gated; apply and destroy run without the opt-in
+			// when the state is durable, and with it otherwise.
+			var flags []string
+			if tc.reason != "" {
+				flags = []string{"--allow-ephemeral-state"}
+			}
+			if out, err := withCommand(cmd, "plan").CombinedOutput(); err != nil {
+				t.Fatalf("plan failed unexpectedly: %v\n%s", err, out)
+			}
+			assertLocalBackendLeftToTofu(t, invocations(), "plan")
+			for _, command := range []string{"apply", "destroy"} {
+				if out, err := withCommand(cmd, command, flags...).CombinedOutput(); err != nil {
+					t.Fatalf("%s failed unexpectedly: %v\n%s", command, err, out)
+				}
+				assertLocalBackendLeftToTofu(t, invocations(), command)
+			}
+		})
 	}
 }

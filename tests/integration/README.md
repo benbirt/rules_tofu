@@ -19,6 +19,7 @@ tests/integration/
 │       ├── conflicting_providers/{BUILD.bazel, main.tf}
 │       ├── duplicate_vars/{BUILD.bazel, main.tf, extra.tfvars.json}
 │       ├── ephemeral_state_refused/{BUILD.bazel, main.tf}
+│       ├── local_backend_refused/{BUILD.bazel, main.tf}
 │       ├── module_*/            module_source misuses (see BUILD.bazel)
 │       ├── lock_file_smuggled/{BUILD.bazel, main.tf, .terraform.lock.hcl}
 │       ├── malformed_var_file/{BUILD.bazel, main.tf, bad.tfvars.json}
@@ -62,6 +63,16 @@ requires; without the provider of the submodule outside `modules/` in its
 `MODULE.bazel.lock`; moving the git tag changes nothing, even after
 `bazel clean --expunge`; and a module calling an undeclared one fails when
 fetched, naming the tag to add.
+
+`run_directory/` and its driver `run_directory_test.sh` run a deploy's
+launchers for real. `//app:deploy` declares a `backend "local"` with a
+relative `path` and reads a `data` file through `path.module`.
+`bazel run //app:deploy.apply` must create its resource with the state in
+the deploy's run directory under `bazel-bin` and nothing written to the
+launcher's runfiles; the built `deploy.destroy.sh`, run directly by a
+relative path from another directory without `bazel run`'s environment,
+must find that state and destroy the resource; and `//app:deploy.plan` must
+then plan against the same state.
 
 `broken_workspace` shares one `MODULE.bazel` across all of its cases, so a
 case whose failure lives in the module graph cannot go there — it gets a
@@ -147,12 +158,13 @@ rule-error wording tweaks; avoid quoting full sentences.
 ## Follow-ups
 
 All core build-time negative failure modes are covered, as is one
-runtime mode: the ephemeral-state refusal on `bazel run :deploy.apply`
-when the deploy has no backend and has not opted in.
+runtime mode in both its forms: the ephemeral-state refusal on
+`bazel run :deploy.apply` when the deploy has not opted in and has no
+backend, or a `backend "local"` that keeps state under `bazel-bin`. The
+opt-in direction, and a launcher run outside `bazel run`, are covered by
+`run_directory_test`.
 
-Still untested end-to-end: the opt-in direction (a deploy that sets
-`allow_ephemeral_state = True`, or declares a backend, reaching tofu),
-`bazel run :deploy.plan` outside the Bazel environment, and
+Still untested end-to-end: a remote backend reaching tofu, and
 `tf_providers` module-resolution errors. These can be addressed in
 future testing passes if needed.
 

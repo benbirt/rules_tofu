@@ -304,7 +304,7 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   the work tree into `$TEST_TMPDIR` (runfiles are Bazel's), passes
   `-backend=false` to init (`tofu test` keeps state in memory and ignores
   backends; without the flag init contacts the backend), needs no
-  `BUILD_WORKSPACE_DIRECTORY` or `--state-dir`, never writes into runfiles
+  `--state-dir` or `--output-root`, never writes into runfiles
   (an absent plugin tree gets an empty directory under `$TEST_TMPDIR`), and
   fails on `errored_test.tfstate`, which tofu writes with exit 0 when a
   run's destroy fails. Don't route tests through the plan/apply path or its
@@ -324,13 +324,41 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
 - The runner requires `--plugin-dir` and `os.MkdirAll`s it, so the
   zero-providers case still gives tofu an extant directory. Don't make the
   flag optional.
-- The runner refuses `apply`/`destroy` with no backend/cloud block unless
-  `allow_ephemeral_state` is set (README, "State and backends"): local
-  state under `bazel-bin` is `bazel clean`-able, so applying against it
-  orphans live infrastructure. The gate is in the Go runner (backend
-  detection is a filesystem scan), fires before any tofu process starts or
-  the state dir exists, and `plan` stays ungated. Don't downgrade it to a
-  warning.
+- The runner refuses `apply`/`destroy` unless the deploy's state is durable
+  or `allow_ephemeral_state` is set (README, "State and backends"): state
+  under `bazel-bin` is `bazel clean`-able, so applying against it orphans
+  live infrastructure. Durable means a remote backend or `cloud` block, or
+  a `backend "local"` whose `path` and `workspace_dir` are both literal
+  absolute paths outside `--output-root` (`bazel-out`; symlinks followed, a
+  missing tail allowed: `localBackendEphemeral`). No backend block, or any
+  other local one, is ephemeral. The gate is in the Go runner (backend
+  detection is a filesystem scan of the launcher's work tree), fires before
+  any tofu process starts or the state dir exists, and `plan` stays
+  ungated. Don't downgrade it to a warning, and don't add a second rule
+  beside it.
+- tofu runs in the deploy's run directory, `<state-dir>/work/<package-dir>`
+  (`rundir.go`): a symlink mirror of the launcher's runfiles work tree that
+  `.plan`, `.apply` and `.destroy` share (issues #86, #91). Not a runfiles
+  tree, which is per target and Bazel's to prune; not the declared
+  `<name>.work` tree, which the validate action copies wholesale and which
+  must never hold a `.terraform.lock.hcl`. Each run removes the mirror's
+  links and tofu's lock, keeps everything else (`.terraform/` less its
+  `providers`, a local backend's relative state), and re-links; a leftover
+  file in the way of a configuration file is an error, never overwritten.
+  The runner never rewrites a backend block (no `-backend-config`, and no
+  `-state` flags when one is present): tofu owns path and expression
+  resolution, which is what keeps one behaviour for every backend. There is
+  no lock on the run directory (README, "Restrictions").
+- The launchers (`tf/private/runner.bzl`) are ordinary executables, as a
+  `go_binary` is: they find their runfiles tree and the state dir from `$0`
+  and pass absolute paths, so `bazel run` and a direct run of the built
+  file behave alike. Neither they nor the runner read
+  `BUILD_WORKSPACE_DIRECTORY`; only `.fmt` and `pin`, which write to the
+  checkout, do. A `tf_runner` must be in its deploy's package (checked at
+  analysis), since both are found relative to the launcher.
+- The runner sets `TF_DATA_DIR` to the run directory's `.terraform`, drops
+  `TF_PLUGIN_CACHE_DIR` (`tofuEnv`) and inits with `-reconfigure` (issue
+  #92); keep all three.
 - Materialisation helpers live in `tf/private/work_tree.bzl`
   (`materialize`, `materialize_plugin_tree`, `work_tree_root`,
   `plugin_tree_root`); `library.bzl` and `deploy.bzl` go through them,

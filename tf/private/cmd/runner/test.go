@@ -9,7 +9,7 @@ import (
 )
 
 // runTest is `--command=test`: `tofu test` for a tf_test target, run as a
-// Bazel test, so BUILD_WORKSPACE_DIRECTORY and --state-dir play no part.
+// Bazel test, so --state-dir and --output-root play no part.
 //
 // The work tree is copied into $TEST_TMPDIR first: the runfiles tree is
 // Bazel's, and tofu writes `.terraform/` and the lock beside the
@@ -59,7 +59,7 @@ func runTest(extraArgs []string) error {
 		return err
 	}
 
-	env := append(os.Environ(), "TF_IN_AUTOMATION=1")
+	env := tofuEnv(cwd)
 	// The test files' directory, which tofu reads alongside the root module's
 	// own. Absent, tofu reads its default, `tests`.
 	var dirArgs []string
