@@ -40,3 +40,15 @@ export GO_REPOSITORY_USE_HOST_CACHE=1
 bazel() {
   "${BIT_BAZEL_BINARY}" --output_user_root="${NESTED_USER_ROOT}" --output_base="${NESTED_OUTPUT_BASE}" "$@"
 }
+
+# The nested Bazel is the version in the root .bazelversion
+# (bazel_binaries.download in MODULE.bazel), of which the workspace under
+# test holds a copy. Check it is, so that a CI job that claims to test another
+# version (it rewrites every copy) can't quietly run the nested builds on the
+# pinned one, as the 8.5.0 jobs once did (issue #88).
+_pinned="$(cat "${BIT_WORKSPACE_DIR}/.bazelversion")"
+_nested="$("${BIT_BAZEL_BINARY}" --version)"
+if [[ "${_nested}" != "bazel ${_pinned}" ]]; then
+  echo "FAIL: the nested Bazel is '${_nested}', but ${BIT_WORKSPACE_DIR}/.bazelversion pins ${_pinned}" >&2
+  exit 1
+fi

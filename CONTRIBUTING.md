@@ -58,6 +58,15 @@ bazel test //toolchain/tests/... //tf/providers/tests/... //tf/modules/tests/...
 # Integration tests (Bazel-in-Bazel, slower):
 bazel test //tests/integration/...
 
+# The same on another Bazel, 8.5.0 (the supported floor) here. The Bazel the
+# integration tests run inside themselves is the one in .bazelversion, not
+# USE_BAZEL_VERSION's, so write the version into every copy, as CI does, and
+# restore them afterwards, with MODULE.bazel.lock, which another Bazel
+# rewrites in its own format:
+for f in $(git ls-files .bazelversion '*/.bazelversion'); do echo 8.5.0 > "$f"; done
+bazel test //tests/integration/...
+git checkout -- .bazelversion '*/.bazelversion' MODULE.bazel.lock
+
 # Format checks (fmt_check tests) run as part of the full suite:
 bazel test //...
 

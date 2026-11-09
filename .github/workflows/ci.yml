@@ -11,7 +11,8 @@ jobs:
     # Linux + macOS mirrors the BCR presubmit platforms. "pinned" is
     # .bazelversion; 8.5.0 is the oldest supported Bazel (bazel_compatibility
     # in MODULE.bazel), since it is the first with extension facts. BCR
-    # presubmit covers the latest 8.x.
+    # presubmit covers the latest 8.x. A job on another version than the
+    # pinned one writes it into every .bazelversion (see the first step).
     strategy:
       fail-fast: false
       matrix:
@@ -20,9 +21,6 @@ jobs:
     name: build-and-test (${{ matrix.os }}, ${{ matrix.bazel }})
     runs-on: ${{ matrix.os }}
     env:
-      # Bazelisk reads this for every invocation, including the nested
-      # e2e/smoke module. Empty means "use .bazelversion".
-      USE_BAZEL_VERSION: ${{ matrix.bazel != 'pinned' && matrix.bazel || '' }}
       # gazelle's go_repository then reads Go modules from the user's module
       # cache (restored below) instead of downloading each into a cache
       # private to the output base. The build fills it once; the integration
@@ -31,6 +29,21 @@ jobs:
       GO_REPOSITORY_USE_HOST_CACHE: "1"
     steps:
       - uses: actions/checkout@v7
+
+      # Bazelisk takes the version from the nearest .bazelversion: the root's
+      # for the build, each nested module's (e2e/smoke, the integration
+      # tests' workspaces) for its own. The Bazel that the integration tests
+      # run inside themselves is the root file's too (bazel_binaries.download
+      # in MODULE.bazel), whatever runs the outer build: USE_BAZEL_VERSION
+      # would never reach it (issue #88). So write this job's version into
+      # every copy, and the whole job runs on it, nested Bazels included.
+      - name: Use Bazel ${{ matrix.bazel }} everywhere
+        if: matrix.bazel != 'pinned'
+        run: |
+          for f in $(git ls-files .bazelversion '*/.bazelversion'); do
+            echo '${{ matrix.bazel }}' > "$f"
+          done
+          git status --short
 
       # Keyed on go.sum, so a run with unchanged Go modules downloads none.
       - name: Restore the Go module cache
@@ -101,7 +114,8 @@ jobs:
           bazel test //... --test_output=errors
 
       # MODULE.bazel.lock's format is specific to a Bazel version, so only the
-      # pinned version can be expected to leave it untouched.
+      # pinned version can be expected to leave it untouched (and the other
+      # jobs have rewritten the .bazelversion files).
       - name: Check for uncommitted changes
         if: matrix.bazel == 'pinned'
         run: |
@@ -121,7 +135,8 @@ jobs:
       # sub-workspaces) each carry their own .bazelversion:
       # bazelisk resolves the version from the nearest MODULE.bazel boundary
       # and never sees the root pin. Keep every copy identical to the root
-      # file.
+      # file. (The build-and-test jobs on another version rewrite them all,
+      # in their own checkout.)
       - name: Check .bazelversion files are in sync
         run: |
           for f in $(git ls-files '*/.bazelversion'); do
