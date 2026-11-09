@@ -29,7 +29,6 @@ load(
     _materialize = "materialize",
     _materialize_plugin_tree = "materialize_plugin_tree",
     _modules_manifest = "modules_manifest",
-    _package_dir = "package_dir",
     _plugin_tree_root = "plugin_tree_root",
     _provider_lock = "provider_lock",
     _runfiles_path = "runfiles_path",
@@ -40,7 +39,12 @@ load(
 _RUNNER_BIN_LABEL = "//tf/private/cmd/runner:runner"
 
 def _under_test(target):
-    """What the test needs of the module under test, a tf_library or tf_deploy."""
+    """What the test needs of the module under test, a tf_library or tf_deploy.
+
+    Everything comes from the target's provider, `package_dir` included: an
+    `alias` as `module` passes the provider through but reports its own label,
+    so `target.label` would name the alias's package, not the module's.
+    """
     if TfDeployInfo in target:
         info = target[TfDeployInfo]
         return struct(
@@ -49,6 +53,7 @@ def _under_test(target):
             manifest = struct(module = None, modules = info.modules, packages = info.packages),
             tfvars_content = info.tfvars_content,
             var_files = info.var_files,
+            package_dir = info.package_dir,
         )
     info = target[TfLibraryInfo]
     return struct(
@@ -57,6 +62,7 @@ def _under_test(target):
         manifest = info,
         tfvars_content = None,
         var_files = [],
+        package_dir = info.package_dir,
     )
 
 def _join(a, b):
@@ -96,7 +102,7 @@ def _test_dir(ctx, root):
 
 def _tf_test_impl(ctx):
     under_test = _under_test(ctx.attr.module)
-    root = _package_dir(ctx.attr.module.label)
+    root = under_test.package_dir
     test_dir = _test_dir(ctx, root)
 
     # The work tree: the module under test's files (a deploy's var_files and

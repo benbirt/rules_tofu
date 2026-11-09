@@ -85,6 +85,7 @@ def _tf_library_impl(ctx):
                 direct = [_package_dir(ctx.label)],
                 transitive = [d[TfLibraryInfo].packages for d in ctx.attr.deps],
             ),
+            package_dir = _package_dir(ctx.label),
         ),
     ]
 

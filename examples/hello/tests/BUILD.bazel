@@ -17,3 +17,19 @@ tf_test(
     srcs = ["hello.tftest.hcl"],
     module = "//examples/hello:hello",
 )
+
+# `module` may be an alias: the root module is the aliased library's
+# directory, examples/hello, not this package's.
+alias(
+    name = "greet_alias",
+    actual = "//examples/hello:greet_lib",
+)
+
+tf_test(
+    name = "greet_alias_test",
+    srcs = ["greet.tftest.hcl"],
+    # greet_test checks the file's formatting already.
+    fmt_test = False,
+    module = ":greet_alias",
+    deps = ["//examples/hello/tests/subject"],
+)
