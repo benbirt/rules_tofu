@@ -29,7 +29,10 @@ starlark_doc_extract(
     name = "providers_extensions",
     src = "//tf/providers:extensions.bzl",
     render_main_repo_name = True,
-    deps = ["//tf/providers:all_files"],
+    deps = [
+        "//tf/private:all_files",
+        "//tf/providers:all_files",
+    ],
 )
 
 starlark_doc_extract(
@@ -43,5 +46,8 @@ starlark_doc_extract(
     name = "modules_extensions",
     src = "//tf/modules:extensions.bzl",
     render_main_repo_name = True,
-    deps = ["//tf/modules:all_files"],
+    deps = [
+        "//tf/modules:all_files",
+        "//tf/private:all_files",
+    ],
 )

@@ -56,6 +56,7 @@ else the highest version requested; git and archive modules must be declared
 identically wherever their `name` appears.
 """
 
+load("//tf/private:fetched_tree.bzl", "walk", "within")
 load(
     ":source.bzl",
     "check_name",
@@ -109,6 +110,13 @@ def _parse_sources(module_ctx, sources):
 # Bazel's own files in a fetched module would split it into packages of its
 # own, so they're removed before the module's BUILD file is written.
 _BAZEL_FILES = ["BUILD", "BUILD.bazel", "MODULE.bazel", "REPO.bazel", "WORKSPACE", "WORKSPACE.bazel"]
+
+# The generated targets: the module's library, in its directory, and, when
+# that is a subdirectory, the rest of the fetched files, which local paths
+# may lead out into. Named so that no file of the module can share the name:
+# a file `files` beside a `filegroup(name = "files")` fails the package.
+_MODULE_TARGET = "_rules_tofu_module"
+_FILES_TARGET = "_rules_tofu_files"
 
 # Files that never belong in a work tree: VCS metadata, and tofu's own state
 # and lock, which a module repository may have committed.
@@ -173,23 +181,44 @@ def _cached(module_ctx, key):
     fact = module_ctx.facts.get(key)
     return dict(fact) if valid_fact(fact) else None
 
-def _files_under(path):
-    """Every file and directory below `path`, as `path` objects."""
-    found = []
-    pending = [path]
+def _tidy(repository_ctx, context):
+    """Remove what the fetched files hold that Bazel must not see.
 
-    # Starlark has no `while`; one iteration per directory.
-    for _ in range(100000):
-        if not pending:
-            break
-        directory = pending.pop()
-        for child in directory.readdir():
-            found.append(child)
-            if child.is_dir:
-                pending.append(child)
-    if pending:
-        fail("{} holds more directories than a module should".format(path))
-    return found
+    Bazel's own files would split the module into packages of its own. A
+    symlink stays only if it leads to a file of the module, which Bazel
+    reads as that file. Its `glob` skips a symlink to nothing, but follows
+    one to a directory and fails the package when the links lead back up to
+    an ancestor; and through a symlink out of the module, the module's files
+    would depend on the machine's.
+
+    The module's own directory can't be a symlink then: `//<subdir>` is
+    where its library is written, so that fails, naming where the link leads.
+    """
+    root = repository_ctx.path(".")
+    root_real = str(root.realpath)
+    subdir = repository_ctx.attr.subdir
+    entries = walk(root)
+    for entry in entries:
+        if not entry.is_dir and entry.path.basename in _BAZEL_FILES:
+            repository_ctx.delete(entry.path)
+
+    # Symlinks to directories go first: a symlink to a file through one of
+    # them leads nowhere once it is gone, and goes with the rest.
+    symlinks = [entry for entry in entries if entry.is_symlink and entry.path.basename not in _BAZEL_FILES]
+    for entry in symlinks:
+        if entry.path.exists and entry.path.is_dir:
+            if subdir == entry.rel or subdir.startswith(entry.rel + "/"):
+                target = str(entry.path.realpath)
+                fail(("{}: `{}` is a symlink in the fetched files, to {}; rules_tofu keeps no symlinks to " +
+                      "directories, so declare and call the module by the directory the link leads to").format(
+                    context,
+                    entry.rel,
+                    target[len(root_real) + 1:] if within(target, root_real) and target != root_real else target,
+                ))
+            repository_ctx.delete(entry.path)
+    for entry in symlinks:
+        if not entry.path.exists or not within(str(entry.path.realpath), root_real):
+            repository_ctx.delete(entry.path)
 
 def _fetch(repository_ctx):
     attr = repository_ctx.attr
@@ -211,10 +240,7 @@ def _fetch(repository_ctx):
         repository_ctx.delete(".git")
     else:
         repository_ctx.download_and_extract(url = attr.url, sha256 = attr.sha256, type = attr.archive_type)
-
-    for f in _files_under(repository_ctx.path(".")):
-        if not f.is_dir and f.basename in _BAZEL_FILES:
-            repository_ctx.delete(f)
+    _tidy(repository_ctx, context)
 
 def _scan(repository_ctx):
     args = [repository_ctx.path(_MODSCAN)]
@@ -254,16 +280,16 @@ def _tf_module_repo_impl(repository_ctx):
     if package:
         # The module's library lives in its own directory, which is what calls
         # reach, but local paths may lead out of it into the rest of the files.
-        data.append('["//:files"]')
+        data.append(repr(["//:" + _FILES_TARGET]))
         repository_ctx.file(
             "BUILD.bazel",
             content = """\
 filegroup(
-    name = "files",
+    name = {name},
     srcs = glob(["**"], exclude = {excluded}),
     visibility = ["//:__subpackages__"],
 )
-""".format(excluded = repr(_EXCLUDED)),
+""".format(name = repr(_FILES_TARGET), excluded = repr(_EXCLUDED)),
             executable = False,
         )
 
@@ -275,7 +301,7 @@ filegroup(
 load("@rules_tofu//tf:defs.bzl", "tf_library")
 
 tf_library(
-    name = "module",
+    name = {name},
     data = {data},
     fmt_test = False,
     module_source = {source},
@@ -285,6 +311,7 @@ tf_library(
     deps = {deps},
 )
 """.format(
+            name = repr(_MODULE_TARGET),
             data = " + ".join(data),
             source = repr(attr.source),
             version = repr(attr.version),
@@ -546,7 +573,7 @@ def _tf_modules_extension_impl(module_ctx):
     _tf_modules_hub(
         name = _HUB,
         modules = {
-            path: "@{}//{}:module".format(repo_name(path), r.subdir)
+            path: "@{}//{}:{}".format(repo_name(path), r.subdir, _MODULE_TARGET)
             for path, r in resolved.items()
         },
     )

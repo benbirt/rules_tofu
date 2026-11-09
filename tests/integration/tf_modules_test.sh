@@ -5,10 +5,17 @@
 #
 #   1. fixtures/network becomes a git repository with an annotated tag v1.0.0,
 #      and fixtures/dns an archive; @FIXTURES@ and @DNS_SHA256@ are filled in.
+#      The git repository also gets what a real one may hold: a BUILD file, a
+#      file named `files` at its root and one named `module` in the module's
+#      directory (the names of the generated targets once collided with
+#      them, issue #61), and symlinks of every kind: to a file the module
+#      needs, to a directory, to an ancestor (which Bazel's glob can't
+#      follow), to nothing, and out of the repository.
 #   2. //app plans: it calls a git module (which calls a registry module and
 #      requires a provider that only the module names), a submodule of it
 #      under modules/ and one outside modules/ by `//<subdir>`, the archive,
-#      and the registry module directly.
+#      and the registry module directly. The fetched git module holds the
+#      symlink to a file and none of the others, nor the BUILD file.
 #   3. MODULE.bazel.lock records the commits of the git and registry modules.
 #   4. v1.0.0 is moved to a new commit. After `bazel clean --expunge`, //app
 #      still plans the old commit's content, and the build passes with
@@ -18,6 +25,8 @@
 #      not what its examples do.
 #   6. A module that calls an undeclared one fails when fetched, naming the
 #      tag to add.
+#   7. A module declared by a `//<subdir>` that is a symlink fails when
+#      fetched, naming the directory the link leads to.
 
 set -euo pipefail
 
@@ -46,6 +55,18 @@ git_() {
 
 echo "--- 1. fixtures ---" >&2
 mv "${FIXTURES}/network" "${FIXTURES}/network.git"
+# Files named like the generated targets, a Bazel file, and symlinks. The
+# subnet submodule's outputs come through the one symlink that must survive;
+# `cp -RL` above would have dereferenced them, so they're made here.
+echo "not a target" >"${FIXTURES}/network.git/files"
+echo "not a target" >"${FIXTURES}/network.git/vpc/module"
+echo 'filegroup(name = "upstream")' >"${FIXTURES}/network.git/vpc/examples/BUILD.bazel"
+ln -s ../../../common/subnet_outputs.tf "${FIXTURES}/network.git/vpc/modules/subnet/outputs.tf"
+ln -s ../../modules "${FIXTURES}/network.git/vpc/examples/complete/modules"
+ln -s ../.. "${FIXTURES}/network.git/vpc/examples/complete/parent"
+ln -s ../../../missing.tf "${FIXTURES}/network.git/vpc/examples/complete/missing.tf"
+ln -s /dev/null "${FIXTURES}/network.git/vpc/examples/complete/outside"
+ln -s vpc/peering "${FIXTURES}/network.git/peering_link"
 git_ init -q
 git_ add -A
 git_ commit -q -m v1
@@ -77,6 +98,15 @@ plan() {
 
 echo "--- 2. plan ---" >&2
 plan "app-v1 10.0.0.0/24 www.example.com direct hub-peered"
+network_repo="$(find "$(bazel info output_base)/external" -maxdepth 1 -name '*tf_modules_network')"
+[[ -d "${network_repo}" ]] || fail "can't find the network module's repository: '${network_repo}'"
+[[ -L "${network_repo}/vpc/modules/subnet/outputs.tf" ]] || fail "the symlink to a file of the module was removed"
+for removed in vpc/examples/BUILD.bazel vpc/examples/complete/modules vpc/examples/complete/parent vpc/examples/complete/missing.tf vpc/examples/complete/outside peering_link; do
+  if [[ -e "${network_repo}/${removed}" || -L "${network_repo}/${removed}" ]]; then
+    fail "${removed} is still in the fetched module"
+  fi
+done
+[[ -f "${network_repo}/files" && -f "${network_repo}/vpc/module" ]] || fail "the module's own files named files and module were removed"
 
 echo "--- 3. facts ---" >&2
 grep -q -F "\"commit\": \"${first_commit}\"" MODULE.bazel.lock || fail "MODULE.bazel.lock doesn't record ${first_commit}"
@@ -132,5 +162,19 @@ fi
 echo "${out}" >&2
 grep -q -F 'tf_modules.module(source = "acme/missing/null", version = "...")' <<<"${out}" ||
   fail "the failure doesn't name the tag to add"
+
+echo "--- 7. a module directory that is a symlink ---" >&2
+cat >>MODULE.bazel <<EOF
+tf_modules.module(
+    name = "peering_link",
+    source = "git::file://${FIXTURES}/network.git//peering_link?ref=v1.0.0",
+)
+EOF
+if out="$(bazel build @tf_modules//peering_link 2>&1)"; then
+  fail "@tf_modules//peering_link built, but its directory is a symlink"
+fi
+echo "${out}" >&2
+grep -q -F '`peering_link` is a symlink in the fetched files, to vpc/peering' <<<"${out}" ||
+  fail "the failure doesn't name the directory the link leads to"
 
 echo "OK: tf_modules fetched git, archive and registry modules, pinned by commit" >&2
