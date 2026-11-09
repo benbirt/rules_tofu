@@ -49,6 +49,7 @@ BUILD files then name each provider as `@tf_providers//<namespace>/<name>`.
 # `tofu init` checks against it.
 
 load("//tf/private:fetched_tree.bzl", "walk")
+load("//tf/private:repo_metadata.bzl", "reproducible")
 load(":lock.bzl", "lock_entries", "lock_sha256s")
 load(
     ":source.bzl",
@@ -418,6 +419,10 @@ tf_provider(
         ),
         executable = False,
     )
+
+    # Every zip above was checked against a digest from the tag or the lock,
+    # so the attributes determine the contents.
+    return reproducible(repository_ctx)
 
 _tf_provider_download = repository_rule(
     implementation = _tf_provider_download_impl,

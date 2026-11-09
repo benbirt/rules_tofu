@@ -22,7 +22,10 @@ starlark_doc_extract(
     name = "toolchain_extensions",
     src = "//toolchain:extensions.bzl",
     render_main_repo_name = True,
-    deps = ["//toolchain:all_files"],
+    deps = [
+        "//tf/private:all_files",
+        "//toolchain:all_files",
+    ],
 )
 
 starlark_doc_extract(
