@@ -60,7 +60,6 @@ def _tf_deploy_impl(ctx):
     )
 
     outputs = _materialize(ctx, entries, tfvars_content = tfvars_content)
-    modules_manifest = _modules_manifest(ctx, outputs, ctx.attr.deps)
 
     # Aggregate providers: direct + transitive via library deps.
     direct_providers = [p[TfProviderInfo] for p in ctx.attr.providers]
@@ -69,6 +68,7 @@ def _tf_deploy_impl(ctx):
         for d in ctx.attr.deps
     ]
     providers_depset = depset(direct = direct_providers, transitive = transitive_provider_sets)
+    modules_manifest = _modules_manifest(ctx, outputs, ctx.attr.deps, providers_depset)
     plugin_outputs = _materialize_plugin_tree(ctx, providers_depset)
     outputs = outputs + plugin_outputs
     lock = _provider_lock(ctx, providers_depset)

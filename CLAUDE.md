@@ -218,7 +218,15 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   (issue #61). Generated libraries name providers as
   `@tf_providers//...`, which they can see only because rules_tofu's own
   MODULE.bazel imports the hub through a non-dev `use_extension`; keep
-  that. `//tests/integration:tf_modules_test` covers git (with a moved
+  that. They can't carry the providers of a submodule outside `modules/`
+  that callers reach by `//<subdir>`: the fetch never sees the callers
+  (issue #76). Instead the manifest action checks every walked module's
+  `required_providers` against the rule's `TfProviderInfo` addresses
+  (`--provider`) and fails naming the `@tf_providers//<ns>/<name>` to add,
+  before `tofu init` fails less helpfully; `missing_provider` and
+  `tf_modules_test` step 3 cover it. Don't try to add the providers
+  automatically: provider labels must be dependencies before analysis.
+  `//tests/integration:tf_modules_test` covers git (with a moved
   tag), archive and registry modules; `examples/modules/{label,stack,git}`
   use real modules, which CI plans: keep them small (light providers only).
 

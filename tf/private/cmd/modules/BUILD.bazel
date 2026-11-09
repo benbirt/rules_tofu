@@ -7,8 +7,10 @@ go_library(
     srcs = ["main.go"],
     importpath = "github.com/benbirt/rules_tofu/tf/private/cmd/modules",
     deps = [
+        "//tf/private/cmd/internal/flags",
         "//tf/private/cmd/internal/tfconfig",
         "@com_github_hashicorp_hcl_v2//:hcl",
+        "@com_github_opentofu_registry_address_v2//:registry-address",
     ],
 )
 

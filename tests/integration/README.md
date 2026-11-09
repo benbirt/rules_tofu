@@ -56,10 +56,12 @@ tofu version in `toolchain/versions.bzl`.
 extension: the driver turns `fixtures/network` into a git repository and
 `fixtures/dns` into an archive, so both are fetched offline, beside
 `cloudposse/label/null` from the OpenTofu registry. `//app` plans with all
-three and a submodule, without naming the provider the git module requires;
-the commits are recorded in `MODULE.bazel.lock`; moving the git tag changes
-nothing, even after `bazel clean --expunge`; and a module calling an
-undeclared one fails when fetched, naming the tag to add.
+three and two submodules, without naming the provider the git module
+requires; without the provider of the submodule outside `modules/` in its
+`providers`, it fails naming the label to add; the commits are recorded in
+`MODULE.bazel.lock`; moving the git tag changes nothing, even after
+`bazel clean --expunge`; and a module calling an undeclared one fails when
+fetched, naming the tag to add.
 
 `broken_workspace` shares one `MODULE.bazel` across all of its cases, so a
 case whose failure lives in the module graph cannot go there — it gets a

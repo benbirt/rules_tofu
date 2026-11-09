@@ -1,7 +1,8 @@
 load("@rules_tofu//tf:defs.bzl", "tf_deploy")
 
 # hashicorp/null comes with the network module. hashicorp/time is required
-# by a submodule outside its modules/, which only this caller reaches.
+# by a submodule outside its modules/, which only this caller reaches, so it
+# goes here; the build fails naming it otherwise (tf_modules_test.sh, step 3).
 tf_deploy(
     name = "app",
     srcs = ["main.tf"],

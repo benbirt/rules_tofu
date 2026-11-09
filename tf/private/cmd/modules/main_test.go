@@ -50,7 +50,7 @@ module "local" { source = "../shared" }
 		{Label: "@infra//vpc", Source: "git::https://example.com/infra.git//vpc?ref=v1.0.0", Dir: "external/infra+/vpc", Direct: true},
 		{Label: "@dns//:dns", Source: "registry.opentofu.org/acme/dns/aws", Version: "0.1.0", Dir: "external/dns+"},
 	}
-	got, err := build(tree, "app", "//app:app", deps, nil)
+	got, err := build(tree, "app", "//app:app", deps, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestBuild_RootPackage(t *testing.T) {
 		"a/main.tf":   ``,
 		"versions.tf": `terraform {}`,
 	})
-	got, err := build(tree, "", "//:root", nil, nil)
+	got, err := build(tree, "", "//:root", nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestBuild_JSONAndOverride(t *testing.T) {
 		"app/new/main.tf":    ``,
 		"app/unused/main.tf": ``,
 	})
-	got, err := build(tree, "app", "//app", nil, nil)
+	got, err := build(tree, "app", "//app", nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +230,7 @@ func TestBuild_Errors(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tree := writeTree(t, tc.files)
-			_, err := build(tree, "app", "//app", tc.deps, nil)
+			_, err := build(tree, "app", "//app", tc.deps, nil, nil)
 			if err == nil {
 				t.Fatalf("expected an error containing %q", tc.want)
 			}
@@ -254,11 +254,11 @@ func TestBuild_LongestMatch(t *testing.T) {
 		{Label: "@whole", Source: "acme/n/aws", Version: "1.0.0", Dir: "external/whole+", Direct: true},
 		{Label: "@sub", Source: "acme/n/aws//modules", Version: "1.0.0", Dir: "external/sub+", Direct: true},
 	}
-	_, err := build(tree, "app", "//app", deps, nil)
+	_, err := build(tree, "app", "//app", deps, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "no module call uses @whole") {
 		t.Fatalf("expected @whole to go unused, got %v", err)
 	}
-	got, err := build(tree, "app", "//app", deps[1:], nil)
+	got, err := build(tree, "app", "//app", deps[1:], nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -331,7 +331,7 @@ func TestBuild_DirectUse(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tree := writeTree(t, tc.files)
-			if _, err := build(tree, tc.root, "//"+tc.root, tc.deps, tc.packages); err != nil {
+			if _, err := build(tree, tc.root, "//"+tc.root, tc.deps, tc.packages, nil); err != nil {
 				t.Fatal(err)
 			}
 		})
@@ -367,12 +367,12 @@ func TestBuild_TransitiveCallDoesNotUseDirectDep(t *testing.T) {
 				deps = append(deps, dep{Label: "//mod_a", Source: tc.source, Dir: dir, Direct: true})
 			}
 			packages := []string{dir, "external/mod_b+"}
-			_, err := build(tree, "app", "//app", deps, packages)
+			_, err := build(tree, "app", "//app", deps, packages, nil)
 			if err == nil || !strings.Contains(err.Error(), "no module call uses @tf_modules//mod_b") {
 				t.Fatalf("expected @tf_modules//mod_b to go unused, got %v", err)
 			}
 			deps[0].Direct = false
-			if _, err := build(tree, "app", "//app", deps, packages); err != nil {
+			if _, err := build(tree, "app", "//app", deps, packages, nil); err != nil {
 				t.Fatal(err)
 			}
 		})
@@ -387,7 +387,7 @@ func TestBuild_RepeatedCall(t *testing.T) {
 		"app/shared/main.tf":       `module "inner" { source = "./inner" }`,
 		"app/shared/inner/main.tf": ``,
 	})
-	got, err := build(tree, "app", "//app", nil, nil)
+	got, err := build(tree, "app", "//app", nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -412,7 +412,7 @@ func TestBuild_BackslashLocalSource(t *testing.T) {
 		"shared/main.tf":       `module "inner" { source = ".\\inner\\" }`,
 		"shared/inner/main.tf": ``,
 	})
-	got, err := build(tree, "app", "//app", nil, nil)
+	got, err := build(tree, "app", "//app", nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -451,10 +451,85 @@ func TestBuild_RootPackageCycle(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tree := writeTree(t, tc.files)
-			_, err := build(tree, "", "//:root", nil, nil)
+			_, err := build(tree, "", "//:root", nil, nil, nil)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("got %v, want an error containing %q", err, tc.want)
 			}
 		})
+	}
+}
+
+// Every module walked must have its required providers in the plugin tree,
+// which --provider lists: the root, a local module, a dep called by
+// module_source, and above all a submodule reached by `//<subdir>` outside
+// `modules/`, whose providers the dep's generated library can't carry (#76).
+// The error names the module, the provider and the label to add; a built-in
+// provider needs no plugin.
+func TestBuild_RequiredProviders(t *testing.T) {
+	files := map[string]string{
+		"app/main.tf": `
+terraform {
+  required_providers {
+    random    = { source = "hashicorp/random" }
+    terraform = { source = "terraform.io/builtin/terraform" }
+  }
+}
+module "net" { source = "git::https://example.com/network.git//vpc?ref=v1.0.0" }
+module "peering" { source = "git::https://example.com/network.git//vpc/peering?ref=v1.0.0" }
+module "again" { source = "git::https://example.com/network.git//vpc/peering?ref=v1.0.0" }
+module "local" { source = "../shared" }
+`,
+		"shared/main.tf":            "terraform {\n  required_providers {\n    local = \"~> 2.0\"\n  }\n}",
+		"external/net+/vpc/main.tf": "terraform {\n  required_providers {\n    null = { source = \"hashicorp/null\" }\n  }\n}",
+		"external/net+/vpc/peering/main.tf": `
+terraform {
+  required_providers {
+    time = { source = "HashiCorp/time" }
+  }
+}
+`,
+	}
+	deps := []dep{{Label: "@tf_modules//network", Source: "git::https://example.com/network.git//vpc?ref=v1.0.0", Dir: "external/net+/vpc", Direct: true}}
+	all := []string{
+		"registry.opentofu.org/hashicorp/random",
+		"registry.opentofu.org/hashicorp/local",
+		"registry.opentofu.org/hashicorp/null",
+		"registry.opentofu.org/hashicorp/time",
+	}
+	tree := writeTree(t, files)
+	if _, err := build(tree, "app", "//app:app", deps, nil, all); err != nil {
+		t.Fatalf("every provider supplied: %v", err)
+	}
+
+	_, err := build(tree, "app", "//app:app", deps, nil, all[:1])
+	if err == nil {
+		t.Fatal("expected the missing providers to be reported")
+	}
+	want := `//app:app: nothing in its providers or deps supplies these providers, so ` + "`tofu init`" + ` would not find them:
+    module "net" (@tf_modules//network) requires hashicorp/null
+    module "peering" (@tf_modules//network, //vpc/peering) requires hashicorp/time
+    module "local" requires hashicorp/local
+Add "@tf_providers//hashicorp/null", "@tf_providers//hashicorp/time", "@tf_providers//hashicorp/local" to the providers of //app:app.`
+	if err.Error() != want {
+		t.Errorf("got\n%s\nwant\n%s", err, want)
+	}
+
+	_, err = build(tree, "app", "//app:app", deps, nil, all[1:])
+	if err == nil || !strings.Contains(err.Error(), "    the root module requires hashicorp/random\n") ||
+		!strings.Contains(err.Error(), `Add "@tf_providers//hashicorp/random" to the providers of //app:app.`) {
+		t.Errorf("the root module's own requirement is not reported: %v", err)
+	}
+}
+
+// A provider from another registry can't be vendored, so there is no label
+// to add; the error says so instead.
+func TestBuild_RequiredProviderFromAnotherRegistry(t *testing.T) {
+	tree := writeTree(t, map[string]string{
+		"app/main.tf": "terraform {\n  required_providers {\n    aws = { source = \"registry.terraform.io/hashicorp/aws\" }\n  }\n}",
+	})
+	_, err := build(tree, "app", "//app", nil, nil, nil)
+	want := "    the root module requires registry.terraform.io/hashicorp/aws\nrules_tofu can't vendor registry.terraform.io/hashicorp/aws: it only vendors providers from registry.opentofu.org."
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("got %v, want an error containing %q", err, want)
 	}
 }

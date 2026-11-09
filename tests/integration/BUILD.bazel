@@ -56,7 +56,7 @@ _CASES = [
     ("duplicate_vars", "broken_workspace", "//cases/duplicate_vars:dup", "declared in both"),
     ("duplicate_vars_hcl", "broken_workspace", "//cases/duplicate_vars:dup_hcl", "declared in both"),
     ("validate_fails", "broken_workspace", "//cases/validate_fails:bad", "Reference to undeclared input variable"),
-    ("missing_provider", "broken_workspace", "//cases/missing_provider:missing", "Failed to query available provider packages"),
+    ("missing_provider", "broken_workspace", "//cases/missing_provider:missing", "Add \"@tf_providers//hashicorp/random\" to the providers of"),
     ("lock_file_smuggled", "broken_workspace", "//cases/lock_file_smuggled:smuggled", "refusing to validate"),
     ("auto_tfvars_conflict", "broken_workspace", "//cases/auto_tfvars_conflict:deploy", "collides with the generated"),
     ("module_source_missing", "broken_workspace", "//cases/module_source_missing:lib", "no dep provides source"),
