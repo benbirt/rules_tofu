@@ -1,5 +1,4 @@
-# The dep's label is the per-module repository's canonical one.
-grep -q -F '//vpc:_rules_tofu_module, //vpc/peering) requires hashicorp/time' <<<"${out}" ||#!/usr/bin/env bash
+#!/usr/bin/env bash
 # Driver for //tests/integration:tf_modules_test. The bazel_integration_test
 # rule sets BIT_BAZEL_BINARY and BIT_WORKSPACE_DIR (the tf_modules workspace).
 # Every step must succeed, the last by seeing the build fail as it should:
