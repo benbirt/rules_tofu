@@ -47,6 +47,9 @@ TfLibraryInfo = provider(
         "modules": "depset[struct(label, source, version, dir)]: `module` of this library and its transitive deps.",
         "packages": "depset[string]: the work-tree directory of the package of this library and of its " +
                     "transitive deps, so a directory can be traced to the library that owns it.",
+        "package_dir": "string: the work-tree directory of this library's package, `<workspace_root>/<package>`; " +
+                       "the root module directory when the library is tested. Carried here so a `tf_test` " +
+                       "reads it from the provider, which an `alias` passes through unchanged.",
     },
 )
 

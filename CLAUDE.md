@@ -293,7 +293,10 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   the analysis-time check is the gate. Fetched modules' own tests arrive as
   `data`, which is not checked, and are ignored unless a run loads them.
 - A `tf_test`'s root module is the package of its `module` attribute, not
-  its own, so tests can sit in a `tests/` sub-package; its `srcs` must be in
+  its own, so tests can sit in a `tests/` sub-package. It is read from the
+  provider (`TfLibraryInfo.package_dir`, `TfDeployInfo.package_dir`), never
+  from `ctx.attr.module.label`, which for an `alias` is the alias's own label
+  (issue #87; `examples/hello/tests:greet_alias_test` covers it); its `srcs` must be in
   one directory at or below that root, passed as `-test-directory` to init,
   validate and test alike (`test_dirs_split`). `tofu init -get=false` needs
   the same flag or it misses the run blocks' modules (verified on 1.12).
