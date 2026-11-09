@@ -76,11 +76,14 @@ func TestFiles(dir string) ([]string, error) {
 
 // TestRunKey is the key under which `tofu init` records the module a `run`
 // block loads in `.terraform/modules/modules.json`: `test.`, then the test
-// file's path relative to the root module with `/` as `.` and the extension
-// dropped, then the run's name. `tests/helper.tftest.hcl` with `run "setup"`
-// gives `test.tests.helper.setup`.
+// file's path relative to the root module with `/` as `.`, then the run's
+// name. Only a `.tftest.hcl` extension is dropped, as tofu's buildTestModules
+// (internal/configs/config_build.go) drops only that one; the other test
+// extensions stay in the key. `tests/helper.tftest.hcl` with `run "setup"`
+// gives `test.tests.helper.setup`; `tests/helper.tofutest.hcl` gives
+// `test.tests.helper.tofutest.hcl.setup`.
 func TestRunKey(relFile, run string) string {
-	stem := strings.TrimSuffix(filepath.ToSlash(relFile), testExt(relFile))
+	stem := strings.TrimSuffix(filepath.ToSlash(relFile), ".tftest.hcl")
 	return "test." + strings.ReplaceAll(stem, "/", ".") + "." + run
 }
 

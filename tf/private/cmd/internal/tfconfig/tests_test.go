@@ -42,8 +42,10 @@ func TestTestRunKey(t *testing.T) {
 	for _, tc := range []struct{ file, run, want string }{
 		{"root.tftest.hcl", "setup", "test.root.setup"},
 		{"tests/helper.tftest.hcl", "setup", "test.tests.helper.setup"},
-		{"tests/helper.tofutest.hcl", "setup", "test.tests.helper.setup"},
-		{"a/b/x.tftest.json", "deep", "test.a.b.x.deep"},
+		// tofu drops only `.tftest.hcl`; the other extensions stay in the key.
+		{"tests/helper.tofutest.hcl", "setup", "test.tests.helper.tofutest.hcl.setup"},
+		{"a/b/x.tftest.json", "deep", "test.a.b.x.tftest.json.deep"},
+		{"a/b/x.tofutest.json", "deep", "test.a.b.x.tofutest.json.deep"},
 	} {
 		if got := TestRunKey(filepath.FromSlash(tc.file), tc.run); got != tc.want {
 			t.Errorf("TestRunKey(%q, %q) = %q, want %q", tc.file, tc.run, got, tc.want)

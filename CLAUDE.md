@@ -233,7 +233,9 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   of a tf_test's test files (`--test-dir`; `tfconfig.TestFiles`,
   `ReadTestCalls`, with `.tofutest` over `.tftest`) and records each under
   tofu's key, `test.<file path with dots>.<run>` (`TestRunKey`; verified
-  against 1.12 for root-level, `tests/` and nested directories), resolving
+  against 1.12 for root-level, `tests/` and nested directories; tofu drops
+  only a `.tftest.hcl` extension, so `.tofutest.hcl`, `.tftest.json` and
+  `.tofutest.json` stay in the key, issue #84), resolving
   a local source against the root module's directory, not the test file's,
   as tofu does. `pin` queries `_tf_test` too and feeds those calls into the
   `//<subdir>` fixpoint; `tfconfig.ModuleDirs` keeps ignoring a fetched
