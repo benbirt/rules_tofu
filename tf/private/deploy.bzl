@@ -22,9 +22,10 @@ When additionally `fmt_test=True` (the default):
   - `:<name>.fmt_check`  — test: `bazel test :<name>.fmt_check`
 
 Materialization happens at analysis time via `ctx.actions.symlink` (one
-action per file). At runtime the runner cd's into the work tree and
-invokes `tofu init && tofu <plan|apply>` against it. Nothing is
-mktemp'd; nothing is symlinked from bash.
+action per file). At run time the runner mirrors the work tree into the
+deploy's run directory, `<name>.rules_tofu-state/work/`, and invokes
+`tofu init && tofu <plan|apply|destroy>` there. Nothing is mktemp'd;
+nothing is symlinked from bash.
 """
 
 load("//toolchain:toolchain.bzl", "TOOLCHAIN_TYPE")
@@ -160,7 +161,9 @@ tf_deploy_rule = rule(
         "allow_ephemeral_state": attr.bool(
             default = False,
             doc = "Permit `apply`/`destroy` to run against local, disposable state. " +
-                  "With no `backend`/`cloud` block, state lands under " +
+                  "With no `backend`/`cloud` block, or with a `backend \"local\"` whose " +
+                  "`path` and `workspace_dir` aren't both literal absolute paths outside " +
+                  "Bazel's output tree, state lands under " +
                   "`bazel-bin/<pkg>/<name>.rules_tofu-state/` — machine-local, keyed by " +
                   "build configuration, and wiped by `bazel clean` — so the runner refuses " +
                   "those commands by default. Set True only where losing state is harmless: " +
@@ -193,6 +196,11 @@ def tf_deploy(name, srcs = None, deps = None, vars = None, var_files = None, dat
       - `:<name>.apply`   — `bazel run` to apply.
       - `:<name>.destroy` — `bazel run` to destroy all managed resources.
 
+    The three are ordinary executables: besides `bazel run`, the built
+    `bazel-bin/<pkg>/<name>.<command>.sh` can be run directly, from any
+    directory. tofu runs in the deploy's run directory,
+    `bazel-bin/<pkg>/<name>.rules_tofu-state/work/<pkg>`, which they share.
+
     When `srcs` is non-empty:
       - `:<name>.fmt`     — `bazel run` to reformat the .tf and .tofu files in
                             `srcs` in place.
@@ -216,17 +224,21 @@ def tf_deploy(name, srcs = None, deps = None, vars = None, var_files = None, dat
           level, in addition to those its `deps` bring in. `tofu init` runs
           offline against them.
       allow_ephemeral_state: allow `:<name>.apply` and `:<name>.destroy` to run
-          against local state. A deploy with no `backend "..." {}` or `cloud {}`
-          block keeps its state at
-          `bazel-bin/<pkg>/<name>.rules_tofu-state/terraform.tfstate`, which is
-          machine-local, forks with the build configuration, and is deleted by
-          `bazel clean` — losing it orphans whatever was applied. So by default
-          the runner refuses both mutating commands for such a deploy; `plan` is
-          never gated. Set True only where disposable state is the point: demos
-          and examples, throwaway sandboxes, or bootstrapping the bucket that
-          will hold real state (then move it with
-          `tofu init -migrate-state` once the backend block is in place).
-          Ignored when a backend/cloud block is present.
+          against local state under `bazel-bin`. State lives there for a
+          deploy with no `backend "..." {}` or `cloud {}` block (at
+          `bazel-bin/<pkg>/<name>.rules_tofu-state/terraform.tfstate`), and for
+          one with a `backend "local"` block unless its `path` and
+          `workspace_dir` are both literal absolute paths outside Bazel's
+          output tree: tofu resolves anything else against the deploy's run
+          directory, `bazel-bin/<pkg>/<name>.rules_tofu-state/work/<pkg>`.
+          State there is machine-local, forks with the build configuration,
+          and is deleted by `bazel clean` — losing it orphans whatever was
+          applied. So by default the runner refuses both mutating commands for
+          such a deploy; `plan` is never gated. Set True only where disposable
+          state is the point: demos and examples, throwaway sandboxes, or
+          bootstrapping the bucket that will hold real state (then move it
+          with `tofu init -migrate-state` once the backend block is in place).
+          Ignored when the deploy's backend keeps state elsewhere.
       fmt_test: whether to emit a `:<name>.fmt_check` test target. Only emitted
           when True (the default) and `srcs` is non-empty.
       **kwargs: forwarded to the underlying rule (visibility, tags, testonly).

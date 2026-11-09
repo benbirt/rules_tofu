@@ -1,0 +1,12 @@
+load("@rules_tofu//tf:defs.bzl", "tf_deploy")
+
+# The backend's `path` is relative, so tofu resolves it against the deploy's
+# run directory under bazel-bin: state there goes with `bazel clean`, hence
+# the opt-in. `greeting.txt` is read through `path.module`, which only works
+# if tofu runs where the configuration's files are.
+tf_deploy(
+    name = "deploy",
+    srcs = ["main.tf"],
+    allow_ephemeral_state = True,
+    data = ["greeting.txt"],
+)

@@ -87,6 +87,8 @@ _CASES = [
 _RUN_CASES = [
     # (case_name, workspace_path, target inside that workspace, stderr fragment)
     ("ephemeral_state_refused", "broken_workspace", "//cases/ephemeral_state_refused:deploy.apply", "allow_ephemeral_state"),
+    # A `backend "local"` with a relative path keeps state under bazel-bin too.
+    ("local_backend_refused", "broken_workspace", "//cases/local_backend_refused:deploy.apply", "does not provably keep state outside"),
 ]
 
 # A nested Bazel is a whole build system: it writes to the repository cache
@@ -194,6 +196,29 @@ sh_binary(
     )
     for version in KNOWN_VERSIONS
 ]
+
+# The launchers a `tf_deploy` generates, run for real: `.apply` under
+# `bazel run`, then the built `.destroy` launcher directly from another
+# directory, sharing the state of a `backend "local"` with a relative path in
+# the deploy's run directory. See run_directory_test.sh.
+sh_binary(
+    name = "run_directory_driver",
+    srcs = ["run_directory_test.sh"],
+    data = ["nested_bazel.sh"],
+)
+
+bazel_integration_test(
+    name = "run_directory_test",
+    timeout = "moderate",
+    bazel_binaries = bazel_binaries,
+    bazel_version = bazel_binaries.versions.current,
+    tags = _TAGS,
+    test_runner = ":run_directory_driver",
+    workspace_files = integration_test_utils.glob_workspace_files("run_directory") + [
+        "//:local_repository_files",
+    ],
+    workspace_path = "run_directory",
+)
 
 # tf_modules.module: git, archive and registry modules, fetched and pinned by
 # commit or digest, with the providers a module requires carried to its

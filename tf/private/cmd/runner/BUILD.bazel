@@ -6,6 +6,7 @@ go_library(
     name = "runner_lib",
     srcs = [
         "main.go",
+        "rundir.go",
         "test.go",
     ],
     importpath = "github.com/benbirt/rules_tofu/tf/private/cmd/runner",

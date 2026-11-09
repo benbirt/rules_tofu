@@ -62,15 +62,15 @@ TfDeployInfo = provider(
     fields = {
         "work_tree_files": "depset[File]: every file inside the work tree and the sibling plugin tree " +
                            "(so runfiles include them).",
-        "package_dir": "string: workspace-relative directory the runner cd's into before running tofu.",
+        "package_dir": "string: workspace-relative directory of the root module, where the runner runs tofu within the work tree's mirror.",
         "var_file_relpaths": "list[string]: workspace-relative paths of -var-file inputs, in declaration order.",
         "lock": "File or None: the `.terraform.lock.hcl` to place next to the configuration before `tofu init`.",
         "modules_manifest": "File: the `.terraform/modules/modules.json` to place next to the configuration " +
                             "before `tofu init -get=false`.",
         "allow_ephemeral_state": "bool: whether this deploy opts in to local, disposable state. When False " +
                                  "(the default) the runner refuses `apply`/`destroy` unless the deploy declares " +
-                                 "a `backend`/`cloud` block, because local state lives under bazel-bin and is " +
-                                 "wiped by `bazel clean`. `plan` is never gated.",
+                                 "a backend that keeps state outside Bazel's output tree, because state under " +
+                                 "bazel-bin is wiped by `bazel clean`. `plan` is never gated.",
         "transitive_files": "depset[struct(path, file)]: the deploy's own files, its `var_files` and the files of " +
                             "its transitive library deps, un-materialised, so a `tf_test` can build a work tree of them.",
         "providers": "depset[TfProviderInfo]: providers of the deploy and its transitive deps.",
