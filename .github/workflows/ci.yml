@@ -34,7 +34,7 @@ jobs:
 
       # Keyed on go.sum, so a run with unchanged Go modules downloads none.
       - name: Restore the Go module cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/go/pkg/mod
           key: gomod-${{ runner.os }}-${{ hashFiles('go.sum') }}
