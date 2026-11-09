@@ -1,4 +1,4 @@
-// Command runner is rules_tofu's tofu plan/apply wrapper. It is invoked by
+// Command runner is rules_tofu's tofu plan/apply/test wrapper. It is invoked by
 // the generated shell launcher emitted by the tf_runner rule with every
 // configuration value passed via explicit standard flags.
 //
@@ -13,6 +13,8 @@
 //     tf_providers.from_lock.
 //   - For plan: emit a plan artifact and stop.
 //   - For apply/destroy: delegate to tofu, passing through any extra args.
+//   - For test (tf_test): copy the work tree into $TEST_TMPDIR, init it with
+//     -backend=false and run `tofu test` there (see test.go).
 //
 // Configuration validation (`tofu init -backend=false && tofu validate`)
 // happens at `bazel build` time via the deploy rule's TofuValidate action,
@@ -43,6 +45,7 @@ var (
 	varFiles        = flags.StringList("var-file", "path to a .tfvars.json file passed to tofu via -var-file (repeatable)")
 	modulesManifest = flag.String("modules-manifest", "", "the .terraform/modules/modules.json recording every module call, copied into place before tofu init -get=false")
 	lockFile        = flag.String("lock-file", "", "optional .terraform.lock.hcl pinning the providers (tf_providers.from_lock), copied next to the configuration before tofu init")
+	testDir         = flag.String("test-dir", "", "for --command=test, the test files' directory relative to the package dir, passed to tofu as -test-directory; empty for tofu's default")
 
 	stateDir = flag.String("state-dir", "", "absolute path to the per-deploy state directory")
 
@@ -51,7 +54,7 @@ var (
 			"set by tf_deploy(allow_ephemeral_state = True)")
 
 	tofu    = flag.String("tofu", "", "path to the tofu binary")
-	command = flag.String("command", "", `"plan", "apply", or "destroy"`)
+	command = flag.String("command", "", `"plan", "apply", "destroy" or "test"`)
 )
 
 func main() {
@@ -79,7 +82,6 @@ func run() error {
 		"--tofu":             *tofu,
 		"--work-tree":        *workTree,
 		"--command":          *command,
-		"--state-dir":        *stateDir,
 		"--plugin-dir":       *pluginDir,
 		"--modules-manifest": *modulesManifest,
 	} {
@@ -87,8 +89,15 @@ func run() error {
 			return fmt.Errorf("%s is required", name)
 		}
 	}
-	if *command != "plan" && *command != "apply" && *command != "destroy" {
-		return fmt.Errorf(`--command must be "plan", "apply", or "destroy", got %q`, *command)
+	switch *command {
+	case "plan", "apply", "destroy":
+	case "test":
+		return runTest(extraArgs)
+	default:
+		return fmt.Errorf(`--command must be "plan", "apply", "destroy" or "test", got %q`, *command)
+	}
+	if *stateDir == "" {
+		return errors.New("--state-dir is required")
 	}
 
 	if os.Getenv("BUILD_WORKSPACE_DIRECTORY") == "" {

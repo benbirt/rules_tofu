@@ -4,6 +4,7 @@ go_library(
     name = "tfconfig",
     srcs = [
         "source.go",
+        "tests.go",
         "tfconfig.go",
     ],
     importpath = "github.com/benbirt/rules_tofu/tf/private/cmd/internal/tfconfig",
@@ -19,6 +20,7 @@ go_test(
     name = "tfconfig_test",
     srcs = [
         "source_test.go",
+        "tests_test.go",
         "tfconfig_test.go",
     ],
     embed = [":tfconfig"],

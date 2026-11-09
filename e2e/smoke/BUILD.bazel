@@ -1,4 +1,4 @@
-load("@rules_tofu//tf:defs.bzl", "tf_deploy", "tf_library")
+load("@rules_tofu//tf:defs.bzl", "tf_deploy", "tf_library", "tf_test")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -13,4 +13,11 @@ tf_deploy(
         "name": "bcr",
     },
     deps = [":greet_lib"],
+)
+
+# The deploy's `tofu test` tests, run offline by `bazel test`.
+tf_test(
+    name = "smoke_test",
+    srcs = ["tests/smoke.tftest.hcl"],
+    module = ":smoke",
 )

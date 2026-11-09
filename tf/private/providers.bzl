@@ -68,5 +68,13 @@ TfDeployInfo = provider(
                                  "(the default) the runner refuses `apply`/`destroy` unless the deploy declares " +
                                  "a `backend`/`cloud` block, because local state lives under bazel-bin and is " +
                                  "wiped by `bazel clean`. `plan` is never gated.",
+        "transitive_files": "depset[struct(path, file)]: the deploy's own files, its `var_files` and the files of " +
+                            "its transitive library deps, un-materialised, so a `tf_test` can build a work tree of them.",
+        "providers": "depset[TfProviderInfo]: providers of the deploy and its transitive deps.",
+        "modules": "depset[struct(label, source, version, dir)]: `module` of the deploy's transitive deps.",
+        "packages": "depset[string]: the work-tree directory of the deploy's package and of its transitive " +
+                    "deps' (see TfLibraryInfo).",
+        "tfvars_content": "string: the `rules_tofu.auto.tfvars.json` rendered from `vars`.",
+        "var_files": "list[File]: the `var_files`, in declaration order.",
     },
 )

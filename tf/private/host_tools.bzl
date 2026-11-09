@@ -29,6 +29,7 @@ _SOURCES = [
     Label("//:go.sum"),
     Label("//tf/private/cmd/internal/flags:flags.go"),
     Label("//tf/private/cmd/internal/tfconfig:source.go"),
+    Label("//tf/private/cmd/internal/tfconfig:tests.go"),
     Label("//tf/private/cmd/internal/tfconfig:tfconfig.go"),
     Label("//tf/private/cmd/lockjson:main.go"),
     Label("//tf/private/cmd/modscan:main.go"),

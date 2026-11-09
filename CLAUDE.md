@@ -229,6 +229,15 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   `//tests/integration:tf_modules_test` covers git (with a moved
   tag), archive and registry modules; `examples/modules/{label,stack,git}`
   use real modules, which CI plans: keep them small (light providers only).
+- The manifest tool also reads the `run { module { source = ... } }` blocks
+  of a tf_test's test files (`--test-dir`; `tfconfig.TestFiles`,
+  `ReadTestCalls`, with `.tofutest` over `.tftest`) and records each under
+  tofu's key, `test.<file path with dots>.<run>` (`TestRunKey`; verified
+  against 1.12 for root-level, `tests/` and nested directories), resolving
+  a local source against the root module's directory, not the test file's,
+  as tofu does. `pin` queries `_tf_test` too and feeds those calls into the
+  `//<subdir>` fixpoint; `tfconfig.ModuleDirs` keeps ignoring a fetched
+  module's own `tests/`, which `glob(["**"])` brings along as data.
 
 ### Extensions and the toolchain
 
@@ -271,7 +280,35 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
 - `tf_library` validates inline: the validate stamp is in
   `DefaultInfo.files` and `bazel build :foo_lib` is the validation
   contract. Don't add a `:foo.validate` sub-target or a `validate_test`
-  flag; the only generated test is `:foo.fmt_check`.
+  flag; the only generated test is `:foo.fmt_check`. Tests of the
+  configuration itself (`tofu test`) are the `tf_test` rule
+  (`tf/private/test.bzl`, README "Tests"), a target of its own with its own
+  `deps` (helper modules) and `providers`, never a sub-target of a library.
+- Test files (`TEST_SRC_EXTS`) are rejected in `tf_library`/`tf_deploy`
+  `srcs` (`check_no_test_files`; `test_file_in_srcs`): tofu reads them from
+  the root module's directory, so a test in a library's srcs would ship to
+  and run in every dependant. `ALLOWED_SRC_EXTS` still admits `.hcl`, so
+  the analysis-time check is the gate. Fetched modules' own tests arrive as
+  `data`, which is not checked, and are ignored unless a run loads them.
+- A `tf_test`'s root module is the package of its `module` attribute, not
+  its own, so tests can sit in a `tests/` sub-package; its `srcs` must be in
+  one directory at or below that root, passed as `-test-directory` to init,
+  validate and test alike (`test_dirs_split`). `tofu init -get=false` needs
+  the same flag or it misses the run blocks' modules (verified on 1.12).
+- The runner's `--command=test` (`tf/private/cmd/runner/test.go`) copies
+  the work tree into `$TEST_TMPDIR` (runfiles are Bazel's), passes
+  `-backend=false` to init (`tofu test` keeps state in memory and ignores
+  backends; without the flag init contacts the backend), needs no
+  `BUILD_WORKSPACE_DIRECTORY` or `--state-dir`, never writes into runfiles
+  (an absent plugin tree gets an empty directory under `$TEST_TMPDIR`), and
+  fails on `errored_test.tfstate`, which tofu writes with exit 0 when a
+  run's destroy fails. Don't route tests through the plan/apply path or its
+  ephemeral-state gate.
+- `mock_provider` still needs the provider package in `.terraform/providers`
+  (verified: tofu fails without it), so a tf_test's plugin tree is built
+  for every test. Real infrastructure is gated by Bazel, not by parsing run
+  blocks for `command = apply`: the macro adds `block-network` unless
+  `allow_network = True`, which adds `external` and `requires-network`.
 - The validate action and the runner both pick the **exec-platform**
   provider binary (README, "Known gaps"). Cross-compilation to another
   target platform is out of scope; don't design around it speculatively.

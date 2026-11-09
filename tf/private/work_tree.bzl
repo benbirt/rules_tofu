@@ -26,6 +26,23 @@ load(":providers.bzl", "TfLibraryInfo")
 # `foo.tofu` in place of a `foo.tf` beside it.
 ALLOWED_SRC_EXTS = [".tf", ".tf.json", ".tofu", ".tofu.json", ".tftpl", ".hcl"]
 
+# The files `tofu test` reads. They go in the srcs of a `tf_test`, never of a
+# `tf_library` or `tf_deploy`: tofu reads them from the root module's
+# directory, so a test in a library's srcs would be shipped to, and loaded
+# by, every dependant.
+TEST_SRC_EXTS = [".tftest.hcl", ".tofutest.hcl", ".tftest.json", ".tofutest.json"]
+
+def check_no_test_files(ctx, files):
+    """Fail if any of `files`, a library's or deploy's srcs, is a test file."""
+    for f in files:
+        for ext in TEST_SRC_EXTS:
+            if f.basename.endswith(ext):
+                fail(("`{}`: `{}` is an OpenTofu test file; list it in the srcs of a `tf_test` " +
+                      "with this target as its `module` instead (README, \"Tests\").").format(
+                    ctx.label,
+                    f.short_path,
+                ))
+
 def runfiles_path(workspace_name, f):
     """Return the path at which `f` appears in a runfiles tree.
 
@@ -67,7 +84,7 @@ def files_entries(files):
     """`struct(path, file)` for each of `files`, at its `work_tree_path`."""
     return [struct(path = work_tree_path(f), file = f) for f in files]
 
-def materialize(ctx, entries, tfvars_content = None):
+def materialize(ctx, entries, tfvars_content = None, tfvars_dir = None):
     """Materialize a work tree under `<pkg>/<name>.work/`.
 
     For each `struct(path, file)` in `entries`, declares `<name>.work/<path>`
@@ -79,6 +96,9 @@ def materialize(ctx, entries, tfvars_content = None):
       entries: list[struct(path, file)] — work-tree paths (`work_tree_path`) + Files.
       tfvars_content: optional string. Pass None for library work trees
           (which carry no variable values).
+      tfvars_dir: the work-tree directory to write the tfvars file in; the
+          rule's own package by default. A `tf_test` writes the deploy under
+          test's in that deploy's directory.
 
     Returns:
       list[File]: the declared work-tree outputs (symlinks plus, when
@@ -106,7 +126,10 @@ def materialize(ctx, entries, tfvars_content = None):
         outputs.append(out)
 
     if tfvars_content != None:
-        tfvars_path = work_prefix + "/" + _join(package_dir(ctx.label), "rules_tofu.auto.tfvars.json")
+        tfvars_path = work_prefix + "/" + _join(
+            tfvars_dir if tfvars_dir != None else package_dir(ctx.label),
+            "rules_tofu.auto.tfvars.json",
+        )
         if tfvars_path[len(work_prefix) + 1:] in seen:
             fail(
                 "`{}` collides with the generated rules_tofu.auto.tfvars.json. ".format(
@@ -245,7 +268,7 @@ def library_module(label, module_source, module_version):
         dir = package_dir(label),
     )
 
-def modules_manifest(ctx, work_tree_outputs, deps, providers_depset):
+def modules_manifest(ctx, work_tree_outputs, infos, providers_depset, root = None, test_dir = None):
     """Emit the action writing this rule's `.terraform/modules/modules.json`.
 
     See //tf/private/cmd/modules: every module call from the root module down
@@ -259,19 +282,25 @@ def modules_manifest(ctx, work_tree_outputs, deps, providers_depset):
     Args:
       ctx: rule ctx. Must declare `_modules_bin` (cfg = "exec") on the rule.
       work_tree_outputs: list[File], the work tree's files (`materialize`).
-      deps: the rule's `deps` targets, each with `TfLibraryInfo`.
+      infos: the rule's deps, each a `TfLibraryInfo` or a struct with its
+          `module`, `modules` and `packages` fields. The module under test of
+          a `tf_test` comes first.
       providers_depset: depset[TfProviderInfo], the providers in the rule's
           plugin tree.
+      root: the root module's work-tree directory; the rule's own package by
+          default. A `tf_test`'s is the module under test's.
+      test_dir: for a `tf_test`, the test files' directory relative to `root`
+          ("" for `root` itself); the module each `run` block loads is
+          recorded too. None for a rule with no test files.
 
     Returns:
       File: the manifest.
     """
     direct = {}
-    for d in deps:
-        module = d[TfLibraryInfo].module
-        if module:
-            direct[module.label] = True
-    modules = depset(transitive = [d[TfLibraryInfo].modules for d in deps]).to_list()
+    for info in infos:
+        if info.module:
+            direct[info.module.label] = True
+    modules = depset(transitive = [info.modules for info in infos]).to_list()
     listing = ctx.actions.declare_file(ctx.label.name + ".modules_deps.json")
     ctx.actions.write(
         output = listing,
@@ -287,20 +316,22 @@ def modules_manifest(ctx, work_tree_outputs, deps, providers_depset):
                 for m in modules
             ],
             # Which library a directory belongs to, for the unused-dep check.
-            packages = depset(transitive = [d[TfLibraryInfo].packages for d in deps]).to_list(),
+            packages = depset(transitive = [info.packages for info in infos]).to_list(),
         )),
     )
 
     manifest = ctx.actions.declare_file(ctx.label.name + ".modules.json")
     args = ctx.actions.args()
     args.add("--work-tree", work_tree_root(ctx))
-    args.add("--root", package_dir(ctx.label))
+    args.add("--root", root if root != None else package_dir(ctx.label))
     args.add("--modules", listing)
     args.add("--label", _display_label(ctx.label))
     args.add_all(
         sorted({p.address: None for p in providers_depset.to_list()}.keys()),
         before_each = "--provider",
     )
+    if test_dir != None:
+        args.add("--test-dir", test_dir or ".")
     args.add("--out", manifest)
     ctx.actions.run(
         executable = ctx.attr._modules_bin[DefaultInfo].files_to_run,

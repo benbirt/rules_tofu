@@ -1,0 +1,18 @@
+load("@rules_tofu//tf:defs.bzl", "tf_library", "tf_test")
+
+tf_library(
+    name = "lib",
+    srcs = ["main.tf"],
+    fmt_test = False,
+)
+
+# Test files in two directories: `tofu test` reads one test directory.
+tf_test(
+    name = "split",
+    srcs = [
+        "a/x.tftest.hcl",
+        "b/y.tftest.hcl",
+    ],
+    fmt_test = False,
+    module = ":lib",
+)

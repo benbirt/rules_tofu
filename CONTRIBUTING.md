@@ -22,7 +22,7 @@ bazel test //...
 
 | Path | Purpose |
 |------|---------|
-| `tf/` | Public rules (`tf_library`, `tf_deploy`) |
+| `tf/` | Public rules (`tf_library`, `tf_deploy`, `tf_test`) |
 | `tf/providers/` | `tf_providers` Bzlmod extension |
 | `tf/modules/` | `tf_modules` Bzlmod extension |
 | `tf/private/` | Internal rule implementations |
@@ -42,7 +42,7 @@ bazel test //...
 Before submitting a PR, make sure you have not violated these:
 
 1. **One lock, the root module's** — the only `.terraform.lock.hcl` rules_tofu reads is the one `tf_providers.from_lock` names in the root module, written by `bazel run @tf_providers//:pin`. Never accept a `.terraform.lock.hcl` in any rule's `srcs` or `data`, and never relax the check in `init_action.bzl` that fails when one reaches a work tree. Every provider download is gated on a digest: the `sha256` on its `tf_providers.provider(...)` tag, the registry's digest recorded as a fact in `MODULE.bazel.lock`, or one of the lock's `zh:` hashes for a locked provider.
-2. **Build = validation** — `bazel build` on any `tf_library` or `tf_deploy` target must run `tofu init -backend=false && tofu validate`. Do not bypass or defer this.
+2. **Build = validation** — `bazel build` on any `tf_library`, `tf_deploy` or `tf_test` target must run `tofu init -backend=false && tofu validate` (a `tf_test` with its test directory). Do not bypass or defer this.
 3. **Private API** — nothing under `tf/private/` is a supported public API. External users load only from `@rules_tofu//tf:defs.bzl`, `@rules_tofu//tf/providers:extensions.bzl`, `@rules_tofu//tf/modules:extensions.bzl`, `@rules_tofu//toolchain:extensions.bzl` and `@rules_tofu//toolchain:toolchain.bzl`. Each has a `starlark_doc_extract` target in `docs/`; a new public `.bzl` entry point needs one too.
 4. **`bazel run` only** — `tf_deploy`'s `.plan`/`.apply`/`.destroy` targets require `BUILD_WORKSPACE_DIRECTORY` to be set; they must be invoked via `bazel run`, never executed directly.
 
@@ -63,6 +63,9 @@ bazel test //...
 
 # To target a single target's format check, use its `:<name>.fmt_check` label:
 bazel test //examples/hello:greet_lib.fmt_check
+
+# `tofu test` tests (tf_test), run offline with the network blocked:
+bazel test //examples/hello/tests:all
 ```
 
 ## Starlark formatting

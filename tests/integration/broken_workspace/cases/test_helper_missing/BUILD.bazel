@@ -1,0 +1,17 @@
+load("@rules_tofu//tf:defs.bzl", "tf_library", "tf_test")
+
+tf_library(
+    name = "lib",
+    srcs = ["main.tf"],
+    fmt_test = False,
+)
+
+# A run block loads `./helper`, which no tf_library in deps provides. The
+# module manifest action resolves run blocks' modules like calls from the
+# root module, so it fails naming the missing directory.
+tf_test(
+    name = "test",
+    srcs = ["tests/t.tftest.hcl"],
+    fmt_test = False,
+    module = ":lib",
+)

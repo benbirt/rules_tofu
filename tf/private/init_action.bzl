@@ -24,7 +24,7 @@ when a call's `source` or `version` no longer matches it.
 
 load("//toolchain:toolchain.bzl", "TOOLCHAIN_TYPE")
 
-def tf_init_validate(ctx, work_tree_files, work_tree_root, package_dir, plugin_tree_root, modules_manifest, lock = None):
+def tf_init_validate(ctx, work_tree_files, work_tree_root, package_dir, plugin_tree_root, modules_manifest, lock = None, test_dir = None):
     """Emit a build-time `tofu init -backend=false` + `tofu validate` action.
 
     Args:
@@ -43,6 +43,9 @@ def tf_init_validate(ctx, work_tree_files, work_tree_root, package_dir, plugin_t
           every module call (see `modules_manifest` in work_tree.bzl).
       lock: optional File, the `.terraform.lock.hcl` pinning the providers
           (see `provider_lock` in work_tree.bzl).
+      test_dir: for a `tf_test`, the test files' directory relative to
+          `package_dir`, passed to init and validate as `-test-directory` so
+          the test files are checked too; "" or None for tofu's default.
 
     Returns:
       File: a stamp file declared as an action output.
@@ -74,6 +77,14 @@ PLUGIN_TREE_ROOT=$4
 STAMP=$5
 MODULES=$6
 LOCK=${7:-}
+TEST_DIR=${8:-}
+# The test files' directory, for a tf_test. Without it tofu reads the root
+# module's own directory and its default, `tests`. A string, not an array: an
+# empty array fails under `set -u` in bash 3.
+TEST_FLAG=""
+if [ -n "$TEST_DIR" ]; then
+    TEST_FLAG="-test-directory=$TEST_DIR"
+fi
 # Resolve the input plugin tree to an absolute path up front: tofu resolves a
 # relative -plugin-dir against the -chdir directory, and $PWD here is the
 # action's exec root. The script never cd's, so capturing $PWD inline is safe.
@@ -106,7 +117,7 @@ cp "$MODULES" "$CWD/.terraform/modules/modules.json"
 # There is no flag to skip lockfile generation — the lockfile is written into
 # $SCRATCH and discarded with it. (Not -lockfile=readonly: that also fails on
 # lock entries this configuration doesn't use.)
-if ! "$TOFU" -chdir="$CWD" init -backend=false -input=false -get=false -plugin-dir="$PLUGIN_DIR" >/dev/null; then
+if ! "$TOFU" -chdir="$CWD" init -backend=false -input=false -get=false -plugin-dir="$PLUGIN_DIR" ${TEST_FLAG:+"$TEST_FLAG"} >/dev/null; then
     if [ -n "$LOCK" ]; then
         echo 'rules_tofu: if the provider versions in required_providers changed, run' \
              '`bazel run @tf_providers//:pin` to update the lock file.' 1>&2
@@ -118,7 +129,7 @@ if ! "$TOFU" -chdir="$CWD" init -backend=false -input=false -get=false -plugin-d
     fi
     exit 1
 fi
-"$TOFU" -chdir="$CWD" validate
+"$TOFU" -chdir="$CWD" validate ${TEST_FLAG:+"$TEST_FLAG"}
 touch "$STAMP"
 """,
         arguments = [
@@ -128,7 +139,7 @@ touch "$STAMP"
             plugin_tree_root,
             stamp.path,
             modules_manifest.path,
-        ] + ([lock.path] if lock else []),
+        ] + [lock.path if lock else ""] + ([test_dir] if test_dir else []),
         env = {"TF_IN_AUTOMATION": "1"},
         mnemonic = "TofuValidate",
         progress_message = "TofuValidate %{label}",

@@ -37,6 +37,7 @@ load(
     ":work_tree.bzl",
     "ALLOWED_SRC_EXTS",
     "MODULES_BIN",
+    _check_no_test_files = "check_no_test_files",
     _files_entries = "files_entries",
     _materialize = "materialize",
     _materialize_plugin_tree = "materialize_plugin_tree",
@@ -49,10 +50,12 @@ load(
 )
 
 def _tf_deploy_impl(ctx):
+    _check_no_test_files(ctx, ctx.files.srcs)
     direct = _files_entries(ctx.files.srcs + ctx.files.data)
     var_file_entries = _files_entries(ctx.files.var_files)
     transitive = [d[TfLibraryInfo].transitive_files for d in ctx.attr.deps]
-    entries = depset(direct = direct + var_file_entries, transitive = transitive).to_list()
+    files = depset(direct = direct + var_file_entries, transitive = transitive)
+    entries = files.to_list()
 
     tfvars_content = json.encode_indent(
         ctx.attr.vars,
@@ -68,7 +71,12 @@ def _tf_deploy_impl(ctx):
         for d in ctx.attr.deps
     ]
     providers_depset = depset(direct = direct_providers, transitive = transitive_provider_sets)
-    modules_manifest = _modules_manifest(ctx, outputs, ctx.attr.deps, providers_depset)
+    modules_manifest = _modules_manifest(
+        ctx,
+        outputs,
+        [d[TfLibraryInfo] for d in ctx.attr.deps],
+        providers_depset,
+    )
     plugin_outputs = _materialize_plugin_tree(ctx, providers_depset)
     outputs = outputs + plugin_outputs
     lock = _provider_lock(ctx, providers_depset)
@@ -104,6 +112,15 @@ def _tf_deploy_impl(ctx):
             var_file_relpaths = [_work_tree_path(f) for f in ctx.files.var_files],
             allow_ephemeral_state = ctx.attr.allow_ephemeral_state,
             lock = lock,
+            transitive_files = files,
+            providers = providers_depset,
+            modules = depset(transitive = [d[TfLibraryInfo].modules for d in ctx.attr.deps]),
+            packages = depset(
+                direct = [_package_dir(ctx.label)],
+                transitive = [d[TfLibraryInfo].packages for d in ctx.attr.deps],
+            ),
+            tfvars_content = tfvars_content,
+            var_files = ctx.files.var_files,
         ),
     ]
 
@@ -112,7 +129,8 @@ tf_deploy_rule = rule(
     attrs = {
         "srcs": attr.label_list(
             allow_files = ALLOWED_SRC_EXTS,
-            doc = "Optional deploy-local config files (e.g. provider/backend setup).",
+            doc = "Optional deploy-local config files (e.g. provider/backend setup). " +
+                  "Test files (.tftest.hcl, .tofutest.hcl) go in a `tf_test`.",
         ),
         "deps": attr.label_list(
             providers = [TfLibraryInfo],

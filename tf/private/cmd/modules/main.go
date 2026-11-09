@@ -15,6 +15,11 @@
 //     tf_library package in deps, transitively.
 //   - --provider=<address>: the canonical address of a provider in the rule's
 //     plugin tree (`registry.opentofu.org/hashicorp/aws`), repeatable.
+//   - --test-dir=<dir>: for tf_test, the test files' directory relative to the
+//     root module ("." for the root module's own). The module each `run`
+//     block of the test files there, and in the root module's directory,
+//     loads is recorded under the key tofu gives it (`test.<file>.<run>`)
+//     and walked like a call from the root module.
 //   - --label=<label>: the target being built, for error messages.
 //   - --out=<path>: the manifest to write.
 //
@@ -73,6 +78,7 @@ var (
 	label    = flag.String("label", "", "the target being built, for error messages")
 	out      = flag.String("out", "", "path of the modules.json to write")
 	provided = flags.StringList("provider", "canonical address of a provider in the plugin tree (repeatable)")
+	testDir  = flag.String("test-dir", "", "directory of the rule's test files, relative to the root module (\".\" for its own directory); when set, the module each run block of the test files there and in the root module's directory loads is recorded too")
 )
 
 func main() {
@@ -105,7 +111,7 @@ func run() error {
 	if err := json.Unmarshal(data, &listing); err != nil {
 		return fmt.Errorf("parse %s: %w", *modules, err)
 	}
-	manifest, err := build(*workTree, *root, *label, listing.Modules, listing.Packages, *provided)
+	manifest, err := buildManifest(*workTree, *root, *label, listing.Modules, listing.Packages, *provided, *testDir)
 	if err != nil {
 		return err
 	}
@@ -149,7 +155,18 @@ type requirement struct {
 	provider string
 }
 
+// build is buildManifest for a rule with no test files.
 func build(workTree, root, label string, deps []dep, packages []string, provided []string) (*Manifest, error) {
+	return buildManifest(workTree, root, label, deps, packages, provided, "")
+}
+
+// buildManifest writes the manifest for the root module at root. testDir is
+// "" for a rule with no test files, else the directory of the test files
+// relative to the root module ("." for the root module's own directory): the
+// module each `run` block of the test files there, and of those in the root
+// module's directory, loads is recorded too, as `tofu init` records it, and
+// walked like any other call made from the root module.
+func buildManifest(workTree, root, label string, deps []dep, packages []string, provided []string, testDir string) (*Manifest, error) {
 	bySource := map[string]*dep{}
 	var all []*dep
 	for i := range deps {
@@ -201,6 +218,66 @@ func build(workTree, root, label string, deps []dep, packages []string, provided
 	// own is whether dir is the root's own configuration (see the package doc);
 	// module names the module at dir, for a missing provider.
 	var walk func(key, dir, module string, own bool) error
+	// visit records the call c, made from dir under the key childKey, and
+	// walks into the module it loads. where names the call in errors.
+	visit := func(c tfconfig.Call, childKey, where, dir string, own bool) error {
+		record := Record{Key: childKey, Source: c.Source}
+		var childDir string
+		childOwn := false
+		childModule := moduleName(childKey)
+		if tfconfig.IsLocal(c.Source) {
+			childDir = tfconfig.ResolveLocal(dir, c.Source)
+			if err := checkLocal(workTree, dir, childDir); err != nil {
+				return fmt.Errorf("%s: %s: source %q %w", label, where, c.Source, err)
+			}
+			if pkg := packageOf(packages, root, childDir); pkg == root {
+				childOwn = own
+			} else if own {
+				for _, d := range all {
+					if d.Dir == pkg {
+						used[d.Label] = true
+					}
+				}
+			}
+		} else {
+			d, subdir := lookup(all, c.Source)
+			if d == nil {
+				return fmt.Errorf("%s: %s: no dep provides source %q. %s", label, where, c.Source, missingHint(c.Source))
+			}
+			if own {
+				used[d.Label] = true
+			}
+			childDir = path.Join(d.Dir, subdir)
+			if subdir == "" {
+				childModule += fmt.Sprintf(" (%s)", d.Label)
+			} else {
+				// The call's own `//<subdir>`, as written, not the part
+				// below the dep's module_source.
+				_, called := tfconfig.SplitSubdir(c.Source)
+				childModule += fmt.Sprintf(" (%s, //%s)", d.Label, called)
+			}
+			if err := checkProvided(workTree, childDir, subdir); err != nil {
+				return fmt.Errorf("%s: %s: %s (module_source %q) %w", label, where, d.Label, d.Source, err)
+			}
+			if tfconfig.IsRegistry(c.Source) {
+				if d.Version == "" {
+					return fmt.Errorf("%s: %s: %s provides the registry module %q, so it must set module_version", label, where, d.Label, d.Source)
+				}
+				record.Version = d.Version
+			}
+		}
+		if above, ok := active[childDir]; ok {
+			return fmt.Errorf("%s: %s: source %q is the directory of %s, an ancestor of this call, so the module calls form a cycle",
+				label, where, c.Source, moduleName(above))
+		}
+		rel, err := filepath.Rel(filepath.FromSlash(rootDir(root)), filepath.FromSlash(rootDir(childDir)))
+		if err != nil {
+			return err
+		}
+		record.Dir = filepath.ToSlash(rel)
+		manifest.Modules = append(manifest.Modules, record)
+		return walk(childKey, childDir, childModule, childOwn)
+	}
 	walk = func(key, dir, module string, own bool) error {
 		active[dir] = key
 		defer delete(active, dir)
@@ -217,62 +294,7 @@ func build(workTree, root, label string, deps []dep, packages []string, provided
 				childKey = key + "." + c.Name
 			}
 			where := fmt.Sprintf("module %q (%s)", c.Name, displayRange(workTree, c.Range))
-			record := Record{Key: childKey, Source: c.Source}
-			var childDir string
-			childOwn := false
-			childModule := moduleName(childKey)
-			if tfconfig.IsLocal(c.Source) {
-				childDir = tfconfig.ResolveLocal(dir, c.Source)
-				if err := checkLocal(workTree, dir, childDir); err != nil {
-					return fmt.Errorf("%s: %s: source %q %w", label, where, c.Source, err)
-				}
-				if pkg := packageOf(packages, root, childDir); pkg == root {
-					childOwn = own
-				} else if own {
-					for _, d := range all {
-						if d.Dir == pkg {
-							used[d.Label] = true
-						}
-					}
-				}
-			} else {
-				d, subdir := lookup(all, c.Source)
-				if d == nil {
-					return fmt.Errorf("%s: %s: no dep provides source %q. %s", label, where, c.Source, missingHint(c.Source))
-				}
-				if own {
-					used[d.Label] = true
-				}
-				childDir = path.Join(d.Dir, subdir)
-				if subdir == "" {
-					childModule += fmt.Sprintf(" (%s)", d.Label)
-				} else {
-					// The call's own `//<subdir>`, as written, not the part
-					// below the dep's module_source.
-					_, called := tfconfig.SplitSubdir(c.Source)
-					childModule += fmt.Sprintf(" (%s, //%s)", d.Label, called)
-				}
-				if err := checkProvided(workTree, childDir, subdir); err != nil {
-					return fmt.Errorf("%s: %s: %s (module_source %q) %w", label, where, d.Label, d.Source, err)
-				}
-				if tfconfig.IsRegistry(c.Source) {
-					if d.Version == "" {
-						return fmt.Errorf("%s: %s: %s provides the registry module %q, so it must set module_version", label, where, d.Label, d.Source)
-					}
-					record.Version = d.Version
-				}
-			}
-			if above, ok := active[childDir]; ok {
-				return fmt.Errorf("%s: %s: source %q is the directory of %s, an ancestor of this call, so the module calls form a cycle",
-					label, where, c.Source, moduleName(above))
-			}
-			rel, err := filepath.Rel(filepath.FromSlash(rootDir(root)), filepath.FromSlash(rootDir(childDir)))
-			if err != nil {
-				return err
-			}
-			record.Dir = filepath.ToSlash(rel)
-			manifest.Modules = append(manifest.Modules, record)
-			if err := walk(childKey, childDir, childModule, childOwn); err != nil {
+			if err := visit(c, childKey, where, dir, own); err != nil {
 				return err
 			}
 		}
@@ -280,6 +302,23 @@ func build(workTree, root, label string, deps []dep, packages []string, provided
 	}
 	if err := walk("", root, moduleName(""), true); err != nil {
 		return nil, err
+	}
+	if testDir != "" {
+		runs, err := testRuns(workTree, root, testDir)
+		if err != nil {
+			return nil, err
+		}
+		// A run's module is loaded from the root module's directory, as tofu
+		// resolves its source, and is the root's own call: a dep it uses is
+		// used, and a module it loads that calls back into the root is a cycle.
+		active[root] = ""
+		for _, r := range runs {
+			where := fmt.Sprintf("run %q (%s)", r.Name, displayRange(workTree, r.Range))
+			if err := visit(r.Call, r.key, where, root, true); err != nil {
+				return nil, err
+			}
+		}
+		delete(active, root)
 	}
 	if len(missing) > 0 {
 		return nil, missingProviders(label, missing)
@@ -299,6 +338,42 @@ func build(workTree, root, label string, deps []dep, packages []string, provided
 
 	sort.Slice(manifest.Modules, func(i, j int) bool { return manifest.Modules[i].Key < manifest.Modules[j].Key })
 	return manifest, nil
+}
+
+// testRun is the module a test file's `run` block loads, under the key tofu
+// records it by (tfconfig.TestRunKey).
+type testRun struct {
+	key string
+	tfconfig.Call
+}
+
+// testRuns reads the test files `tofu test` reads for the root module: those
+// in its directory and, unless testDir is ".", those in testDir below it.
+func testRuns(workTree, root, testDir string) ([]testRun, error) {
+	rootAbs := filepath.Join(workTree, filepath.FromSlash(root))
+	dirs := []string{rootAbs}
+	if testDir != "." {
+		dirs = append(dirs, filepath.Join(rootAbs, filepath.FromSlash(testDir)))
+	}
+	var runs []testRun
+	for _, dir := range dirs {
+		files, err := tfconfig.TestFiles(dir)
+		if err != nil {
+			return nil, err
+		}
+		calls, err := tfconfig.ReadTestCalls(files)
+		if err != nil {
+			return nil, err
+		}
+		for _, c := range calls {
+			rel, err := filepath.Rel(rootAbs, c.Range.Filename)
+			if err != nil {
+				return nil, err
+			}
+			runs = append(runs, testRun{key: tfconfig.TestRunKey(rel, c.Name), Call: c})
+		}
+	}
+	return runs, nil
 }
 
 // missingProviders reports the providers that modules require and the plugin

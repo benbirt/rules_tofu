@@ -1,0 +1,12 @@
+load("@rules_tofu//tf:defs.bzl", "tf_library")
+
+# A test file in a library's srcs. tofu would read it from the root module's
+# directory of every dependant, so the rule refuses it and names tf_test.
+tf_library(
+    name = "lib",
+    srcs = [
+        "main.tf",
+        "main.tftest.hcl",
+    ],
+    fmt_test = False,
+)

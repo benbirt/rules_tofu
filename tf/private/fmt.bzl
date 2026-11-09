@@ -1,7 +1,7 @@
 """Internal fmt rules used by the `tf_library` and `tf_deploy` macros.
 
 Not part of the public API (`//tf:defs.bzl`). Use the `fmt_test`
-parameter on `tf_library` or `tf_deploy` instead.
+parameter on `tf_library`, `tf_deploy` or `tf_test` instead.
 
 Both rules name the files they format or check, never a directory:
 `tofu fmt <dir>` reads only the directory's own files, so a `srcs` entry in
@@ -10,7 +10,7 @@ be touched.
 """
 
 load("//toolchain:toolchain.bzl", "TOOLCHAIN_TYPE")
-load(":work_tree.bzl", "ALLOWED_SRC_EXTS", "runfiles_path")
+load(":work_tree.bzl", "ALLOWED_SRC_EXTS", "TEST_SRC_EXTS", "runfiles_path")
 
 # The extensions `tofu fmt` processes, out of ALLOWED_SRC_EXTS. Named
 # explicitly, it rejects any other (.tf.json, .tofu.json, .tftpl and other
@@ -80,7 +80,7 @@ tf_fmt = rule(
     executable = True,
     attrs = {
         "srcs": attr.label_list(
-            allow_files = ALLOWED_SRC_EXTS,
+            allow_files = ALLOWED_SRC_EXTS + TEST_SRC_EXTS,
             doc = "Source files to format in place. Only this repository's .tf, .tofu, " +
                   ".tftest.hcl and .tofutest.hcl source files are formatted; the others are left alone.",
         ),
@@ -121,7 +121,7 @@ tf_fmt_check_test = rule(
     test = True,
     attrs = {
         "srcs": attr.label_list(
-            allow_files = ALLOWED_SRC_EXTS,
+            allow_files = ALLOWED_SRC_EXTS + TEST_SRC_EXTS,
             doc = "Source files to check. Only .tf, .tofu, .tftest.hcl and .tofutest.hcl files are " +
                   "checked, each by name, so files in subdirectories count and files outside `srcs` don't.",
         ),
