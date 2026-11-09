@@ -514,10 +514,13 @@ files it ships. A module can't therefore be declared by a `//<subdir>` that
 is a symlink: the fetch fails, naming the directory to declare instead.
 
 A module's `tf_library` carries the providers its `required_providers`
-name, and its `modules/` submodules', so callers don't list them. The root
-module still pins them, with tags or in its lock, which `pin` writes to
-cover them (the submodules you call by `//<subdir>` outside `modules/`
-included; list those submodules' providers on the caller). A module that calls
+name, and its `modules/` submodules', so callers don't list them. A
+submodule outside `modules/` that you call by `//<subdir>` is different: the
+library is generated when the module is fetched, before anything calls it, so
+its providers go in the caller's `providers`. The build fails naming the
+`@tf_providers//<namespace>/<name>` to add when one is missing. The root
+module still pins them all, with tags or in its lock, which `pin` writes to
+cover them, those submodules included. A module that calls
 other modules by address needs them declared too: fetching it fails
 otherwise, naming the `tf_modules.module` to add. Each module has one
 version per build. For a registry module the root module's tag wins, else
@@ -611,7 +614,10 @@ The build fails when:
   a call from inside another library doesn't count, since that library
   lists its own `deps`;
 - two libraries have the same `module_source`;
-- a call's `version` constraint rejects the matching version.
+- a call's `version` constraint rejects the matching version;
+- a module, the root's own or one it calls, requires a provider that nothing
+  in `providers` supplies, directly or through `deps`; the error names the
+  `@tf_providers//<namespace>/<name>` to add.
 
 ## How it works
 

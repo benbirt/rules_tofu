@@ -245,19 +245,23 @@ def library_module(label, module_source, module_version):
         dir = package_dir(label),
     )
 
-def modules_manifest(ctx, work_tree_outputs, deps):
+def modules_manifest(ctx, work_tree_outputs, deps, providers_depset):
     """Emit the action writing this rule's `.terraform/modules/modules.json`.
 
     See //tf/private/cmd/modules: every module call from the root module down
     is recorded, local ones by their directory in the work tree and others by
     the dep whose `module_source` they name, so `tofu init -get=false` finds
     them all installed. The validate action and the runner copy the manifest
-    into place.
+    into place. The action also fails when a module requires a provider that
+    `providers_depset` lacks, naming the label to add: a submodule called by
+    `//<subdir>` outside `modules/` carries none of its own (issue #76).
 
     Args:
       ctx: rule ctx. Must declare `_modules_bin` (cfg = "exec") on the rule.
       work_tree_outputs: list[File], the work tree's files (`materialize`).
       deps: the rule's `deps` targets, each with `TfLibraryInfo`.
+      providers_depset: depset[TfProviderInfo], the providers in the rule's
+          plugin tree.
 
     Returns:
       File: the manifest.
@@ -293,6 +297,10 @@ def modules_manifest(ctx, work_tree_outputs, deps):
     args.add("--root", package_dir(ctx.label))
     args.add("--modules", listing)
     args.add("--label", _display_label(ctx.label))
+    args.add_all(
+        sorted({p.address: None for p in providers_depset.to_list()}.keys()),
+        before_each = "--provider",
+    )
     args.add("--out", manifest)
     ctx.actions.run(
         executable = ctx.attr._modules_bin[DefaultInfo].files_to_run,

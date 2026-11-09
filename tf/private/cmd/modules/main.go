@@ -13,6 +13,8 @@
 //     version, dir, direct}, where `dir` is the library's work-tree-relative
 //     directory; `packages` is the work-tree-relative directory of every
 //     tf_library package in deps, transitively.
+//   - --provider=<address>: the canonical address of a provider in the rule's
+//     plugin tree (`registry.opentofu.org/hashicorp/aws`), repeatable.
 //   - --label=<label>: the target being built, for error messages.
 //   - --out=<path>: the manifest to write.
 //
@@ -26,6 +28,16 @@
 // used by no call, when two deps claim the same source, when a module_source
 // call lands in a directory with no configuration files, and when module
 // calls form a cycle.
+//
+// It also reads each module's `required_providers` and fails when one names a
+// provider that no --provider supplies, since `tofu init -plugin-dir` would
+// fail to find it, naming the `@tf_providers//<namespace>/<name>` to add to
+// the rule's `providers`. A tf_library carries the providers its own
+// `required_providers` name, but a submodule that callers reach with
+// `//<subdir>` outside `modules/` is read only by them: its library is
+// generated when the module is fetched, which can't know which `//<subdir>`
+// callers will use, so its providers are the callers' to list. Built-in
+// providers (`terraform.io/builtin/`) need no plugin and are skipped.
 //
 // A direct dep counts as used only when the root's own configuration calls
 // it: the root module, or a local module in the root's own package. A
@@ -48,8 +60,10 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/benbirt/rules_tofu/tf/private/cmd/internal/flags"
 	"github.com/benbirt/rules_tofu/tf/private/cmd/internal/tfconfig"
 	"github.com/hashicorp/hcl/v2"
+	regaddr "github.com/opentofu/registry-address/v2"
 )
 
 var (
@@ -58,6 +72,7 @@ var (
 	modules  = flag.String("modules", "", "JSON file listing the deps that set module_source")
 	label    = flag.String("label", "", "the target being built, for error messages")
 	out      = flag.String("out", "", "path of the modules.json to write")
+	provided = flags.StringList("provider", "canonical address of a provider in the plugin tree (repeatable)")
 )
 
 func main() {
@@ -90,7 +105,7 @@ func run() error {
 	if err := json.Unmarshal(data, &listing); err != nil {
 		return fmt.Errorf("parse %s: %w", *modules, err)
 	}
-	manifest, err := build(*workTree, *root, *label, listing.Modules, listing.Packages)
+	manifest, err := build(*workTree, *root, *label, listing.Modules, listing.Packages, *provided)
 	if err != nil {
 		return err
 	}
@@ -126,7 +141,15 @@ type Record struct {
 	Dir     string `json:"Dir"`
 }
 
-func build(workTree, root, label string, deps []dep, packages []string) (*Manifest, error) {
+// requirement is a provider a module requires that no --provider supplies.
+type requirement struct {
+	// module names the module: moduleName(key), then for a module_source
+	// call the dep's label and the `//<subdir>` used, in parentheses.
+	module   string
+	provider string
+}
+
+func build(workTree, root, label string, deps []dep, packages []string, provided []string) (*Manifest, error) {
 	bySource := map[string]*dep{}
 	var all []*dep
 	for i := range deps {
@@ -147,16 +170,43 @@ func build(workTree, root, label string, deps []dep, packages []string) (*Manife
 		}
 	}
 	manifest := &Manifest{Modules: []Record{{Key: "", Source: "", Dir: "."}}}
+	supplied := map[string]bool{}
+	for _, p := range provided {
+		supplied[p] = true
+	}
+	var missing []requirement
+	// reported keeps a module that two calls reach from being reported twice.
+	reported := map[string]bool{}
+	// require records the providers that dir's configuration requires and no
+	// --provider supplies; module names the module (see requirement).
+	require := func(dir, module string) error {
+		providers, err := tfconfig.RequiredProviders(filepath.Join(workTree, filepath.FromSlash(dir)))
+		if err != nil {
+			return err
+		}
+		for _, p := range providers {
+			if supplied[p] || isBuiltin(p) || reported[dir+" "+p] {
+				continue
+			}
+			reported[dir+" "+p] = true
+			missing = append(missing, requirement{module: module, provider: p})
+		}
+		return nil
+	}
 	// active is the directory of each module on the path from the root to the
 	// one being read, by its key. A call back into one of them is a cycle,
 	// reported at once: tofu rejects it too, and short of one a module tree
 	// is finite, so no depth limit is needed.
 	active := map[string]string{}
-	// own is whether dir is the root's own configuration (see the package doc).
-	var walk func(key, dir string, own bool) error
-	walk = func(key, dir string, own bool) error {
+	// own is whether dir is the root's own configuration (see the package doc);
+	// module names the module at dir, for a missing provider.
+	var walk func(key, dir, module string, own bool) error
+	walk = func(key, dir, module string, own bool) error {
 		active[dir] = key
 		defer delete(active, dir)
+		if err := require(dir, module); err != nil {
+			return err
+		}
 		calls, err := tfconfig.ReadCalls(filepath.Join(workTree, filepath.FromSlash(dir)))
 		if err != nil {
 			return err
@@ -170,6 +220,7 @@ func build(workTree, root, label string, deps []dep, packages []string) (*Manife
 			record := Record{Key: childKey, Source: c.Source}
 			var childDir string
 			childOwn := false
+			childModule := moduleName(childKey)
 			if tfconfig.IsLocal(c.Source) {
 				childDir = tfconfig.ResolveLocal(dir, c.Source)
 				if err := checkLocal(workTree, dir, childDir); err != nil {
@@ -193,6 +244,14 @@ func build(workTree, root, label string, deps []dep, packages []string) (*Manife
 					used[d.Label] = true
 				}
 				childDir = path.Join(d.Dir, subdir)
+				if subdir == "" {
+					childModule += fmt.Sprintf(" (%s)", d.Label)
+				} else {
+					// The call's own `//<subdir>`, as written, not the part
+					// below the dep's module_source.
+					_, called := tfconfig.SplitSubdir(c.Source)
+					childModule += fmt.Sprintf(" (%s, //%s)", d.Label, called)
+				}
 				if err := checkProvided(workTree, childDir, subdir); err != nil {
 					return fmt.Errorf("%s: %s: %s (module_source %q) %w", label, where, d.Label, d.Source, err)
 				}
@@ -213,14 +272,17 @@ func build(workTree, root, label string, deps []dep, packages []string) (*Manife
 			}
 			record.Dir = filepath.ToSlash(rel)
 			manifest.Modules = append(manifest.Modules, record)
-			if err := walk(childKey, childDir, childOwn); err != nil {
+			if err := walk(childKey, childDir, childModule, childOwn); err != nil {
 				return err
 			}
 		}
 		return nil
 	}
-	if err := walk("", root, true); err != nil {
+	if err := walk("", root, moduleName(""), true); err != nil {
 		return nil, err
+	}
+	if len(missing) > 0 {
+		return nil, missingProviders(label, missing)
 	}
 
 	var unused []string
@@ -237,6 +299,65 @@ func build(workTree, root, label string, deps []dep, packages []string) (*Manife
 
 	sort.Slice(manifest.Modules, func(i, j int) bool { return manifest.Modules[i].Key < manifest.Modules[j].Key })
 	return manifest, nil
+}
+
+// missingProviders reports the providers that modules require and the plugin
+// tree lacks, naming the `@tf_providers//<namespace>/<name>` of each to add
+// to the rule's providers. A provider from another registry has no label:
+// rules_tofu vendors providers from registry.opentofu.org only, as the
+// tf_providers extension says of its tags.
+func missingProviders(label string, missing []requirement) error {
+	var lines, labels, foreign []string
+	seen := map[string]bool{}
+	for _, m := range missing {
+		lines = append(lines, fmt.Sprintf("    %s requires %s", m.module, displayProvider(m.provider)))
+		if seen[m.provider] {
+			continue
+		}
+		seen[m.provider] = true
+		if l, ok := providerLabel(m.provider); ok {
+			labels = append(labels, fmt.Sprintf("%q", l))
+		} else {
+			foreign = append(foreign, m.provider)
+		}
+	}
+	var advice []string
+	if len(labels) > 0 {
+		advice = append(advice, fmt.Sprintf("Add %s to the providers of %s.", strings.Join(labels, ", "), label))
+	}
+	if len(foreign) > 0 {
+		advice = append(advice, fmt.Sprintf("rules_tofu can't vendor %s: it only vendors providers from %s.",
+			strings.Join(foreign, ", "), defaultProviderHost))
+	}
+	return fmt.Errorf("%s: nothing in its providers or deps supplies these providers, so `tofu init` would not find them:\n%s\n%s",
+		label, strings.Join(lines, "\n"), strings.Join(advice, " "))
+}
+
+// defaultProviderHost is the registry rules_tofu vendors providers from,
+// which a provider address may leave out.
+var defaultProviderHost = regaddr.DefaultProviderRegistryHost.String()
+
+// isBuiltin reports whether a provider (by canonical address) is built into
+// tofu, so that it needs no plugin.
+func isBuiltin(provider string) bool {
+	p, err := regaddr.ParseProviderSource(provider)
+	return err == nil && p.IsBuiltIn()
+}
+
+// displayProvider is a canonical provider address as users write it: without
+// the default host.
+func displayProvider(provider string) string {
+	return strings.TrimPrefix(provider, defaultProviderHost+"/")
+}
+
+// providerLabel is the `@tf_providers//<namespace>/<name>` label of a
+// provider the tf_providers extension can vendor: one from the default host.
+func providerLabel(provider string) (string, bool) {
+	rest, ok := strings.CutPrefix(provider, defaultProviderHost+"/")
+	if !ok {
+		return "", false
+	}
+	return "@tf_providers//" + rest, true
 }
 
 // packageOf is the package dir belongs to: the nearest of packages, or

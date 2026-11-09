@@ -63,7 +63,7 @@ def _tf_library_impl(ctx):
         work_tree_root = _work_tree_root(ctx),
         package_dir = _package_dir(ctx.label),
         plugin_tree_root = _plugin_tree_root(ctx),
-        modules_manifest = _modules_manifest(ctx, work_tree_outputs, ctx.attr.deps),
+        modules_manifest = _modules_manifest(ctx, work_tree_outputs, ctx.attr.deps, providers_depset),
         lock = _provider_lock(ctx, providers_depset),
     )
 

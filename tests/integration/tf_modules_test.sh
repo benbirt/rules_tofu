@@ -1,4 +1,5 @@
-#!/usr/bin/env bash
+# The dep's label is the per-module repository's canonical one.
+grep -q -F '//vpc:_rules_tofu_module, //vpc/peering) requires hashicorp/time' <<<"${out}" ||#!/usr/bin/env bash
 # Driver for //tests/integration:tf_modules_test. The bazel_integration_test
 # rule sets BIT_BAZEL_BINARY and BIT_WORKSPACE_DIR (the tf_modules workspace).
 # Every step must succeed, the last by seeing the build fail as it should:
@@ -16,16 +17,19 @@
 #      under modules/ and one outside modules/ by `//<subdir>`, the archive,
 #      and the registry module directly. The fetched git module holds the
 #      symlink to a file and none of the others, nor the BUILD file.
-#   3. MODULE.bazel.lock records the commits of the git and registry modules.
-#   4. v1.0.0 is moved to a new commit. After `bazel clean --expunge`, //app
+#   3. Without hashicorp/time in //app's providers, the build fails naming the
+#      label to add: the network module's library can't carry the providers of
+#      a submodule outside modules/ that only its callers reach (#76).
+#   4. MODULE.bazel.lock records the commits of the git and registry modules.
+#   5. v1.0.0 is moved to a new commit. After `bazel clean --expunge`, //app
 #      still plans the old commit's content, and the build passes with
 #      --lockfile_mode=error.
-#   5. With the providers locked rather than tagged, `@tf_providers//:pin`
+#   6. With the providers locked rather than tagged, `@tf_providers//:pin`
 #      covers what the git module and the submodule //app calls require, but
 #      not what its examples do.
-#   6. A module that calls an undeclared one fails when fetched, naming the
+#   7. A module that calls an undeclared one fails when fetched, naming the
 #      tag to add.
-#   7. A module declared by a `//<subdir>` that is a symlink fails when
+#   8. A module declared by a `//<subdir>` that is a symlink fails when
 #      fetched, naming the directory the link leads to.
 
 set -euo pipefail
@@ -108,11 +112,31 @@ for removed in vpc/examples/BUILD.bazel vpc/examples/complete/modules vpc/exampl
 done
 [[ -f "${network_repo}/files" && -f "${network_repo}/vpc/module" ]] || fail "the module's own files named files and module were removed"
 
-echo "--- 3. facts ---" >&2
+echo "--- 3. a submodule's provider missing from the caller ---" >&2
+# //vpc/peering requires hashicorp/time, which only //app lists: the network
+# module's library can't know which submodules outside modules/ callers reach.
+cp app/BUILD.bazel "${_TMPDIR}/app.BUILD.bazel"
+sed -i.bak '/providers = \["@tf_providers\/\/hashicorp\/time"\],/d' app/BUILD.bazel
+rm app/BUILD.bazel.bak
+if grep -q 'providers = ' app/BUILD.bazel; then
+  fail "couldn't remove hashicorp/time from //app's providers"
+fi
+if out="$(bazel build //app 2>&1)"; then
+  fail "//app built without hashicorp/time in its providers, which //vpc/peering requires"
+fi
+echo "${out}" >&2
+# The dep's label is the per-module repository's canonical one.
+grep -q -F '//vpc:_rules_tofu_module, //vpc/peering) requires hashicorp/time' <<<"${out}" ||
+  fail "the failure doesn't name the submodule and the provider it requires"
+grep -q -F 'Add "@tf_providers//hashicorp/time" to the providers of //app:app.' <<<"${out}" ||
+  fail "the failure doesn't name the label to add"
+mv "${_TMPDIR}/app.BUILD.bazel" app/BUILD.bazel
+
+echo "--- 4. facts ---" >&2
 grep -q -F "\"commit\": \"${first_commit}\"" MODULE.bazel.lock || fail "MODULE.bazel.lock doesn't record ${first_commit}"
 grep -q -F '"cloudposse/label/null@0.25.0"' MODULE.bazel.lock || fail "MODULE.bazel.lock doesn't record the registry module"
 
-echo "--- 4. move the tag ---" >&2
+echo "--- 5. move the tag ---" >&2
 sed -i.bak 's/"v1"/"v2"/' "${FIXTURES}/network.git/shared/main.tf"
 rm "${FIXTURES}/network.git/shared/main.tf.bak"
 git_ commit -q -a -m v2
@@ -121,7 +145,7 @@ bazel clean --expunge >&2
 plan "app-v1 10.0.0.0/24"
 bazel build --lockfile_mode=error //app >&2 || fail "the build with --lockfile_mode=error failed"
 
-echo "--- 5. pin ---" >&2
+echo "--- 6. pin ---" >&2
 # The root pins hashicorp/null and hashicorp/time with a lock instead of tags.
 # Nothing in the main repository requires them: the git module requires null,
 # and its submodule outside modules/ that //app calls requires time.
@@ -149,7 +173,7 @@ if grep -q 'hashicorp/random' .terraform.lock.hcl; then
 fi
 plan "app-v1 10.0.0.0/24"
 
-echo "--- 6. an undeclared module ---" >&2
+echo "--- 7. an undeclared module ---" >&2
 cat >>MODULE.bazel <<EOF
 tf_modules.module(
     name = "caller",
@@ -163,7 +187,7 @@ echo "${out}" >&2
 grep -q -F 'tf_modules.module(source = "acme/missing/null", version = "...")' <<<"${out}" ||
   fail "the failure doesn't name the tag to add"
 
-echo "--- 7. a module directory that is a symlink ---" >&2
+echo "--- 8. a module directory that is a symlink ---" >&2
 cat >>MODULE.bazel <<EOF
 tf_modules.module(
     name = "peering_link",
