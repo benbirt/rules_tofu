@@ -25,6 +25,7 @@ load(
     ":work_tree.bzl",
     "MODULES_BIN",
     "TEST_SRC_EXTS",
+    _check_no_auto_tfvars = "check_no_auto_tfvars",
     _files_entries = "files_entries",
     _materialize = "materialize",
     _materialize_plugin_tree = "materialize_plugin_tree",
@@ -108,6 +109,7 @@ def _tf_test_impl(ctx):
     # The work tree: the module under test's files (a deploy's var_files and
     # generated tfvars included), the test files, their data and var_files,
     # and the helper libraries' files.
+    _check_no_auto_tfvars(ctx, ctx.files.data)
     direct = _files_entries(ctx.files.srcs + ctx.files.data + ctx.files.var_files)
     files = depset(
         direct = direct,
@@ -237,7 +239,9 @@ _tf_test = rule(
         ),
         "data": attr.label_list(
             allow_files = True,
-            doc = "Arbitrary files to include in the work tree, for `file()` calls in the test files or helpers.",
+            doc = "Arbitrary files to include in the work tree, for `file()` calls in the test files or helpers. " +
+                  "Variables files that OpenTofu loads by itself (`terraform.tfvars[.json]`, " +
+                  "`*.auto.tfvars[.json]`) are rejected: list the file in `var_files`.",
         ),
         "providers": attr.label_list(
             providers = [TfProviderInfo],
@@ -306,7 +310,9 @@ def tf_test(name, srcs, module, deps = None, data = None, providers = None, var_
       module: the `tf_library` or `tf_deploy` under test.
       deps: helper `tf_library` targets that `run { module { ... } }` blocks
           load.
-      data: arbitrary files to include in the work tree.
+      data: arbitrary files to include in the work tree. Variables files
+          that OpenTofu loads by itself (`terraform.tfvars[.json]`,
+          `*.auto.tfvars[.json]`) are rejected: list the file in `var_files`.
       providers: providers the test needs beyond the module's and helpers'
           own (`@tf_providers//<namespace>/<name>`).
       var_files: `.tfvars` or `.tfvars.json` files passed with `-var-file`.

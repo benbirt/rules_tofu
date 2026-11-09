@@ -649,7 +649,11 @@ A module's files are its own. A symlink to a file of the module is kept and
 read as that file; a symlink to a directory, to nothing or to anything
 outside the module is removed when the module is fetched, as are any Bazel
 files it ships. A module can't therefore be declared by a `//<subdir>` that
-is a symlink: the fetch fails, naming the directory to declare instead.
+is a symlink: the fetch fails, naming the directory to declare instead. Any
+`.terraform.lock.hcl`, `terraform.tfvars[.json]` and `*.auto.tfvars[.json]`
+a module ships are left out of its library: OpenTofu reads none of them from
+a module that is called, and no rule accepts them (see
+[Restrictions](#restrictions)).
 
 A module's `tf_library` carries the providers its `required_providers`
 name, and its `modules/` submodules', so callers don't list them. A
@@ -804,6 +808,12 @@ in memory and ignores backends), then `tofu test`.
   `.hcl` only. Variable files are rejected there: values come through
   `vars` or `var_files`. Test files are rejected too: they go in a
   `tf_test`, whose `srcs` must be in one directory.
+- `data` rejects the variables files OpenTofu loads by itself,
+  `terraform.tfvars[.json]` and `*.auto.tfvars[.json]`, in any directory: one
+  would set variables where nothing checks it against `vars` and
+  `var_files`. List such a file in the `var_files` of a `tf_deploy` or
+  `tf_test`, which pass it with `-var-file`; a `tf_deploy` checks it against
+  `vars` and its other `var_files` first.
 - `apply` and `destroy` need a backend that keeps state outside `bazel-bin`,
   or `allow_ephemeral_state`.
 - A deploy's `.plan`, `.apply` and `.destroy` share one run directory and

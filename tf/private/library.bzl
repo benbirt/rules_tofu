@@ -17,6 +17,7 @@ load(
     ":work_tree.bzl",
     "ALLOWED_SRC_EXTS",
     "MODULES_BIN",
+    _check_no_auto_tfvars = "check_no_auto_tfvars",
     _check_no_test_files = "check_no_test_files",
     _files_entries = "files_entries",
     _library_module = "library_module",
@@ -31,6 +32,7 @@ load(
 
 def _tf_library_impl(ctx):
     _check_no_test_files(ctx, ctx.files.srcs)
+    _check_no_auto_tfvars(ctx, ctx.files.data)
     direct = _files_entries(ctx.files.srcs + ctx.files.data)
     transitive = [
         d[TfLibraryInfo].transitive_files
@@ -104,7 +106,10 @@ _tf_library = rule(
         "data": attr.label_list(
             allow_files = True,
             doc = "Arbitrary files to include alongside the Terraform sources in the work tree. " +
-                  "Use to expose files for `file()` calls in Terraform configs.",
+                  "Use to expose files for `file()` calls in Terraform configs. " +
+                  "Variables files that OpenTofu loads by itself (`terraform.tfvars[.json]`, " +
+                  "`*.auto.tfvars[.json]`) are rejected: values come through the `vars` or " +
+                  "`var_files` of a `tf_deploy` or `tf_test`.",
         ),
         "providers": attr.label_list(
             providers = [TfProviderInfo],
@@ -184,6 +189,10 @@ def tf_library(name, srcs = None, deps = None, data = None, providers = None, mo
           (`.tftest.hcl`, `.tofutest.hcl`) belong in a `tf_test` instead.
       deps: other `tf_library` targets to compose with.
       data: arbitrary files to include in the work tree for `file()` calls.
+          Variables files that OpenTofu loads by itself
+          (`terraform.tfvars[.json]`, `*.auto.tfvars[.json]`) are rejected:
+          values come through the `vars` or `var_files` of a `tf_deploy` or
+          `tf_test`.
       providers: providers (`@tf_providers//<namespace>/<name>`, from the
           `tf_providers` extension in MODULE.bazel) that this library
           references in `required_providers`. Propagates transitively to any
