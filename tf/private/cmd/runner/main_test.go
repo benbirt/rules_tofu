@@ -1105,9 +1105,15 @@ func TestRunner_Test_InitsAndTestsACopy(t *testing.T) {
 		t.Fatalf("got %d tofu invocations, want init then test: %+v", len(invs), invs)
 	}
 	copyPkg := filepath.Join(scratch, "rules_tofu.work", "mypkg")
+	// The fake tofu logs $(pwd), a resolved path: on macOS /var is a symlink
+	// to /private/var.
+	wantCwd, err := filepath.EvalSymlinks(copyPkg)
+	if err != nil {
+		t.Fatal(err)
+	}
 	init, test := invs[0], invs[1]
-	if init.cwd != copyPkg || test.cwd != copyPkg {
-		t.Errorf("cwd = %q and %q, want %q", init.cwd, test.cwd, copyPkg)
+	if init.cwd != wantCwd || test.cwd != wantCwd {
+		t.Errorf("cwd = %q and %q, want %q", init.cwd, test.cwd, wantCwd)
 	}
 	for _, arg := range []string{"init", "-backend=false", "-input=false", "-get=false", "-test-directory=tests"} {
 		if !init.hasArg(arg) {
