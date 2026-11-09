@@ -585,3 +585,37 @@ run "main" {
 		t.Errorf("locked %v, want %v", locked, want)
 	}
 }
+
+// When every required provider is one the root module tags, there is nothing
+// to lock: pin writes an empty lock (tofu's header, no providers) over the old
+// one without running tofu, so a stale entry can't conflict with the tag.
+func TestRun_AllProvidersTagged(t *testing.T) {
+	ws := t.TempDir()
+	writeFile(t, filepath.Join(ws, "lib/main.tf"), `terraform {
+  required_providers {
+    null = { source = "hashicorp/null", version = "3.2.4" }
+  }
+}
+`)
+	writeFile(t, filepath.Join(ws, ".terraform.lock.hcl"), "# old\nprovider \"registry.opentofu.org/hashicorp/null\" {\n  version = \"3.2.3\"\n}\n")
+	bazel := fakeBazel(t, ws, "//lib:main.tf")
+	tofu, logPath := fakeTofu(t)
+
+	var log strings.Builder
+	if err := run(ws, "", tofu, bazel, nil, []string{"hashicorp/null"}, nil, &log); err != nil {
+		t.Fatalf("run: %v\n%s", err, log.String())
+	}
+	lock, err := os.ReadFile(filepath.Join(ws, ".terraform.lock.hcl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(lock) != emptyLock {
+		t.Errorf("lock = %q, want the empty lock %q", lock, emptyLock)
+	}
+	if !strings.Contains(log.String(), "every required provider is pinned by a tag") {
+		t.Errorf("expected a note that nothing was left to lock, got\n%s", log.String())
+	}
+	if _, err := os.Stat(logPath); !os.IsNotExist(err) {
+		t.Errorf("tofu should not have run, got err=%v", err)
+	}
+}

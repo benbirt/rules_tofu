@@ -40,7 +40,8 @@ BUILD files then name each provider as `@tf_providers//<namespace>/<name>`.
 # digest, accepted only if it is one of the lock's `zh:` hashes. The repo
 # checks that when fetched, so locked providers record no facts and a bot's
 # lock update is complete without touching MODULE.bazel.lock. A lock entry
-# wins over dependencies' tags; the root may not also tag it. An unusable
+# wins over dependencies' tags; one the root also tags is a conflict that
+# fails the provider's fetch until `pin` drops it from the lock. An unusable
 # entry becomes a repo that fails when fetched, so `pin` stays runnable. The
 # hub is always created, and its `:pin` rewrites the lock with
 # `tofu providers lock` against the `required_providers` of every
@@ -509,7 +510,8 @@ _tf_providers_hub = repository_rule(
 _provider_tag = tag_class(
     doc = "Pin a provider in MODULE.bazel, for what a lock can't express: digests you " +
           "pin yourself, or a download mirror. Tagged providers are left out of the lock " +
-          "by `pin`. A provider can't be both tagged in the root module and locked.",
+          "by `pin`. A provider tagged in the root module and still in the lock fails to " +
+          "fetch until `pin` has rewritten the lock without it (or the tag is removed).",
     attrs = {
         "source": attr.string(
             mandatory = True,
@@ -642,9 +644,6 @@ def _tf_providers_extension_impl(module_ctx):
     locked = {}
     if lock:
         for entry in lock.entries:
-            if [t for t in by_source.get(entry.source, []) if t.is_root]:
-                fail(("Provider `{}` is pinned both by a tf_providers.provider tag and by {}. " +
-                      "Declare it one way.").format(entry.source, lock.label))
             locked[entry.source] = entry
             if entry.source not in by_source:
                 by_source[entry.source] = []
@@ -652,15 +651,20 @@ def _tf_providers_extension_impl(module_ctx):
     # Phase 2: Resolve each provider to a single (version, sha256) pair.
     for source, tags in by_source.items():
         namespace, name = source.split("/")
-        entry = locked.get(source)
-        if entry:
-            _lock_provider_repo(lock, entry)
-            continue
 
         # Validate: at most one root declaration per provider.
         root_tags = [t for t in tags if t.is_root]
         if len(root_tags) > 1:
             fail("Root module declares provider `{}` more than once".format(source))
+
+        entry = locked.get(source)
+        if entry:
+            # A root tag for a locked provider is a conflict the provider's
+            # repo reports when fetched, never a `fail()` here: `pin`, which
+            # writes the lock without the root's tagged providers, is the
+            # way to resolve it and must stay runnable (issue #85).
+            _lock_provider_repo(lock, entry, conflict = bool(root_tags))
+            continue
 
         # Determine the winning version.
         if root_tags:
@@ -755,7 +759,7 @@ def _tf_providers_extension_impl(module_ctx):
         facts = facts,
     )
 
-def _lock_provider_repo(lock, entry):
+def _lock_provider_repo(lock, entry, conflict):
     """Create the repo for a provider pinned by the lock.
 
     The repo, not the extension, asks the registry for the digests and checks
@@ -763,16 +767,23 @@ def _lock_provider_repo(lock, entry):
     locked provider records no facts: the lock is the whole pin. A lock entry
     that can't be used yields a repo that fails when fetched, naming the
     problem, rather than failing the extension: that would also take down
-    `@tf_providers//:pin`, the way to fix the lock.
+    `@tf_providers//:pin`, the way to fix the lock. `conflict` is whether the
+    root module also tags the provider, which `pin` resolves by leaving it
+    out of the lock; that message takes precedence over the entry's own.
     """
+    error = entry.error
+    if conflict:
+        error = ("{} is pinned both by a tf_providers.provider tag in the root module's MODULE.bazel " +
+                 "and by this lock. Remove the tag, or regenerate the lock, which `pin` writes without " +
+                 "the providers the root module tags.").format(entry.source)
     _tf_provider_download(
         name = repo_name(entry.namespace, entry.name),
         source = entry.source,
         version = entry.version,
         lock = "@{}//:.terraform.lock.hcl".format(_HUB),
         lock_path = lock.lock_path,
-        zh = [] if entry.error else entry.zh,
-        error = entry.error or "",
+        zh = [] if error else entry.zh,
+        error = error or "",
     )
 
 tf_providers = module_extension(

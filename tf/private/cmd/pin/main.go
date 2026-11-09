@@ -16,7 +16,9 @@
 //     extracted, and nothing else, so resources, variables and module calls
 //     that only make sense in place never need to load.
 //   - Providers the root module pins with tf_providers.provider tags
-//     (--exclude-source) are left out: the lock mustn't pin them too.
+//     (--exclude-source) are left out: the lock mustn't pin them too. When
+//     that leaves nothing, the lock is written empty (header only), so a
+//     provider moved from the lock to a tag stops conflicting with it.
 //   - A scratch configuration is generated with one child module per
 //     directory, so tofu combines the constraints exactly as it would for
 //     nested modules: a versions.tf's exact pins decide the versions, and
@@ -72,6 +74,11 @@ func main() {
 	}
 }
 
+// emptyLock is a .terraform.lock.hcl that pins nothing, as tofu writes one:
+// its header comment and no provider blocks.
+const emptyLock = "# This file is maintained automatically by \"tofu init\".\n" +
+	"# Manual edits may be lost in future updates.\n"
+
 // module is the requirements found in one directory.
 type module struct {
 	Dir  string // workspace-relative ("" for the workspace root), or `@<repo>//<dir>`
@@ -104,18 +111,35 @@ func run(workspace, lockDir, tofu, bazel string, defaultPlatforms, excludedSourc
 	sort.Strings(dirs)
 
 	var modules []module
+	excludedAny := false
 	for _, dir := range dirs {
 		reqs, err := tfconfig.ReadRequiredProviders(byDir[dir])
 		if err != nil {
 			return err
 		}
-		reqs = withoutSources(reqs, excludedSources)
-		if len(reqs) > 0 {
-			modules = append(modules, module{Dir: dir, Reqs: reqs})
+		kept := withoutSources(reqs, excludedSources)
+		if len(kept) < len(reqs) {
+			excludedAny = true
+		}
+		if len(kept) > 0 {
+			modules = append(modules, module{Dir: dir, Reqs: kept})
 		}
 	}
+	dst := filepath.Join(workspace, lockDir, ".terraform.lock.hcl")
 	if len(modules) == 0 {
-		return errors.New("no tf_library or tf_deploy in the workspace declares required_providers to lock")
+		if !excludedAny {
+			return errors.New("no tf_library or tf_deploy in the workspace declares required_providers to lock")
+		}
+		// Every requirement is on a provider the root module tags: the lock
+		// has nothing to pin, and a stale entry left in it would conflict
+		// with the tag (the extension fails that provider's fetch until the
+		// lock no longer names it). Write the lock tofu would: its header
+		// and no providers.
+		if err := os.WriteFile(dst, []byte(emptyLock), 0o644); err != nil {
+			return err
+		}
+		fmt.Fprintf(log, "rules_tofu: every required provider is pinned by a tag in MODULE.bazel; wrote %s with no providers\n", dst)
+		return nil
 	}
 
 	scratch, err := os.MkdirTemp("", "rules_tofu-pin-")
@@ -147,7 +171,6 @@ func run(workspace, lockDir, tofu, bazel string, defaultPlatforms, excludedSourc
 	if err != nil {
 		return err
 	}
-	dst := filepath.Join(workspace, lockDir, ".terraform.lock.hcl")
 	if err := os.WriteFile(dst, lock, 0o644); err != nil {
 		return err
 	}

@@ -145,8 +145,9 @@ bazel_integration_test(
 
 # A positive test: a workspace's first `pin`, then a provider update
 # as Dependabot or Renovate makes it (versions.tf and .terraform.lock.hcl
-# only), which must build with MODULE.bazel.lock untouched. See
-# lock_update_test.sh.
+# only), which must build with MODULE.bazel.lock untouched, then a root tag
+# for the locked provider, which must fail the build but leave `pin`
+# runnable. See lock_update_test.sh.
 sh_binary(
     name = "lock_update_driver",
     srcs = ["lock_update_test.sh"],
