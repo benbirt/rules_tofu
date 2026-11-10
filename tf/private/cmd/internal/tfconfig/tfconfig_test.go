@@ -96,6 +96,64 @@ resource "null_resource" "x" {
 	}
 }
 
+// ReadRequirements is ReadRequiredProviders without the merging: every entry
+// as written, primary files first, with what pin needs to combine them
+// itself (two root modules may share a directory, issue #99).
+func TestReadRequirements(t *testing.T) {
+	dir := t.TempDir()
+	for name, content := range map[string]string{
+		"b.tf": `terraform {
+  required_providers {
+    null   = { source = "hashicorp/null", version = ">= 3.0" }
+    random = { source = "hashicorp/random" }
+    aws    = "~> 5.0"
+  }
+}
+`,
+		"a.tf": `terraform {
+  required_providers {
+    null = { source = "hashicorp/null", version = "3.2.4" }
+  }
+}
+`,
+		"a_override.tf": `terraform {
+  required_providers {
+    null = { source = "acme/null" }
+  }
+}
+`,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := ReadRequirements([]string{
+		filepath.Join(dir, "a_override.tf"), filepath.Join(dir, "b.tf"), filepath.Join(dir, "a.tf"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	type entry struct {
+		Name, Source, Version, File string
+		Override                    bool
+	}
+	var entries []entry
+	for _, d := range got {
+		file, _, _ := strings.Cut(filepath.Base(d.Range), ":")
+		entries = append(entries, entry{d.Name, d.Source, d.Version, file, d.Override})
+	}
+	want := []entry{
+		{"null", "registry.opentofu.org/hashicorp/null", "3.2.4", "a.tf", false},
+		{"null", "registry.opentofu.org/hashicorp/null", ">= 3.0", "b.tf", false},
+		{"random", "registry.opentofu.org/hashicorp/random", "", "b.tf", false},
+		{"aws", "registry.opentofu.org/hashicorp/aws", "~> 5.0", "b.tf", false},
+		{"null", "registry.opentofu.org/acme/null", "", "a_override.tf", true},
+	}
+	if !reflect.DeepEqual(entries, want) {
+		t.Errorf("got  %+v\nwant %+v", entries, want)
+	}
+}
+
 func TestReadRequiredProviders_DuplicateLocalName(t *testing.T) {
 	dir := t.TempDir()
 	null := "terraform {\n  required_providers {\n    null = { source = \"hashicorp/null\" }\n  }\n}\n"
@@ -184,8 +242,9 @@ func TestReadCalls_Tofu(t *testing.T) {
 	}
 }
 
-// pin hands ReadRequiredProviders the files Bazel lists, both halves of a
-// shadowed pair included; the `.tf` one must not count.
+// pin hands ReadRequirements (which ReadRequiredProviders reads through) the
+// files Bazel lists, both halves of a shadowed pair included; the `.tf` one
+// must not count.
 func TestReadRequiredProviders_TofuShadowsTf(t *testing.T) {
 	dir := t.TempDir()
 	null := func(version string) string {

@@ -150,8 +150,12 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   that counted files call with `//<subdir>` (resolved with `tfconfig.Match`
   like the manifest, to a fixpoint), so a fetched module's examples never
   reach the lock (`tf_modules_test`). Every `_tf_library` in `deps` is
-  queried, not only those with `module_source` (issue #60). It locks a
-  scratch configuration from scratch,
+  queried, not only those with `module_source` (issue #60). A directory's
+  requirements are combined by provider source, never by local name
+  (`requirements`): the query gives files, not targets, and two targets in
+  one package may each require a provider under the same name (issue #99);
+  don't go back to `ReadRequiredProviders` there, which is one root
+  module's view. It locks a scratch configuration from scratch,
   because `tofu providers lock` keeps an existing lock's versions and has
   no `-upgrade`, and leaves out providers the root tags
   (`--exclude-source`). The `constraints` line it writes is the combined

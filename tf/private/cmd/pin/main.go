@@ -15,6 +15,12 @@
 //   - Each file's `terraform { required_providers { ... } }` entries are
 //     extracted, and nothing else, so resources, variables and module calls
 //     that only make sense in place never need to load.
+//   - A directory's entries are combined by provider source, never by local
+//     name: every version constraint its files put on a provider applies.
+//     Two tf_deploys of one package, each with its own srcs, may each
+//     require the same provider, and pin can't tell (and needn't) which
+//     file is whose. One module requiring a name twice is the build's error
+//     to report, not pin's.
 //   - Providers the root module pins with tf_providers.provider tags
 //     (--exclude-source) are left out: the lock mustn't pin them too. When
 //     that leaves nothing, the lock is written empty (header only), so a
@@ -22,7 +28,7 @@
 //   - A scratch configuration is generated with one child module per
 //     directory, so tofu combines the constraints exactly as it would for
 //     nested modules: a versions.tf's exact pins decide the versions, and
-//     without one tofu picks the newest version every directory accepts.
+//     without one tofu picks the newest version every constraint accepts.
 //   - `tofu get` + `tofu providers lock` run there, from scratch: `providers
 //     lock` keeps an existing lock's versions and has no -upgrade. The new
 //     lock is copied over the old one.
@@ -43,6 +49,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -79,10 +86,11 @@ func main() {
 const emptyLock = "# This file is maintained automatically by \"tofu init\".\n" +
 	"# Manual edits may be lost in future updates.\n"
 
-// module is the requirements found in one directory.
+// module is the requirements found in one directory: one per provider
+// source, in source order (see requirements).
 type module struct {
 	Dir  string // workspace-relative ("" for the workspace root), or `@<repo>//<dir>`
-	Reqs map[string]tfconfig.Requirement
+	Reqs []tfconfig.Requirement
 }
 
 // bazelCommand is the Bazel to query with: $BAZEL, else bazel or bazelisk
@@ -113,7 +121,7 @@ func run(workspace, lockDir, tofu, bazel string, defaultPlatforms, excludedSourc
 	var modules []module
 	excludedAny := false
 	for _, dir := range dirs {
-		reqs, err := tfconfig.ReadRequiredProviders(byDir[dir])
+		reqs, err := requirements(byDir[dir])
 		if err != nil {
 			return err
 		}
@@ -183,20 +191,84 @@ func run(workspace, lockDir, tofu, bazel string, defaultPlatforms, excludedSourc
 // withoutSources drops the requirements on the given `<namespace>/<name>`
 // sources. Sources compare as tofu does: case-insensitively, with the default
 // registry host optional.
-func withoutSources(reqs map[string]tfconfig.Requirement, sources []string) map[string]tfconfig.Requirement {
+func withoutSources(reqs []tfconfig.Requirement, sources []string) []tfconfig.Requirement {
 	drop := map[string]bool{}
 	for _, s := range sources {
 		if normalized, err := tfconfig.NormalizeProvider(s); err == nil {
 			drop[normalized] = true
 		}
 	}
-	kept := map[string]tfconfig.Requirement{}
-	for name, req := range reqs {
+	var kept []tfconfig.Requirement
+	for _, req := range reqs {
 		if !drop[req.Source] {
-			kept[name] = req
+			kept = append(kept, req)
 		}
 	}
 	return kept
+}
+
+// requirements is what the files of one directory require: one requirement
+// per provider source, sorted by source, carrying every distinct version
+// constraint the files put on that provider, joined with ", " (tofu's "and").
+//
+// The files needn't be one module: two tf_deploys of a package, each with
+// its own srcs, may both require a provider under one local name, with the
+// same source or with different ones (issue #99). So nothing is keyed by
+// local name here. What a local name does decide is what an `_override`
+// file's entry replaces: every earlier entry of its name, as in a module.
+func requirements(files []string) ([]tfconfig.Requirement, error) {
+	declared, err := tfconfig.ReadRequirements(files)
+	if err != nil {
+		return nil, err
+	}
+	var effective []tfconfig.Declared
+	for _, d := range declared {
+		if d.Override {
+			effective = slices.DeleteFunc(effective, func(e tfconfig.Declared) bool { return e.Name == d.Name })
+		}
+		effective = append(effective, d)
+	}
+	versions := map[string][]string{}
+	for _, d := range effective {
+		if _, ok := versions[d.Source]; !ok {
+			versions[d.Source] = nil
+		}
+		// No version is no constraint: nothing to add to the others.
+		if d.Version != "" && !slices.Contains(versions[d.Source], d.Version) {
+			versions[d.Source] = append(versions[d.Source], d.Version)
+		}
+	}
+	sources := make([]string, 0, len(versions))
+	for s := range versions {
+		sources = append(sources, s)
+	}
+	sort.Strings(sources)
+	reqs := make([]tfconfig.Requirement, 0, len(sources))
+	for _, s := range sources {
+		sort.Strings(versions[s])
+		reqs = append(reqs, tfconfig.Requirement{Source: s, Version: strings.Join(versions[s], ", ")})
+	}
+	return reqs, nil
+}
+
+// localNames gives each of a scratch module's requirements a local name of
+// its own: the provider's type (`null` for `registry.opentofu.org/hashicorp/null`),
+// numbered when two sources share one (`aws`, `aws-2`). The names only have
+// to be unique, and ones tofu accepts (letters, digits and dashes, so no
+// underscore): a lock records sources.
+func localNames(reqs []tfconfig.Requirement) []string {
+	names := make([]string, len(reqs))
+	used := map[string]bool{}
+	for i, req := range reqs {
+		base := path.Base(req.Source)
+		name := base
+		for n := 2; used[name]; n++ {
+			name = fmt.Sprintf("%s-%d", base, n)
+		}
+		used[name] = true
+		names[i] = name
+	}
+	return names
 }
 
 func runTofu(tofu string, stdout, stderr io.Writer, args ...string) error {
@@ -514,7 +586,8 @@ func moduleNames(children []module) []string {
 
 // writeScratch writes the configuration that `providers lock` runs against:
 // each directory's requirements in a child module of its own, so tofu
-// combines them exactly as it would for nested modules.
+// combines them exactly as it would for nested modules. A child's local
+// names are made up (localNames).
 func writeScratch(scratch string, children []module) error {
 	rootDoc := map[string]any{}
 	calls := map[string]any{}
@@ -523,7 +596,11 @@ func writeScratch(scratch string, children []module) error {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
 		}
-		doc := map[string]any{"terraform": map[string]any{"required_providers": children[i].Reqs}}
+		required := map[string]tfconfig.Requirement{}
+		for j, local := range localNames(children[i].Reqs) {
+			required[local] = children[i].Reqs[j]
+		}
+		doc := map[string]any{"terraform": map[string]any{"required_providers": required}}
 		if err := writeJSON(filepath.Join(dir, "main.tf.json"), doc); err != nil {
 			return err
 		}
