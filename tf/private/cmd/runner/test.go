@@ -107,8 +107,9 @@ func runTest(extraArgs []string) error {
 	return nil
 }
 
-// copyTree copies the directory src to dst, following symlinks: a work tree
-// is a tree of symlinks to the sources, and the copy is what tofu writes in.
+// copyTree copies the directory src to dst, following symlinks to files: a
+// work tree is a tree of symlinks to the sources, and the copy is what tofu
+// writes in. A symlink to a directory is an error (errDirectoryLink).
 func copyTree(src, dst string) error {
 	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -127,13 +128,32 @@ func copyTree(src, dst string) error {
 			return err
 		}
 		if info.IsDir() {
-			return copyTree(p, target)
+			return errDirectoryLink(p)
 		}
 		return copyFile(p, target)
 	})
 }
 
+// errDirectoryLink is the error for a symlink to a directory in a work tree.
+// The rules never make one: every entry is a declared file, which Bazel
+// refuses to link to a directory, and a fetched module's are removed. One
+// that got there some other way is refused rather than walked: WalkDir
+// doesn't descend into it, and walking it by hand never ends on a link that
+// leads back to one of its own ancestors (issue #89).
+func errDirectoryLink(p string) error {
+	return fmt.Errorf("%s is a symlink to a directory; a work tree holds files and real directories only", p)
+}
+
+// copyFile copies the file src to dst, following a symlink. The copy is
+// writable whatever src is, and executable if src is: a script that a
+// `local-exec` provisioner or an `external` data source runs must still run
+// from the copy. Not src's own mode: Bazel's outputs are read-only, and tofu
+// and the next copy write here.
 func copyFile(src, dst string) error {
+	info, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
 	data, err := os.ReadFile(src)
 	if err != nil {
 		return err
@@ -141,5 +161,9 @@ func copyFile(src, dst string) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(dst, data, 0o644)
+	mode := fs.FileMode(0o644)
+	if info.Mode()&0o111 != 0 {
+		mode = 0o755
+	}
+	return os.WriteFile(dst, data, mode)
 }

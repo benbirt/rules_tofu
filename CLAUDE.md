@@ -322,7 +322,13 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   (an absent plugin tree gets an empty directory under `$TEST_TMPDIR`), and
   fails on `errored_test.tfstate`, which tofu writes with exit 0 when a
   run's destroy fails. Don't route tests through the plan/apply path or its
-  ephemeral-state gate.
+  ephemeral-state gate. The copy keeps a file's executable bit and nothing
+  else of its mode (`copyFile`: `0o755` or `0o644`, never `Perm()`): Bazel's
+  outputs are read-only, and tofu must be able to write the copy. Both walks
+  of a work tree (`copyTree`, and `linkTree` for the run directory) refuse a
+  symlink to a directory (`errDirectoryLink`) rather than follow it: the
+  rules never make one, and following one that leads to its own ancestor
+  never ends (issue #89).
 - `mock_provider` still needs the provider package in `.terraform/providers`
   (verified: tofu fails without it), so a tf_test's plugin tree is built
   for every test. Real infrastructure is gated by Bazel, not by parsing run

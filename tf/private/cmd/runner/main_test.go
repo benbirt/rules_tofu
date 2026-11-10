@@ -1727,3 +1727,86 @@ func TestRunner_LocalBackend_Gate(t *testing.T) {
 		})
 	}
 }
+
+// A work tree holds files and real directories only. A symlink to a directory
+// is refused by name, by the test's copy and by the run directory's mirror
+// alike: the walks don't descend into one, and following it by hand would
+// never end on a link that leads back to its own parent (issue #89).
+func TestRunner_Test_SymlinkToDirectoryFails(t *testing.T) {
+	cmd, workTree, _, _, _ := setupTest(t)
+	if err := os.Symlink(".", filepath.Join(workTree, "mypkg", "loop")); err != nil {
+		t.Fatal(err)
+	}
+	assertDirectoryLinkRefused(t, cmd, "mypkg/loop")
+}
+
+func TestRunner_RunDir_SymlinkToDirectoryFails(t *testing.T) {
+	cmd, _, _ := setup(t, map[string]any{"region": "us-east-1"})
+	writeWorkTreeFile(t, cmd, "mypkg/main.tf", "# main\n")
+	writeWorkTreeFile(t, cmd, "modules/net/main.tf", "# net\n")
+	workTree := argValue(t, cmd, "--work-tree")
+	if err := os.Symlink(filepath.Join(workTree, "modules"), filepath.Join(workTree, "mypkg", "linked")); err != nil {
+		t.Fatal(err)
+	}
+	assertDirectoryLinkRefused(t, cmd, "mypkg/linked")
+}
+
+// assertDirectoryLinkRefused runs the runner and checks that it fails naming
+// the symlink at the work-tree path rel, before any tofu process starts.
+func assertDirectoryLinkRefused(t *testing.T, cmd *exec.Cmd, rel string) {
+	t.Helper()
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected the runner to refuse the symlink to a directory, but it succeeded:\n%s", out)
+	}
+	if want := filepath.FromSlash(rel) + " is a symlink to a directory"; !strings.Contains(string(out), want) {
+		t.Errorf("expected the error to contain %q, got: %s", want, out)
+	}
+	if _, err := os.Stat(envValue(t, cmd, "TOFU_LOG")); !os.IsNotExist(err) {
+		t.Errorf("expected no tofu invocations, got err=%v", err)
+	}
+}
+
+// The copy a test runs in is writable whatever its sources are (Bazel's
+// outputs are read-only), and a file that was executable still is: a script a
+// `local-exec` provisioner or an `external` data source runs must run from
+// the copy too.
+func TestRunner_Test_KeepsExecutableBit(t *testing.T) {
+	cmd, workTree, scratch, _, _ := setupTest(t)
+	sources := filepath.Join(filepath.Dir(workTree), "sources", "mypkg")
+	for name, mode := range map[string]os.FileMode{"run.sh": 0o555, "data.txt": 0o444} {
+		src := filepath.Join(sources, name)
+		if err := os.WriteFile(src, []byte("#!/bin/sh\necho ran > ran.txt\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(src, mode); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(src, filepath.Join(workTree, "mypkg", name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The fake tofu runs the script as a provisioner would, from the copy.
+	setFakeTofu(t, cmd, "if [ \"$1\" = test ]; then ./run.sh || exit 1; fi\n")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
+	}
+
+	copyPkg := filepath.Join(scratch, "rules_tofu.work", "mypkg")
+	if _, err := os.Stat(filepath.Join(copyPkg, "ran.txt")); err != nil {
+		t.Errorf("the copied script did not run: %v", err)
+	}
+	for name, wantExec := range map[string]bool{"run.sh": true, "data.txt": false, "main.tf": false} {
+		info, err := os.Stat(filepath.Join(copyPkg, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		mode := info.Mode().Perm()
+		if gotExec := mode&0o100 != 0; gotExec != wantExec {
+			t.Errorf("%s copied with mode %o, want executable = %v", name, mode, wantExec)
+		}
+		if mode&0o200 == 0 {
+			t.Errorf("%s copied with mode %o, want it writable", name, mode)
+		}
+	}
+}
