@@ -278,8 +278,18 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   `module_ctx.facts` unconditionally (no `hasattr` fallback). CI runs Linux
   and macOS on the pinned version and 8.5.0; the uncommitted-changes check
   runs only on the pinned jobs, because other versions rewrite
-  `MODULE.bazel.lock` in their own format. Raising the floor means bumping
-  `bazel_compatibility`, the CI matrix and the README together.
+  `MODULE.bazel.lock` in their own format. The Bazel inside the integration
+  tests is the version of the Bazel running them, not `.bazelversion`'s:
+  `bazel_binaries.download` reads it from `@running_bazel`
+  (`tests/integration/running_bazel.bzl`, `native.bazel_version`), so
+  `USE_BAZEL_VERSION=8.5.0`, in CI or at a desk, tests the nested builds on
+  8.5.0 too. They once ran on the pinned version whatever ran the tests
+  (issue #88); `nested_bazel.sh` fails a test whose nested Bazel isn't the
+  running one, from `RUNNING_BAZEL_VERSION` in every test's `env`. `MODULE.bazel`
+  names that `.bzl` file although releases leave `tests` out: its one use
+  is a dev dependency, so a dependent module never loads it. Raising the
+  floor means bumping `bazel_compatibility`, the CI matrix and the README
+  together.
 
 ### Rules and the runner
 
