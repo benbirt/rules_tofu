@@ -41,14 +41,15 @@ bazel() {
   "${BIT_BAZEL_BINARY}" --output_user_root="${NESTED_USER_ROOT}" --output_base="${NESTED_OUTPUT_BASE}" "$@"
 }
 
-# The nested Bazel is the version in the root .bazelversion
-# (bazel_binaries.download in MODULE.bazel), of which the workspace under
-# test holds a copy. Check it is, so that a CI job that claims to test another
-# version (it rewrites every copy) can't quietly run the nested builds on the
-# pinned one, as the 8.5.0 jobs once did (issue #88).
-_pinned="$(cat "${BIT_WORKSPACE_DIR}/.bazelversion")"
+# The nested Bazel is the version of the Bazel running this test
+# (bazel_binaries.download in MODULE.bazel takes it from @running_bazel), so
+# that a run on another Bazel than the pinned one, such as CI's on the oldest
+# supported, tests the nested builds on it too. Check it is: they once ran on
+# the pinned version whatever ran the tests (issue #88). Every
+# bazel_integration_test sets RUNNING_BAZEL_VERSION in its env.
+_running="${RUNNING_BAZEL_VERSION:?set it in the env of the bazel_integration_test, as the others in tests/integration/BUILD.bazel do}"
 _nested="$("${BIT_BAZEL_BINARY}" --version)"
-if [[ "${_nested}" != "bazel ${_pinned}" ]]; then
-  echo "FAIL: the nested Bazel is '${_nested}', but ${BIT_WORKSPACE_DIR}/.bazelversion pins ${_pinned}" >&2
+if [[ "${_nested}" != "bazel ${_running}" ]]; then
+  echo "FAIL: the nested Bazel is '${_nested}', but Bazel ${_running} is running this test" >&2
   exit 1
 fi

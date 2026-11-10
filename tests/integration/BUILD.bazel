@@ -23,6 +23,7 @@ load(
     "integration_test_utils",
 )
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+load("@running_bazel//:version.bzl", "RUNNING_BAZEL_VERSION")
 load("//toolchain:versions.bzl", "KNOWN_VERSIONS")
 load(":cases.bzl", "case_line")
 
@@ -101,6 +102,11 @@ _TAGS = [
     "no-sandbox",
 ]
 
+# The nested Bazel (`bazel_binaries.versions.current`) is the version of the
+# Bazel running the tests. Every test passes that version to its driver,
+# where nested_bazel.sh checks the nested Bazel really is it.
+_ENV = {"RUNNING_BAZEL_VERSION": RUNNING_BAZEL_VERSION}
+
 _COMMANDS = [("build", _CASES), ("run", _RUN_CASES)]
 
 # The cases sharing `broken_workspace`, as one test; see the module docstring.
@@ -113,7 +119,7 @@ bazel_integration_test(
     timeout = "long",
     bazel_binaries = bazel_binaries,
     bazel_version = bazel_binaries.versions.current,
-    env = {
+    env = _ENV | {
         "CASES": "\n".join([
             case_line(case_name, command, target, pattern)
             for (command, cases) in _COMMANDS
@@ -134,7 +140,7 @@ bazel_integration_test(
         timeout = "moderate",
         bazel_binaries = bazel_binaries,
         bazel_version = bazel_binaries.versions.current,
-        env = {"CASES": case_line(case_name, command, target, pattern)},
+        env = _ENV | {"CASES": case_line(case_name, command, target, pattern)},
         tags = _TAGS,
         test_runner = ":assert_bazel_fails",
         workspace_files = _WORKSPACE_FILES[workspace],
@@ -161,6 +167,7 @@ bazel_integration_test(
     timeout = "moderate",
     bazel_binaries = bazel_binaries,
     bazel_version = bazel_binaries.versions.current,
+    env = _ENV,
     tags = _TAGS,
     test_runner = ":lock_update_driver",
     workspace_files = integration_test_utils.glob_workspace_files("lock_update") + [
@@ -186,7 +193,7 @@ sh_binary(
         timeout = "moderate",
         bazel_binaries = bazel_binaries,
         bazel_version = bazel_binaries.versions.current,
-        env = {"TOFU_VERSION": version},
+        env = _ENV | {"TOFU_VERSION": version},
         tags = _TAGS,
         test_runner = ":module_dependency_driver",
         workspace_files = integration_test_utils.glob_workspace_files("module_dependency") + [
@@ -212,6 +219,7 @@ bazel_integration_test(
     timeout = "moderate",
     bazel_binaries = bazel_binaries,
     bazel_version = bazel_binaries.versions.current,
+    env = _ENV,
     tags = _TAGS,
     test_runner = ":run_directory_driver",
     workspace_files = integration_test_utils.glob_workspace_files("run_directory") + [
@@ -234,6 +242,7 @@ bazel_integration_test(
     timeout = "moderate",
     bazel_binaries = bazel_binaries,
     bazel_version = bazel_binaries.versions.current,
+    env = _ENV,
     tags = _TAGS,
     test_runner = ":tf_modules_driver",
     workspace_files = integration_test_utils.glob_workspace_files("tf_modules") + [
@@ -259,7 +268,7 @@ sh_binary(
         timeout = "moderate",
         bazel_binaries = bazel_binaries,
         bazel_version = bazel_binaries.versions.current,
-        env = {"TOFU_VERSION": version},
+        env = _ENV | {"TOFU_VERSION": version},
         tags = _TAGS,
         test_runner = ":fmt_driver",
         workspace_files = integration_test_utils.glob_workspace_files("fmt") + [

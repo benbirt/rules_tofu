@@ -136,13 +136,24 @@ bazel_dep(name = "rules_bazel_integration_test", version = "0.37.1", dev_depende
 bazel_dep(name = "rules_shell", version = "0.6.1", dev_dependency = True)
 bazel_dep(name = "buildifier_prebuilt", version = "8.5.1.2", dev_dependency = True)
 
+# The Bazel those tests run inside themselves is the version of the Bazel
+# running them: the pinned one, or USE_BAZEL_VERSION's. The .bzl file is not
+# in a release (`tests` is left out); a module that depends on rules_tofu
+# never loads it, since the one use of the rule is a dev dependency.
+running_bazel = use_repo_rule("//tests/integration:running_bazel.bzl", "running_bazel")
+
+running_bazel(
+    name = "running_bazel",
+    dev_dependency = True,
+)
+
 bazel_binaries = use_extension(
     "@rules_bazel_integration_test//:extensions.bzl",
     "bazel_binaries",
     dev_dependency = True,
 )
-bazel_binaries.download(version_file = "//:.bazelversion")
-use_repo(bazel_binaries, "bazel_binaries", "bazel_binaries_bazelisk", "build_bazel_bazel_.bazelversion")
+bazel_binaries.download(version_file = "@running_bazel//:version")
+use_repo(bazel_binaries, "bazel_binaries", "bazel_binaries_bazelisk", "build_bazel_bazel_version")
 
 # cosign, for `bazel run //tools:update_versions` to verify an OpenTofu
 # release's SHA256SUMS signature before pinning its digests. Digests are from
