@@ -292,6 +292,20 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   and run in every dependant. `ALLOWED_SRC_EXTS` still admits `.hcl`, so
   the analysis-time check is the gate. Fetched modules' own tests arrive as
   `data`, which is not checked, and are ignored unless a run loads them.
+- The variables files tofu loads by itself (`terraform.tfvars[.json]`,
+  `*.auto.tfvars[.json]`) are rejected in every rule's `data`
+  (`check_no_auto_tfvars`; `auto_tfvars_in_data`), by name in any
+  directory: a library's package is the root module of its own validation
+  and of any `tf_test` of it, so "not a root" is not the listing rule's to
+  know, and such a file would set variables that the duplicate-key check
+  never reads, over `vars` if its name sorts later (issue #93). `var_files`
+  is exempt, since those are passed with `-var-file`, in the rule's order
+  and after a deploy's duplicate-key check; the one name it can't take is
+  the generated `rules_tofu.auto.tfvars.json` (`auto_tfvars_conflict`).
+  `tf_modules` leaves the same names out of a
+  fetched module's library (`_EXCLUDED`), or every module shipping an
+  example `terraform.tfvars` would fail to build; keep the two lists in
+  step.
 - A `tf_test`'s root module is the package of its `module` attribute, not
   its own, so tests can sit in a `tests/` sub-package. It is read from the
   provider (`TfLibraryInfo.package_dir`, `TfDeployInfo.package_dir`), never

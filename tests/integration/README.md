@@ -16,6 +16,7 @@ tests/integration/
 │   ├── .bazelversion
 │   └── cases/
 │       ├── auto_tfvars_conflict/{BUILD.bazel, main.tf, rules_tofu.auto.tfvars.json}
+│       ├── auto_tfvars_in_data/ variables files tofu loads by itself, as data
 │       ├── conflicting_providers/{BUILD.bazel, main.tf}
 │       ├── duplicate_vars/{BUILD.bazel, main.tf, extra.tfvars.json}
 │       ├── ephemeral_state_refused/{BUILD.bazel, main.tf}

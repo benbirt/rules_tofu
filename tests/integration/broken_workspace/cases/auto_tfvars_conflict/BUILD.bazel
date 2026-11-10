@@ -1,17 +1,20 @@
 load("@rules_tofu//tf:defs.bzl", "tf_deploy", "tf_library")
 
-# Passing a file named `rules_tofu.auto.tfvars.json` in data must fail during materialization
-# of the work tree because the rule itself generates a file at that same path from `vars`.
 tf_library(
     name = "lib",
     srcs = ["main.tf"],
-    data = ["rules_tofu.auto.tfvars.json"],
     fmt_test = False,
 )
 
+# `rules_tofu.auto.tfvars.json` is the name of the file the rule generates
+# from `vars`, so a file of that name beside it must fail when the work tree
+# is laid out. It arrives through `var_files`, the one attribute that takes a
+# variables file tofu would load by itself (`data` refuses them all, see
+# auto_tfvars_in_data), so only the collision check stands in its way.
 tf_deploy(
     name = "deploy",
     fmt_test = False,
+    var_files = ["rules_tofu.auto.tfvars.json"],
     vars = {"foo": "bar"},
     deps = [":lib"],
 )

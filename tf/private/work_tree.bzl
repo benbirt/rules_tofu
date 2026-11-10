@@ -43,6 +43,39 @@ def check_no_test_files(ctx, files):
                     f.short_path,
                 ))
 
+def _loaded_by_itself(basename):
+    return (
+        basename in ["terraform.tfvars", "terraform.tfvars.json"] or
+        basename.endswith(".auto.tfvars") or
+        basename.endswith(".auto.tfvars.json")
+    )
+
+def check_no_auto_tfvars(ctx, files):
+    """Fail if any of `files`, a rule's data, is a variables file tofu loads by itself.
+
+    OpenTofu reads `terraform.tfvars[.json]` and `*.auto.tfvars[.json]` from
+    the root module's directory (and `tofu test` from the test directory)
+    without being told to. One that arrived as `data` would set variables
+    beside `vars` and `var_files`, over them if its name sorts after
+    `rules_tofu.auto.tfvars.json`, and the duplicate-key check never reads
+    it. `var_files` are not checked here: those tofu is told to load, in an
+    order the rule chooses, and a deploy's are checked against `vars` and
+    each other.
+
+    The names are refused in any directory, not only a root module's: which
+    directory is a root is not the listing rule's to know (a library's
+    package is the root of its own validation and of any `tf_test` of it).
+    """
+    for f in files:
+        if _loaded_by_itself(f.basename):
+            fail(("`{}`: `{}` in `data` is a variables file that OpenTofu loads by itself, where " +
+                  "nothing checks it against `vars` and `var_files`. Set the values with `vars`, or " +
+                  "list the file in the `var_files` of a `tf_deploy` or `tf_test` (README, " +
+                  "\"Restrictions\").").format(
+                ctx.label,
+                f.short_path,
+            ))
+
 def runfiles_path(workspace_name, f):
     """Return the path at which `f` appears in a runfiles tree.
 
@@ -134,7 +167,7 @@ def materialize(ctx, entries, tfvars_content = None, tfvars_dir = None):
             fail(
                 "`{}` collides with the generated rules_tofu.auto.tfvars.json. ".format(
                     seen[tfvars_path[len(work_prefix) + 1:]].path,
-                ) + "Rename or remove that file; deploy `vars` is the sole producer of tfvars.",
+                ) + "Rename that file: the name is reserved for the values in `vars`.",
             )
         tfvars_file = ctx.actions.declare_file(tfvars_path)
         ctx.actions.write(output = tfvars_file, content = tfvars_content)
