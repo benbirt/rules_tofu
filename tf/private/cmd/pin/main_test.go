@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -721,9 +722,20 @@ func TestLocalNames(t *testing.T) {
 		{Source: "registry.opentofu.org/hashicorp/aws"},
 		{Source: "registry.opentofu.org/hashicorp/null"},
 		{Source: "example.com/other/aws"},
+		{Source: "registry.opentofu.org/acme/aws-2"},
 	})
-	if want := []string{"aws", "aws_2", "null", "aws_3"}; !reflect.DeepEqual(got, want) {
+	if want := []string{"aws", "aws-2", "null", "aws-3", "aws-2-2"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("localNames = %q, want %q", got, want)
+	}
+	// tofu refuses a required_providers entry under any other kind of name
+	// ("must contain only letters, digits, and dashes, and may not use
+	// leading or trailing dashes"), and the fake tofu of these tests would
+	// not notice.
+	valid := regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+	for _, name := range got {
+		if !valid.MatchString(name) {
+			t.Errorf("%q is not a provider local name tofu accepts", name)
+		}
 	}
 }
 
@@ -752,7 +764,7 @@ func TestRun_TwoTargetsOneDirectory(t *testing.T) {
 	want := []map[string]any{
 		{
 			"aws":   map[string]any{"source": "registry.opentofu.org/acme/aws", "version": "1.2.3"},
-			"aws_2": map[string]any{"source": "registry.opentofu.org/hashicorp/aws", "version": "~> 5.0"},
+			"aws-2": map[string]any{"source": "registry.opentofu.org/hashicorp/aws", "version": "~> 5.0"},
 		},
 		{
 			"null": map[string]any{"source": "registry.opentofu.org/hashicorp/null", "version": ">= 3.2.3, ~> 3.2"},

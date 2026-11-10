@@ -253,8 +253,9 @@ func requirements(files []string) ([]tfconfig.Requirement, error) {
 
 // localNames gives each of a scratch module's requirements a local name of
 // its own: the provider's type (`null` for `registry.opentofu.org/hashicorp/null`),
-// numbered when two sources share one (`aws`, `aws_2`). The names only have
-// to be unique: a lock records sources.
+// numbered when two sources share one (`aws`, `aws-2`). The names only have
+// to be unique, and ones tofu accepts (letters, digits and dashes, so no
+// underscore): a lock records sources.
 func localNames(reqs []tfconfig.Requirement) []string {
 	names := make([]string, len(reqs))
 	used := map[string]bool{}
@@ -262,7 +263,7 @@ func localNames(reqs []tfconfig.Requirement) []string {
 		base := path.Base(req.Source)
 		name := base
 		for n := 2; used[name]; n++ {
-			name = fmt.Sprintf("%s_%d", base, n)
+			name = fmt.Sprintf("%s-%d", base, n)
 		}
 		used[name] = true
 		names[i] = name
