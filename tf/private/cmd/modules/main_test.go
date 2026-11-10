@@ -243,7 +243,10 @@ func TestBuild_Errors(t *testing.T) {
 
 // A dep for a submodule wins over the dep for the module containing it, and
 // a call deeper than either module_source uses the rest as a subdirectory.
-func TestBuild_LongestMatch(t *testing.T) {
+// The submodule's own library provides a call into it, not the module that
+// contains it, however either address is written: the parent's here is the
+// longer string (#97).
+func TestBuild_MostSpecificMatch(t *testing.T) {
 	tree := writeTree(t, map[string]string{
 		"app/main.tf":                   `module "m" { source = "acme/n/aws//modules/x/y" }`,
 		"external/whole+/main.tf":       ``,
@@ -251,7 +254,7 @@ func TestBuild_LongestMatch(t *testing.T) {
 		"external/whole+/modules/x/y/z": ``,
 	})
 	deps := []dep{
-		{Label: "@whole", Source: "acme/n/aws", Version: "1.0.0", Dir: "external/whole+", Direct: true},
+		{Label: "@whole", Source: "registry.opentofu.org/acme/n/aws", Version: "1.0.0", Dir: "external/whole+", Direct: true},
 		{Label: "@sub", Source: "acme/n/aws//modules", Version: "1.0.0", Dir: "external/sub+", Direct: true},
 	}
 	_, err := build(tree, "app", "//app", deps, nil, nil)
@@ -269,6 +272,83 @@ func TestBuild_LongestMatch(t *testing.T) {
 	if !reflect.DeepEqual(got.Modules, want) {
 		t.Errorf("got %+v, want %+v", got.Modules, want)
 	}
+}
+
+// A library with module_source is in its own listing, never as a direct dep,
+// so its files can call its address with `//<subdir>` as its callers do
+// (#95). What such a module calls is still the library's own configuration.
+func TestBuild_SelfCall(t *testing.T) {
+	files := map[string]string{
+		"external/net+/main.tf":           `module "y" { source = "acme/net/aws//modules/y" }`,
+		"external/net+/modules/y/main.tf": `module "dns" { source = "acme/dns/aws" }`,
+		"external/dns+/main.tf":           ``,
+	}
+	self := dep{Label: "@net", Source: "acme/net/aws", Version: "1.0.0", Dir: "external/net+"}
+	dns := dep{Label: "@dns", Source: "acme/dns/aws", Version: "0.1.0", Dir: "external/dns+", Direct: true}
+	packages := []string{"external/dns+"}
+
+	t.Run("resolved in the library's own files", func(t *testing.T) {
+		got, err := build(writeTree(t, files), "external/net+", "@net", []dep{self, dns}, packages, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []Record{
+			{Key: "", Source: "", Dir: "."},
+			{Key: "y", Source: "acme/net/aws//modules/y", Version: "1.0.0", Dir: "modules/y"},
+			{Key: "y.dns", Source: "acme/dns/aws", Version: "0.1.0", Dir: "../dns+"},
+		}
+		if !reflect.DeepEqual(got.Modules, want) {
+			t.Errorf("got\n%+v\nwant\n%+v", got.Modules, want)
+		}
+	})
+
+	t.Run("a dep nothing calls is still unused", func(t *testing.T) {
+		unused := dep{Label: "@unused", Source: "acme/unused/aws", Version: "1.0.0", Dir: "external/unused+", Direct: true}
+		_, err := build(writeTree(t, files), "external/net+", "@net", []dep{self, dns, unused}, packages, nil)
+		if err == nil || !strings.Contains(err.Error(), "no module call uses @unused") || strings.Contains(err.Error(), "@net (") {
+			t.Errorf("got %v", err)
+		}
+	})
+
+	t.Run("a dep declaring the submodule wins", func(t *testing.T) {
+		withSub := map[string]string{"external/y+/main.tf": ``}
+		for name, content := range files {
+			withSub[name] = content
+		}
+		y := dep{Label: "@y", Source: "acme/net/aws//modules/y", Version: "1.0.0", Dir: "external/y+", Direct: true}
+		got, err := build(writeTree(t, withSub), "external/net+", "@net", []dep{self, y}, []string{"external/y+"}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []Record{
+			{Key: "", Source: "", Dir: "."},
+			{Key: "y", Source: "acme/net/aws//modules/y", Version: "1.0.0", Dir: "../y+"},
+		}
+		if !reflect.DeepEqual(got.Modules, want) {
+			t.Errorf("got\n%+v\nwant\n%+v", got.Modules, want)
+		}
+	})
+
+	t.Run("its own address is a cycle", func(t *testing.T) {
+		tree := writeTree(t, map[string]string{"external/net+/main.tf": `module "me" { source = "acme/net/aws" }`})
+		_, err := build(tree, "external/net+", "@net", []dep{self}, nil, nil)
+		if err == nil || !strings.Contains(err.Error(), "so the module calls form a cycle") {
+			t.Errorf("got %v", err)
+		}
+	})
+
+	t.Run("a caller's deps are not used from inside it", func(t *testing.T) {
+		withApp := map[string]string{"app/main.tf": `module "net" { source = "acme/net/aws" }`}
+		for name, content := range files {
+			withApp[name] = content
+		}
+		direct := self
+		direct.Direct = true
+		_, err := build(writeTree(t, withApp), "app", "//app", []dep{direct, dns}, []string{"external/net+", "external/dns+"}, nil)
+		if err == nil || !strings.Contains(err.Error(), "no module call uses @dns") {
+			t.Errorf("got %v", err)
+		}
+	})
 }
 
 // A direct dep is used by a call from the root's own configuration: the root

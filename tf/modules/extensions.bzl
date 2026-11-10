@@ -50,7 +50,8 @@ Where the files come from, and what pins them:
 The generated library carries the module's providers (its required_providers
 as `@tf_providers//<namespace>/<name>`), which the root module pins as usual,
 and depends on the modules it calls, which must be declared too: a module
-that calls an undeclared one fails when fetched, naming the tag to add. Each
+that calls an undeclared one fails when fetched, naming the tag to add (its
+calls to its own address, for a submodule, it provides itself). Each
 module has one version per build. For a registry module the root's tag wins,
 else the highest version requested; git and archive modules must be declared
 identically wherever their `name` appears.
@@ -244,10 +245,12 @@ def _fetch(repository_ctx):
     _tidy(repository_ctx, context)
 
 def _scan(repository_ctx):
-    args = [repository_ctx.path(_MODSCAN)]
+    # Every declared module, this one included: it may call its own address
+    # for a submodule, and another tag may declare one of its subdirectories,
+    # which then provides the calls into it.
+    args = [repository_ctx.path(_MODSCAN), "--self=" + repository_ctx.attr.label]
     for label, source in repository_ctx.attr.modules.items():
-        if label != repository_ctx.attr.label:
-            args.append("--module={}={}".format(label, source))
+        args.append("--module={}={}".format(label, source))
     args += [repository_ctx.path("."), repository_ctx.attr.subdir]
     result = repository_ctx.execute(args)
     if result.return_code != 0:

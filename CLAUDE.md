@@ -147,9 +147,10 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   `.bazelignore`, deleted-package and nested-workspace handling. Files from
   other repositories count only in the directories `tfconfig.ModuleDirs`
   gives, the ones `modscan` reads plus the submodules outside `modules/`
-  that counted files call with `//<subdir>` (resolved with `tfconfig.Match`
-  like the manifest, to a fixpoint), so a fetched module's examples never
-  reach the lock (`tf_modules_test`). Every `_tf_library` in `deps` is
+  that counted files call with `//<subdir>` (resolved with
+  `tfconfig.BestMatch` like the manifest, to a fixpoint), so a fetched
+  module's examples never reach the lock (`tf_modules_test`). Every
+  `_tf_library` in `deps` is
   queried, not only those with `module_source` (issue #60). It locks a
   scratch configuration from scratch,
   because `tofu providers lock` keeps an existing lock's versions and has
@@ -188,8 +189,22 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   included. go-getter is deliberately not a dependency: its root package
   pulls the S3 and GCS SDKs into every user's host-tools build. Version
   constraints are tofu's to check against `module_version`; don't
-  reimplement them. Matching calls to declared modules is `tfconfig.Match`,
-  shared by `modscan` and the manifest tool, never Starlark.
+  reimplement them. Which declared module provides a call is
+  `tfconfig.BestMatch`, shared by `modscan`, the manifest tool and `pin`,
+  never Starlark and never a comparison of the addresses as written: the
+  match leaving the shortest `//<subdir>` wins, so a submodule's own tag
+  beats its parent's however either is spelt (issue #97). All three must
+  resolve a call alike, or a library's deps, its manifest and the lock
+  disagree.
+- A module may call its own address with `//<subdir>` (issue #95), so each
+  tool counts the module among those a call can resolve to: `modscan` gets
+  every declared module with `--self` naming the one it describes (no dep on
+  itself, and the called directory joins what the library serves, to a
+  fixpoint), and a `tf_library` with `module_source` passes itself to
+  `modules_manifest` as `own`, listed but never `direct`. A call that lands
+  in the root's own package stays the root's own configuration (`childOwn`).
+  Two tags over one repository that call into each other are a Bazel
+  dependency cycle; that is not handled.
 - Files from other repositories sit at `external/<canonical repo>/`
   (`work_tree_path`); a relative `source` may not cross that boundary,
   since canonical names are Bazel's to change. Rule paths include

@@ -9,21 +9,26 @@
 // `error`. The extension uses it to tell registry, git and archive sources
 // apart and to find where each is fetched from.
 //
-//	modscan [--module=<label>=<source>...] <repository dir> <module dir>
+//	modscan [--module=<label>=<source>...] [--self=<label>] <repository dir> <module dir>
 //
 // describes a fetched module, for the repository rule that generates its
 // tf_library. <module dir> is relative to the repository ("" for its root),
-// and each --module is a declared tf_modules.module: its label and source.
+// each --module is a declared tf_modules.module, its label and source, and
+// --self is the label of the one being described.
 // The module's library serves the module and its submodules, which callers
 // reach with `//<subdir>`, so modscan scans the directories
 // tfconfig.ModuleDirs lists: the module directory, each directory below its
 // `modules/` (the standard place for submodules) that holds configuration,
-// and every directory those reach with local `source` paths. Examples and
-// tests are left out unless something calls them. It prints, as JSON:
+// every directory those reach with local `source` paths, and every
+// directory of the module's own that they call by its address with
+// `//<subdir>`. Examples and tests are left out unless something calls
+// them. It prints, as JSON:
 //
 //   - providers: every required provider, as `<host>/<namespace>/<name>`;
-//   - deps: the label of each declared module that a call uses (see
-//     tfconfig.Match; the longest source wins);
+//   - deps: the label of each other declared module that a call uses: the
+//     most specific match (tfconfig.BestMatch), as the modules manifest
+//     resolves the call. A call the module itself provides is satisfied
+//     with no dep;
 //   - undeclared: each call by address that no declared module provides,
 //     where it is, and the tf_modules.module tag that would declare it.
 package main
@@ -33,6 +38,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -41,7 +47,10 @@ import (
 	"github.com/benbirt/rules_tofu/tf/private/cmd/internal/tfconfig"
 )
 
-var declared = flags.StringList("module", "`<label>=<source>` of a declared module (repeatable)")
+var (
+	declared = flags.StringList("module", "`<label>=<source>` of a declared module (repeatable)")
+	self     = flag.String("self", "", "`label` of the declared module being described")
+)
 
 // Result is modscan's output.
 type Result struct {
@@ -72,7 +81,7 @@ func main() {
 	}
 	flag.Parse()
 	if flag.NArg() != 2 {
-		fmt.Fprintln(os.Stderr, "usage: modscan [--module=<label>=<source>...] <repository dir> <module dir>")
+		fmt.Fprintln(os.Stderr, "usage: modscan [--module=<label>=<source>...] [--self=<label>] <repository dir> <module dir>")
 		os.Exit(2)
 	}
 	var modules []Module
@@ -84,7 +93,7 @@ func main() {
 		}
 		modules = append(modules, Module{Label: label, Source: source})
 	}
-	result, err := scan(flag.Arg(0), flag.Arg(1), modules)
+	result, err := scan(flag.Arg(0), flag.Arg(1), modules, *self)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -95,67 +104,109 @@ func main() {
 	}
 }
 
-func scan(repo, moduleDir string, modules []Module) (*Result, error) {
-	dirs, err := tfconfig.ModuleDirs(repo, moduleDir)
-	if err != nil {
-		return nil, err
+// scan describes the module at moduleDir of repo. modules are the declared
+// modules, and self is the label of the one being described ("" if it isn't
+// among them).
+func scan(repo, moduleDir string, modules []Module, self string) (*Result, error) {
+	sources := make([]string, len(modules))
+	for i, m := range modules {
+		sources[i] = m.Source
 	}
-	providers := map[string]bool{}
-	calls := map[string]Call{}
-	for _, dir := range dirs {
-		abs := filepath.Join(repo, filepath.FromSlash(dir))
-		required, err := tfconfig.RequiredProviders(abs)
+	// resolve finds the declared module that provides a call, as the modules
+	// manifest will: the most specific.
+	resolve := func(source string) (*Module, string) {
+		i, subdir := tfconfig.BestMatch(sources, source)
+		if i < 0 {
+			return nil, ""
+		}
+		return &modules[i], subdir
+	}
+
+	// The directories of its own that the module calls by its address, as a
+	// caller would: `<self>//<subdir>`. They are part of what the library
+	// serves, like a directory a local path reaches, and may call others in
+	// turn, so read until no call adds one. A directory is marked before it
+	// is read, so calls that form a cycle, or name a directory with no
+	// configuration, end the loop all the same.
+	called := map[string]bool{}
+	var providers map[string]bool
+	var calls map[string]Call
+	for {
+		dirs, err := tfconfig.ModuleDirs(repo, moduleDir, sorted(called)...)
 		if err != nil {
 			return nil, err
 		}
-		for _, p := range required {
-			providers[p] = true
+		providers = map[string]bool{}
+		calls = map[string]Call{}
+		for _, dir := range dirs {
+			abs := filepath.Join(repo, filepath.FromSlash(dir))
+			required, err := tfconfig.RequiredProviders(abs)
+			if err != nil {
+				return nil, err
+			}
+			for _, p := range required {
+				providers[p] = true
+			}
+			found, err := tfconfig.ReadCalls(abs)
+			if err != nil {
+				return nil, err
+			}
+			for _, c := range found {
+				if tfconfig.IsLocal(c.Source) {
+					continue
+				}
+				where := c.Range.Filename
+				if rel, err := filepath.Rel(repo, where); err == nil {
+					where = filepath.ToSlash(rel)
+				}
+				if _, ok := calls[c.Source]; !ok {
+					calls[c.Source] = Call{Source: c.Source, Where: fmt.Sprintf("%s:%d", where, c.Range.Start.Line)}
+				}
+			}
 		}
-		found, err := tfconfig.ReadCalls(abs)
-		if err != nil {
-			return nil, err
-		}
-		for _, c := range found {
-			if tfconfig.IsLocal(c.Source) {
+		grew := false
+		for _, c := range calls {
+			m, subdir := resolve(c.Source)
+			if m == nil || m.Label != self {
 				continue
 			}
-			where := c.Range.Filename
-			if rel, err := filepath.Rel(repo, where); err == nil {
-				where = filepath.ToSlash(rel)
+			if dir := path.Join(moduleDir, subdir); !called[dir] {
+				called[dir] = true
+				grew = true
 			}
-			if _, ok := calls[c.Source]; !ok {
-				calls[c.Source] = Call{Source: c.Source, Where: fmt.Sprintf("%s:%d", where, c.Range.Start.Line)}
-			}
+		}
+		if !grew {
+			break
 		}
 	}
 
-	result := &Result{Providers: []string{}, Deps: []string{}, Undeclared: []Call{}}
-	for p := range providers {
-		result.Providers = append(result.Providers, p)
-	}
-	sort.Strings(result.Providers)
+	result := &Result{Providers: sorted(providers), Deps: []string{}, Undeclared: []Call{}}
 	deps := map[string]bool{}
 	for _, c := range calls {
-		var best *Module
-		for i := range modules {
-			m := &modules[i]
-			if _, ok := tfconfig.Match(m.Source, c.Source); ok && (best == nil || len(m.Source) > len(best.Source)) {
-				best = m
-			}
-		}
-		if best == nil {
+		switch m, _ := resolve(c.Source); {
+		case m == nil:
 			c.Tag = tagFor(c.Source)
 			result.Undeclared = append(result.Undeclared, c)
-		} else {
-			deps[best.Label] = true
+		case m.Label == self:
+			// The module's own files: nothing to depend on, and a library
+			// can't depend on itself.
+		default:
+			deps[m.Label] = true
 		}
 	}
-	for d := range deps {
-		result.Deps = append(result.Deps, d)
-	}
-	sort.Strings(result.Deps)
+	result.Deps = sorted(deps)
 	sort.Slice(result.Undeclared, func(i, j int) bool { return result.Undeclared[i].Source < result.Undeclared[j].Source })
 	return result, nil
+}
+
+// sorted is a set's members in order; never nil, so it encodes as `[]`.
+func sorted(set map[string]bool) []string {
+	members := make([]string, 0, len(set))
+	for m := range set {
+		members = append(members, m)
+	}
+	sort.Strings(members)
+	return members
 }
 
 // Parsed is one source as `modscan parse` reports it.

@@ -109,6 +109,76 @@ func TestMatch(t *testing.T) {
 	}
 }
 
+func TestBestMatch(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		providers []string
+		source    string
+		want      string // the provider picked, "" for none
+		subdir    string
+	}{
+		{
+			// Issue #97: the parent's address is the longer string.
+			name:      "a submodule beats its parent written with the host",
+			providers: []string{"registry.opentofu.org/acme/net/aws", "acme/net/aws//modules"},
+			source:    "acme/net/aws//modules/x",
+			want:      "acme/net/aws//modules",
+			subdir:    "x",
+		},
+		{
+			name:      "whatever the order",
+			providers: []string{"acme/net/aws//modules", "registry.opentofu.org/acme/net/aws"},
+			source:    "acme/net/aws//modules/x",
+			want:      "acme/net/aws//modules",
+			subdir:    "x",
+		},
+		{
+			name:      "the deepest of three",
+			providers: []string{"acme/net/aws//modules", "acme/net/aws//modules/x/y", "acme/net/aws"},
+			source:    "acme/net/aws//modules/x/y/z",
+			want:      "acme/net/aws//modules/x/y",
+			subdir:    "z",
+		},
+		{
+			name:      "a git shorthand parent and the URL of its submodule",
+			providers: []string{"git::https://github.com/o/r.git//modules", "github.com/o/r"},
+			source:    "github.com/o/r//modules/x",
+			want:      "git::https://github.com/o/r.git//modules",
+			subdir:    "x",
+		},
+		{
+			name:      "the parent when the submodule is not the one called",
+			providers: []string{"acme/net/aws//modules/x", "registry.opentofu.org/acme/net/aws"},
+			source:    "acme/net/aws//modules/y",
+			want:      "registry.opentofu.org/acme/net/aws",
+			subdir:    "modules/y",
+		},
+		{
+			name:      "the first of two spellings of one address",
+			providers: []string{"registry.opentofu.org/acme/net/aws", "acme/net/aws"},
+			source:    "acme/net/aws//modules/x",
+			want:      "registry.opentofu.org/acme/net/aws",
+			subdir:    "modules/x",
+		},
+		{
+			name:      "none",
+			providers: []string{"acme/dns/aws", "./local", ""},
+			source:    "acme/net/aws",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			i, subdir := BestMatch(tc.providers, tc.source)
+			got := ""
+			if i >= 0 {
+				got = tc.providers[i]
+			}
+			if got != tc.want || subdir != tc.subdir || (tc.want == "") != (i == -1) {
+				t.Errorf("BestMatch(%q, %q) = (%d %q, %q), want (%q, %q)", tc.providers, tc.source, i, got, subdir, tc.want, tc.subdir)
+			}
+		})
+	}
+}
+
 func TestNormalizeProvider(t *testing.T) {
 	for in, want := range map[string]string{
 		"hashicorp/aws":                       "registry.opentofu.org/hashicorp/aws",

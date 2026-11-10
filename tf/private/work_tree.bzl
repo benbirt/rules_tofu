@@ -268,7 +268,7 @@ def library_module(label, module_source, module_version):
         dir = package_dir(label),
     )
 
-def modules_manifest(ctx, work_tree_outputs, infos, providers_depset, root = None, test_dir = None):
+def modules_manifest(ctx, work_tree_outputs, infos, providers_depset, root = None, test_dir = None, own = None):
     """Emit the action writing this rule's `.terraform/modules/modules.json`.
 
     See //tf/private/cmd/modules: every module call from the root module down
@@ -292,6 +292,10 @@ def modules_manifest(ctx, work_tree_outputs, infos, providers_depset, root = Non
       test_dir: for a `tf_test`, the test files' directory relative to `root`
           ("" for `root` itself); the module each `run` block loads is
           recorded too. None for a rule with no test files.
+      own: for a `tf_library` with `module_source`, its own
+          `TfLibraryInfo.module`: its files may call that address with
+          `//<subdir>`, as its callers do. Listed as a module the calls can
+          resolve to, never as a direct dep, which must be used.
 
     Returns:
       File: the manifest.
@@ -300,7 +304,10 @@ def modules_manifest(ctx, work_tree_outputs, infos, providers_depset, root = Non
     for info in infos:
         if info.module:
             direct[info.module.label] = True
-    modules = depset(transitive = [info.modules for info in infos]).to_list()
+    modules = depset(
+        direct = [own] if own else [],
+        transitive = [info.modules for info in infos],
+    ).to_list()
     listing = ctx.actions.declare_file(ctx.label.name + ".modules_deps.json")
     ctx.actions.write(
         output = listing,
