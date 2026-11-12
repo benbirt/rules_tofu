@@ -132,6 +132,16 @@ jobs:
       # file.
       - name: Check .bazelversion files are in sync
         run: |
+          # The integration tests run a nested workspace on the Bazel that
+          # runs them, whatever its .bazelversion says, so a workspace
+          # without the file passes them, and the checks below, which find
+          # workspaces by it, would not see it at all.
+          for m in $(git ls-files ':(glob)e2e/*/MODULE.bazel' ':(glob)tests/integration/*/MODULE.bazel'); do
+            if [ ! -f "$(dirname "$m")/.bazelversion" ]; then
+              echo "::error::$(dirname "$m") has a MODULE.bazel but no .bazelversion. Copy the root file."
+              exit 1
+            fi
+          done
           for f in $(git ls-files '*/.bazelversion'); do
             if ! cmp -- .bazelversion "$f"; then
               echo "::error::$f is out of sync with the root .bazelversion. Keep all copies identical to the root file."

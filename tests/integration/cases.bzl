@@ -10,12 +10,18 @@ def case_line(case_name, command, target, pattern):
         pattern: the substring expected in the failing command's stderr.
 
     Returns:
-        The `|`-separated line, after checking no field contains the
-        separator, a newline or a `$`.
+        The `|`-separated line, after checking no field is empty or contains
+        the separator, a newline or a `$`, and the name no comma.
     """
     if command not in ("build", "run"):
         fail("case {}: command must be `build` or `run`, not {}".format(case_name, repr(command)))
+    if "," in case_name:
+        fail("case name {} may not contain a comma, which separates the names in ONLY_CASES".format(repr(case_name)))
     for field in (case_name, command, target, pattern):
+        # An empty name is a line the driver skips, and an empty fragment is
+        # in every output.
+        if not field:
+            fail("case {}: no field may be empty".format(repr(case_name)))
         if "|" in field or "\n" in field:
             fail("case field {} may contain neither `|` nor a newline".format(repr(field)))
 

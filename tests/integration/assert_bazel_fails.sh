@@ -45,8 +45,7 @@ echo "  date:               $(date -u)" >&2
 cd "${BIT_WORKSPACE_DIR}"
 
 only=",${ONLY_CASES:-},"
-# Counted before the loop reads CASES, so that a case which swallowed the
-# rest of it (see below) can't also shorten the count.
+# Every non-empty line of CASES is a case the loop below must run.
 expected="$(grep -c . <<<"${CASES}" || true)"
 passed=()
 failed=()
