@@ -11,11 +11,16 @@ def case_line(case_name, command, target, pattern):
 
     Returns:
         The `|`-separated line, after checking no field contains the
-        separator or a newline.
+        separator, a newline or a `$`.
     """
     if command not in ("build", "run"):
         fail("case {}: command must be `build` or `run`, not {}".format(case_name, repr(command)))
     for field in (case_name, command, target, pattern):
         if "|" in field or "\n" in field:
             fail("case field {} may contain neither `|` nor a newline".format(repr(field)))
+
+        # The line travels in a test's `env`, where `$(...)` is a Make
+        # variable and a lone `$` an error.
+        if "$" in field:
+            fail("case field {} may not contain `$`, which a test's `env` would expand as a Make variable".format(repr(field)))
     return "|".join([case_name, command, target, pattern])

@@ -1,7 +1,7 @@
 """Module declaration for the nested Bazel invocation that exercises the
-`.fmt` and `.fmt_check` targets `tf_library` and `tf_deploy` generate: they
-act on the files in `srcs` by name, in subdirectories too, and on nothing
-else in the package.
+`.fmt` and `.fmt_check` targets `tf_library`, `tf_deploy` and `tf_test`
+generate: they act on the files in `srcs` by name, in subdirectories too,
+and on nothing else in the package.
 """
 
 module(

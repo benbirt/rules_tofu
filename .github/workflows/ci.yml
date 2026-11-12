@@ -53,9 +53,11 @@ jobs:
       # A cache is saved only while its key is new, so the repository cache
       # is keyed on every file that decides what gets downloaded: the
       # nested workspaces' modules and the lockfile (module facts) as well as
-      # the root MODULE.bazel, and the pinned tofu releases. With the default
-      # key (MODULE.bazel alone) a dependency bump through the lockfile, or a
-      # provider the integration tests fetch, was never saved.
+      # the root MODULE.bazel, the pinned tofu releases, and the OpenTofu
+      # locks (and the one versions.tf a test pins from) that name the
+      # providers locked repos fetch. With the default key (MODULE.bazel
+      # alone) a dependency bump through the lockfile, or a provider the
+      # integration tests fetch, was never saved.
       - name: Set up Bazel
         uses: bazel-contrib/setup-bazel@0.19.1
         with:
@@ -67,8 +69,12 @@ jobs:
             - MODULE.bazel
             - MODULE.bazel.lock
             - e2e/smoke/MODULE.bazel
-            - tests/integration/*/MODULE.bazel
+            - tests/integration/**/MODULE.bazel
             - toolchain/versions.bzl
+            - examples/lock/.terraform.lock.hcl
+            - tests/integration/broken_workspace/lock/.terraform.lock.hcl
+            - tests/integration/lock_update/bumped.lock.hcl
+            - tests/integration/lock_update/versions.tf
 
       # On the pinned version, a MODULE.bazel.lock that needs any update
       # (e.g. a provider digest not yet recorded as a fact) fails the build
@@ -131,6 +137,23 @@ jobs:
               echo "::error::$f is out of sync with the root .bazelversion. Keep all copies identical to the root file."
               exit 1
             fi
+          done
+
+      # Building a nested workspace in its own directory leaves bazel-*
+      # symlinks there that lead back to this repository, and a `//...` from
+      # the root would then loop through them. .bazelignore takes no
+      # patterns, so each workspace's four are listed, and a new workspace
+      # is easily forgotten.
+      - name: Check .bazelignore covers every nested workspace
+        run: |
+          for f in $(git ls-files '*/.bazelversion'); do
+            dir=$(dirname "$f")
+            for link in bin out testlogs "$(basename "$dir")"; do
+              if ! grep -q -x -F "$dir/bazel-$link" .bazelignore; then
+                echo "::error::.bazelignore lacks $dir/bazel-$link. List the four bazel-* symlinks of every nested workspace."
+                exit 1
+              fi
+            done
           done
 
       # Go sources are formatted by gofmt, which buildifier does not cover.

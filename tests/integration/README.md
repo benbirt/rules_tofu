@@ -1,43 +1,50 @@
-# Negative integration tests
+# Integration tests
 
-Bazel-in-Bazel tests that assert misuses of `tf_library` /
-`tf_deploy` fail with the error messages the rules promise.
+Bazel-in-Bazel tests: each runs a nested Bazel on a sub-workspace that
+uses rules_tofu as a downstream module would. The negative ones assert
+that misuses of the rules fail with the error messages the rules promise;
+the positive ones drive whole workflows (pinning, fetching modules,
+formatting, running a deploy's launchers).
 
 ## Layout
 
 ```
 tests/integration/
-├── BUILD.bazel              one bazel_integration_test for broken_workspace's
-│                            cases, one per case with its own sub-workspace
-├── assert_bazel_fails.sh    runs each case's nested bazel (build or run) and
-│                            asserts non-zero exit + stderr fragment
-├── broken_workspace/        sub-workspace for the nested bazel
-│   ├── MODULE.bazel
-│   ├── .bazelversion
-│   └── cases/
-│       ├── auto_tfvars_conflict/{BUILD.bazel, main.tf, rules_tofu.auto.tfvars.json}
-│       ├── auto_tfvars_in_data/ variables files tofu loads by itself, as data
-│       ├── conflicting_providers/{BUILD.bazel, main.tf}
-│       ├── duplicate_vars/{BUILD.bazel, main.tf, extra.tfvars.json}
-│       ├── ephemeral_state_refused/{BUILD.bazel, main.tf}
-│       ├── local_backend_refused/{BUILD.bazel, main.tf}
-│       ├── module_*/            module_source misuses (see BUILD.bazel)
-│       ├── lock_file_smuggled/{BUILD.bazel, main.tf, .terraform.lock.hcl}
-│       ├── malformed_var_file/{BUILD.bazel, main.tf, bad.tfvars.json}
-│       ├── missing_provider/{BUILD.bazel, main.tf}
-│       └── validate_fails/{BUILD.bazel, main.tf}
-├── broken_module/           second sub-workspace: the break is the
-│   ├── MODULE.bazel         module graph itself (two root tofu.version
-│   ├── .bazelversion        tags), so it needs its own declaration
-│   └── cases/
-│       └── duplicate_root_version/{BUILD.bazel, main.tf}
-└── custom_toolchain/        the root module registers its own `tofu`
-    ├── MODULE.bazel         toolchain; its stand-in binary fails with a
-    ├── .bazelversion        message that proves it was selected
-    ├── BUILD.bazel
-    ├── tofu.sh
-    └── main.tf
+├── BUILD.bazel              the tests: one for broken_workspace's cases, one
+│                            per case with a sub-workspace of its own, and
+│                            the positive tests
+├── cases.bzl                the line format of a case
+├── running_bazel.bzl        the nested Bazel's version: the running one
+├── nested_bazel.sh          sourced by every driver: the nested `bazel`
+├── assert_bazel_fails.sh    driver of the negative tests: runs each case's
+│                            nested bazel (build or run) and asserts a
+│                            non-zero exit and a stderr fragment
+├── *_test.sh                drivers of the positive tests, one each
+├── broken_workspace/        negative cases that share one MODULE.bazel
+│   ├── cases/<case>/        one package per case; BUILD.bazel lists them
+│   └── lock/                the workspace's `from_lock` lock and versions.tf
+├── broken_module/           negative: the break is the module graph itself
+│                            (two root tofu.version tags)
+├── lock_dependency/         negative: a dependency's `from_lock` is ignored
+├── custom_toolchain/        the root module registers its own `tofu`
+│                            toolchain; its stand-in binary fails with a
+│                            message that proves it was selected
+├── lock_update/             positive: `pin`, then a bot's lock update
+├── module_dependency/       positive: modules from other Bazel modules
+├── tf_modules/              positive: the tf_modules extension
+├── run_directory/           positive: a deploy's launchers, run for real
+└── fmt/                     positive: `.fmt` and `.fmt_check`
 ```
+
+Every sub-workspace has its own `MODULE.bazel` and a `.bazelversion`
+identical to the root's. A case's files are whatever its failure needs;
+its `BUILD.bazel` says what it misuses.
+
+`lock_dependency/` holds a root module without a lock and `lib_module`, a
+dependency whose `from_lock` names a file that isn't a lock at all. The
+dependency's tag must be ignored and its lock never read, so building the
+dependency's library fails only for want of the provider, which the root
+doesn't supply.
 
 `lock_update/` and its driver `lock_update_test.sh` are a positive
 test: a workspace's first `@tf_providers//:pin`, with the provider already
@@ -75,6 +82,17 @@ relative path from another directory without `bazel run`'s environment,
 must find that state and destroy the resource; and `//app:deploy.plan` must
 then plan against the same state.
 
+`fmt/` and its driver `fmt_test.sh` cover the `.fmt` and `.fmt_check`
+targets, which act on the files in `srcs` by name: a target whose `srcs`
+are all in a subdirectory passes its check; a library's unformatted `.tf`
+and `.tofu` files in subdirectories fail its check, each named, as a
+`tf_test`'s `.tftest.hcl` fails that target's; `.fmt` rewrites exactly those
+and leaves the package's file outside `srcs` byte-identical; and a target
+without `srcs` has neither target. The driver ends by building the whole
+workspace, so the fixture stays a shape the rules accept. Which extensions
+`tofu fmt` accepts by name is the binary's to decide, so there is one
+`fmt_<version>_test` per pinned tofu version.
+
 `broken_workspace` shares one `MODULE.bazel` across all of its cases, so a
 case whose failure lives in the module graph cannot go there — it gets a
 sub-workspace of its own. `BUILD.bazel` names the workspace per case row
@@ -91,8 +109,8 @@ test.
 The child workspace packages are excluded from the parent Bazel via
 the `--deleted_packages` flag in `.bazelrc` (the "deleted packages"
 trick recommended by `rules_bazel_integration_test`), so the outer
-Bazel never analyzes the intentionally-failing case targets when
-expanding `//...`.
+Bazel never analyses the sub-workspaces' targets, the intentionally
+failing ones among them, when expanding `//...`.
 
 ## Case lists
 
@@ -118,10 +136,11 @@ Each row becomes a `name|command|target|fragment` line of the driver's
 bazel test //tests/integration:all
 ```
 
-Each test spawns a nested Bazel that materializes the case's work tree
-and runs `tofu init/validate` (or the dupcheck action), or — for a
-run-mode case — launches the deploy's runner; the driver checks the
-failure mode.
+Each test spawns a nested Bazel. For a negative case it materialises the
+case's work tree and runs `tofu init/validate` (or the dupcheck action),
+or — for a run-mode case — launches the deploy's runner, and the driver
+checks the failure mode. A positive test's driver runs the steps its
+header lists.
 
 The nested Bazel is the same version as the Bazel running the tests
 (`@running_bazel` in the root `MODULE.bazel`), whatever a sub-workspace's
@@ -156,7 +175,9 @@ bazel test //tests/integration:broken_workspace_test \
    byte-identical to the root one, and a case package holding whatever
    target forces the broken part to be evaluated. Module extensions are
    lazy, so check empirically that the target you pick actually triggers
-   the failure. Register the new workspace in `_WORKSPACE_FILES`.
+   the failure. Register the new workspace in `_WORKSPACE_FILES`, and
+   list its four `bazel-*` symlinks in the root `.bazelignore` (CI's lint
+   job checks both this and the `.bazelversion`).
 2. Add a row to `tests/integration/BUILD.bazel`:
    `("<case>", "<workspace>", "//cases/<case>:<target>", "<stderr-fragment>")`.
    Put it in `_CASES` if `bazel build` on the target fails, or in
@@ -181,12 +202,3 @@ opt-in direction, and a launcher run outside `bazel run`, are covered by
 Still untested end-to-end: a remote backend reaching tofu, and
 `tf_providers` module-resolution errors. These can be addressed in
 future testing passes if needed.
-
-`fmt/` and its driver `fmt_test.sh` cover the `.fmt` and `.fmt_check`
-targets, which act on the files in `srcs` by name: a target whose `srcs`
-are all in a subdirectory passes its check; unformatted `.tf`, `.tofu` and
-`.tftest.hcl` files in subdirectories fail it, each named; `.fmt` rewrites
-exactly those and leaves the package's file outside `srcs` byte-identical;
-and a target without `srcs` has neither target. Which extensions `tofu fmt`
-accepts by name is the binary's to decide, so there is one
-`fmt_<version>_test` per pinned tofu version.
