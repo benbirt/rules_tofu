@@ -140,7 +140,9 @@ tf_deploy_rule = rule(
             doc = "`tf_library` targets this deploy composes.",
         ),
         "vars": attr.string_dict(
-            doc = "Variable values bound to this deploy. Rendered to rules_tofu.auto.tfvars.json.",
+            doc = "Variable values bound to this deploy, each a string. Rendered to " +
+                  "rules_tofu.auto.tfvars.json, where OpenTofu converts a string to a variable's " +
+                  "declared `number` or `bool` type; a list, map or object value goes in `var_files`.",
         ),
         "var_files": attr.label_list(
             allow_files = [".tfvars.json", ".tfvars"],
@@ -217,7 +219,10 @@ def tf_deploy(name, srcs = None, deps = None, vars = None, var_files = None, dat
       name: target name.
       srcs: optional deploy-local .tf/.tf.json/.tofu/.tofu.json/.tftpl/.hcl files (e.g. provider/backend config).
       deps: `tf_library` targets to compose.
-      vars: dict of variable name -> value, rendered to rules_tofu.auto.tfvars.json.
+      vars: dict of variable name -> string value, rendered to
+          rules_tofu.auto.tfvars.json. OpenTofu converts a string to a
+          variable's declared `number` or `bool` type; a list, map or object
+          value goes in `var_files`.
       var_files: `.tfvars.json` or `.tfvars` files passed to tofu with `-var-file`.
           Any label works, e.g. a genrule output. Keys must not overlap with
           `vars` or other `var_files` entries; a duplicate key fails

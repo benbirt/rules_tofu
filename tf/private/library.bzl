@@ -109,8 +109,8 @@ _tf_library = rule(
             doc = "Arbitrary files to include alongside the Terraform sources in the work tree. " +
                   "Use to expose files for `file()` calls in Terraform configs. " +
                   "Variables files that OpenTofu loads by itself (`terraform.tfvars[.json]`, " +
-                  "`*.auto.tfvars[.json]`) are rejected: values come through the `vars` or " +
-                  "`var_files` of a `tf_deploy` or `tf_test`.",
+                  "`*.auto.tfvars[.json]`) are rejected: values come through a `tf_deploy`'s " +
+                  "`vars`, or the `var_files` of a `tf_deploy` or `tf_test`.",
         ),
         "providers": attr.label_list(
             providers = [TfProviderInfo],
@@ -192,8 +192,8 @@ def tf_library(name, srcs = None, deps = None, data = None, providers = None, mo
       data: arbitrary files to include in the work tree for `file()` calls.
           Variables files that OpenTofu loads by itself
           (`terraform.tfvars[.json]`, `*.auto.tfvars[.json]`) are rejected:
-          values come through the `vars` or `var_files` of a `tf_deploy` or
-          `tf_test`.
+          values come through a `tf_deploy`'s `vars`, or the `var_files` of a
+          `tf_deploy` or `tf_test`.
       providers: providers (`@tf_providers//<namespace>/<name>`, from the
           `tf_providers` extension in MODULE.bazel) that this library
           references in `required_providers`. Propagates transitively to any
