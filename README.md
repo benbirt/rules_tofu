@@ -197,6 +197,10 @@ tf_providers.from_lock()  # reads //:.terraform.lock.hcl; pass lock = "..." for 
 use_repo(tf_providers, "tf_providers")
 ```
 
+The lock is named by a label, so its directory must be a Bazel package: if
+the workspace has no `BUILD.bazel` beside the lock, add one, which may be
+empty.
+
 Name each provider in the `providers` of the libraries and deploys that use
 it, then write the lock with:
 
@@ -322,7 +326,10 @@ use_repo(tf_providers, "tf_providers")
 
 Tagged providers are named like any other and are left out of the lock by
 `pin`. When several Bazel modules tag the same provider, the root module's
-tag or lock wins; otherwise the highest version is used. See
+tag or lock wins; otherwise the version they agree on is used, or the
+highest of those they ask for. Versions that differ must be plain numeric
+ones to be ordered: for a prerelease such as `2.0.0-rc1` the build fails,
+asking the root module to choose. See
 [`examples/aws`](examples/aws), [`examples/gcp`](examples/gcp) and
 [`examples/posthog`](examples/posthog).
 

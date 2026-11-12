@@ -10,6 +10,7 @@ load(
     "//tf/providers:source.bzl",
     "check_url_template",
     "download_location",
+    "highest_version",
     "is_provider_binary",
     "parse_source",
     "published_platforms",
@@ -231,6 +232,71 @@ def _provider_binary_names_test_impl(ctx):
 
 _provider_binary_names_test = unittest.make(_provider_binary_names_test_impl)
 
+def _request(version, mod_name):
+    return struct(version = version, mod_name = mod_name)
+
+def _highest_version_test_impl(ctx):
+    env = unittest.begin(ctx)
+
+    # One request, or several that agree, is the answer whatever it looks
+    # like: nothing is ordered, so a prerelease is fine.
+    for version in ["5.70.0", "1.2.0-rc1", "not a version"]:
+        for requests in [[_request(version, "a")], [_request(version, "a"), _request(version, "b")]]:
+            resolved = highest_version("acme/thing", requests)
+            asserts.equals(env, None, resolved.error)
+            asserts.equals(env, version, resolved.version)
+
+    # Differing numeric versions: the highest, compared as numbers.
+    for versions, want in [
+        (["5.9.0", "5.70.0"], "5.70.0"),
+        (["5.70.0", "5.9.0"], "5.70.0"),
+        (["1.10.0", "1.9.9", "1.2.3"], "1.10.0"),
+        (["2", "1.99.99"], "2"),
+        (["3.0.1", "3.0", "3"], "3.0.1"),
+        # Equal once padded: the first named stays.
+        (["5.70", "5.70.0"], "5.70"),
+        (["5.70.0", "5.70"], "5.70.0"),
+    ]:
+        resolved = highest_version("acme/thing", [_request(v, "m" + v) for v in versions])
+        asserts.equals(env, None, resolved.error, "for {}".format(versions))
+        asserts.equals(env, want, resolved.version, "for {}".format(versions))
+
+    return unittest.end(env)
+
+_highest_version_test = unittest.make(_highest_version_test_impl)
+
+def _highest_version_unorderable_test_impl(ctx):
+    env = unittest.begin(ctx)
+
+    # A prerelease among differing versions can't be ordered. The error names
+    # the provider, each version with the modules that ask for it (once
+    # each), and the way out.
+    resolved = highest_version("acme/thing", [
+        _request("1.9.0", "net"),
+        _request("2.0.0-rc1", "dns"),
+        _request("1.9.0", "app"),
+        _request("2.0.0-rc1", "dns"),
+    ])
+    asserts.equals(env, None, resolved.version)
+    asserts.equals(
+        env,
+        "Provider `acme/thing` is tagged with different versions by modules the root module " +
+        "depends on: `1.9.0` (from `net`, `app`), `2.0.0-rc1` (from `dns`). rules_tofu can only " +
+        "order plain numeric versions, and `2.0.0-rc1` is not one. Tag the provider in the root " +
+        "module's MODULE.bazel, or pin it with `tf_providers.from_lock`, to choose a version.",
+        resolved.error,
+    )
+
+    # So is anything else that isn't dot-separated digits.
+    for bad in ["v1.2.3", "1.2.x", "1..2", "", "1.2.3+build"]:
+        resolved = highest_version("acme/thing", [_request("1.0.0", "a"), _request(bad, "b")])
+        asserts.equals(env, None, resolved.version, "for {}".format(repr(bad)))
+        asserts.true(env, "`{}` is not one".format(bad) in resolved.error, "for {}: {}".format(repr(bad), resolved.error))
+
+    return unittest.end(env)
+
+_highest_version_unorderable_test = unittest.make(_highest_version_unorderable_test_impl)
+
 def source_test_suite(name):
     """Declares the `source.bzl` unit tests.
 
@@ -251,4 +317,6 @@ def source_test_suite(name):
         _registry_shasum_test,
         _cached_facts_validated_test,
         _provider_binary_names_test,
+        _highest_version_test,
+        _highest_version_unorderable_test,
     )

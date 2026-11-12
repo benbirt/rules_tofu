@@ -28,7 +28,7 @@ BUILD files then name each provider as `@tf_providers//<namespace>/<name>`.
 # evaluations and fresh clones reuse.
 #
 # Tags for the same `source` resolve to one version: the root module's, else
-# the highest. `sha256` maps for the winning version are unioned across
+# the highest (`highest_version`). `sha256` maps for the winning version are unioned across
 # modules; conflicting digests or `url_template`s fail. The tofu extension
 # resolves differently (the root arbitrates and disagreeing dependencies are
 # an error): a provider is a per-configuration artefact a library depends on,
@@ -58,6 +58,7 @@ load(
     "DEFAULT_PLATFORMS",
     "check_url_template",
     "download_location",
+    "highest_version",
     "is_provider_binary",
     "parse_source",
     "published_platforms",
@@ -95,39 +96,6 @@ def _split_platform_key(platform_key):
     if len(parts) != 2 or not parts[0] or not parts[1]:
         fail("provider platform key must be \"<os>_<arch>\", got {}".format(repr(platform_key)))
     return parts[0], parts[1]
-
-def _parse_version(version):
-    """Parse a version string into a list of integers for comparison.
-
-    Handles standard semver `major.minor.patch`. Pre-release suffixes are
-    not supported and will cause a fail().
-    """
-    parts = version.split(".")
-    result = []
-    for part in parts:
-        if not part.isdigit():
-            fail("Cannot parse version component `{}` in version `{}`; only numeric components are supported".format(part, version))
-        result.append(int(part))
-    return result
-
-def _version_gt(a, b):
-    """Return True if version string `a` is strictly greater than `b`."""
-    pa = _parse_version(a)
-    pb = _parse_version(b)
-
-    # Pad the shorter list with zeros so [5, 70] and [5, 70, 0] compare equal.
-    max_len = max(len(pa), len(pb))
-    for _ in range(max_len - len(pa)):
-        pa.append(0)
-    for _ in range(max_len - len(pb)):
-        pb.append(0)
-
-    for i in range(max_len):
-        if pa[i] > pb[i]:
-            return True
-        if pa[i] < pb[i]:
-            return False
-    return False
 
 def _format_dict(attr_name, entries):
     """Format `entries` as a Starlark dict attribute for the generated BUILD.
@@ -548,7 +516,9 @@ _from_lock_tag = tag_class(
     attrs = {
         "lock": attr.label(
             doc = "The workspace's `.terraform.lock.hcl`. Defaults to `//:.terraform.lock.hcl`. " +
-                  "The file need not exist yet: `bazel run @tf_providers//:pin` writes it.",
+                  "The file need not exist yet: `bazel run @tf_providers//:pin` writes it. " +
+                  "Its directory must be a Bazel package, as for any label: one with a " +
+                  "`BUILD.bazel` file, which may be empty.",
         ),
     },
 )
@@ -671,11 +641,11 @@ def _tf_providers_extension_impl(module_ctx):
             # Root module wins unconditionally.
             resolved_version = root_tags[0].version
         else:
-            # Pick the highest version across all tags.
-            resolved_version = tags[0].version
-            for t in tags[1:]:
-                if _version_gt(t.version, resolved_version):
-                    resolved_version = t.version
+            # The one version the tags agree on, else the highest.
+            highest = highest_version(source, tags)
+            if highest.error:
+                fail(highest.error)
+            resolved_version = highest.version
 
         # Merge sha256 maps from all tags that declared the winning version.
         merged_sha256 = {}
@@ -801,8 +771,8 @@ download is checked against a digest: the lock's, a tag's `sha256`, or the
 registry's, recorded in MODULE.bazel.lock.
 
 Each provider resolves to one version across the module graph. The root
-module's lock or tag wins; otherwise the highest version any module tags is
-used.
+module's lock or tag wins; otherwise the version the other modules' tags agree
+on is used, or the highest of them, which must then be plain numeric versions.
 
 Only `tf_providers` needs a `use_repo`.
 """,

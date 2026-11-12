@@ -275,7 +275,11 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   tested from `//toolchain/tests`; the extension owns the `fail()`. Don't
   fold it inline or make it last-write-wins. Providers stay "root wins,
   else highest version": a provider is a per-configuration artefact, the
-  tofu binary is one global tool.
+  tofu binary is one global tool. That is `highest_version` in
+  `tf/providers/source.bzl`, pure and unit-tested like the other: tags that
+  agree are never parsed, and differing ones must be plain numeric or it
+  returns an error naming the modules (issue #98). Don't add prerelease
+  ordering: which of `2.0.0-rc1` and `1.9.0` to use is the root's call.
 - OpenTofu is downloaded, not built from source, and that is a decision,
   not a gap (`versions.bzl` has the reasoning; README, "Non-goals"). Don't
   reintroduce a from-source TODO. `toolchain/versions.bzl` is written by

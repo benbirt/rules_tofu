@@ -188,6 +188,69 @@ def valid_cached_sha256s(cached):
             return False
     return True
 
+def _numeric_version(version):
+    """`version` as a list of integers, or None unless it is dot-separated digits."""
+    parts = []
+    for part in version.split("."):
+        if not part.isdigit():
+            return None
+        parts.append(int(part))
+    return parts
+
+def highest_version(source, requests):
+    """The version of a provider that modules other than the root tag, and the root doesn't.
+
+    When every request names the same version, that is the answer, whatever
+    it looks like. Differing versions are ordered numerically, component by
+    component (`5.70` equals `5.70.0`), and the highest wins, the first named
+    of equals. That is all the ordering there is: a prerelease among
+    differing versions is an error, since which of `2.0.0-rc1` and `1.9.0`
+    a build should use is the root module's call, not a guess to make here.
+
+    Args:
+        source: The provider's `<namespace>/<name>`, for the error.
+        requests: A non-empty list of structs with `version` and `mod_name`,
+            in the order the tags were read.
+
+    Returns:
+        `struct(version, error)`: one of the two is None.
+    """
+    modules = {}
+    for request in requests:
+        names = modules.setdefault(request.version, [])
+        if request.mod_name not in names:
+            names.append(request.mod_name)
+    if len(modules) == 1:
+        return struct(version = requests[0].version, error = None)
+
+    best = None
+    best_parts = None
+    for version in modules:
+        parts = _numeric_version(version)
+        if parts == None:
+            return struct(version = None, error = (
+                "Provider `{}` is tagged with different versions by modules the root module " +
+                "depends on: {}. rules_tofu can only order plain numeric versions, and `{}` is " +
+                "not one. Tag the provider in the root module's MODULE.bazel, or pin it with " +
+                "`tf_providers.from_lock`, to choose a version."
+            ).format(
+                source,
+                ", ".join([
+                    "`{}` (from {})".format(v, ", ".join(["`{}`".format(name) for name in names]))
+                    for v, names in modules.items()
+                ]),
+                version,
+            ))
+        if best == None:
+            best, best_parts = version, parts
+            continue
+
+        # Pad the shorter with zeros, so that 5.70 and 5.70.0 compare equal.
+        width = max(len(parts), len(best_parts))
+        if parts + [0] * (width - len(parts)) > best_parts + [0] * (width - len(best_parts)):
+            best, best_parts = version, parts
+    return struct(version = best, error = None)
+
 def check_url_template(url_template):
     """Check that `url_template` only uses known placeholders.
 
