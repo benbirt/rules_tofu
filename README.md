@@ -659,15 +659,18 @@ a module that is called, and no rule accepts them (see
 [Restrictions](#restrictions)).
 
 A module's `tf_library` carries the providers its `required_providers`
-name, and its `modules/` submodules', so callers don't list them. A
-submodule outside `modules/` that you call by `//<subdir>` is different: the
-library is generated when the module is fetched, before anything calls it, so
-its providers go in the caller's `providers`. The build fails naming the
+name, its `modules/` submodules', and those of any other directory of its
+own that it calls, by a relative path or by its own address with
+`//<subdir>`, so callers don't list them. A submodule outside `modules/`
+that only you call by `//<subdir>` is different: the library is generated
+when the module is fetched, before anything calls it, so its providers go
+in the caller's `providers`. The build fails naming the
 `@tf_providers//<namespace>/<name>` to add when one is missing. The root
 module still pins them all, with tags or in its lock, which `pin` writes to
 cover them, those submodules included. A module that calls
 other modules by address needs them declared too: fetching it fails
-otherwise, naming the `tf_modules.module` to add. Each module has one
+otherwise, naming the `tf_modules.module` to add. Its calls to its own
+address need nothing more. Each module has one
 version per build. For a registry module the root module's tag wins, else
 the highest version requested.
 
@@ -743,12 +746,18 @@ such library a package of its own.
 
 A call matches the library in `deps` (direct or transitive) whose
 `module_source` is its `source`, or the one whose `module_source` plus
-`//<subdir>` is, the longest such. `tf_modules` sets `module_source` to the
-tag's `source`. Sources are read as OpenTofu reads them: a registry address
-matches with or without the default `registry.opentofu.org/` host, and the
-`github.com/<owner>/<repo>` shorthand matches the git URL it stands for. Other
-addresses must match exactly, `?ref=` included. A `source` must be a literal
-string.
+`//<subdir>` is. When several do, the most specific wins, the one that
+leaves the shortest `//<subdir>`: a submodule declared by itself provides
+the calls into it, not the module that contains it. `tf_modules` sets
+`module_source` to the tag's `source`. Sources are read as OpenTofu reads
+them: a registry address matches with or without the default
+`registry.opentofu.org/` host, and the `github.com/<owner>/<repo>` shorthand
+matches the git URL it stands for. Other addresses must match exactly,
+`?ref=` included. A `source` must be a literal string.
+
+A module may call its own address with `//<subdir>`, as some do rather than
+use a relative path: a library with `module_source` provides those calls
+itself.
 
 The build fails when:
 

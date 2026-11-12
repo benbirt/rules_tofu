@@ -72,6 +72,7 @@ def _tf_library_impl(ctx):
             work_tree_outputs,
             [d[TfLibraryInfo] for d in ctx.attr.deps],
             providers_depset,
+            own = module,
         ),
         lock = _provider_lock(ctx, providers_depset),
     )

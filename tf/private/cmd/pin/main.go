@@ -321,7 +321,8 @@ const queryPartialExitCode = 3
 // tfconfig.ModuleDirs gives for it: its own, those under its `modules/`, and
 // the submodules outside `modules/` that the files counted so far call with
 // `//<subdir>` (resolved as the modules manifest resolves a call: the dep
-// whose module_source matches, the longest winning), which may call others.
+// whose module_source matches, the most specific winning), which may call
+// others.
 // A module that a `run` block of a tf_test's test file loads counts as such a
 // call from the root module; the tests themselves hold no required_providers.
 //
@@ -441,23 +442,25 @@ func (l *library) serves() ([]string, error) {
 	return tfconfig.ModuleDirs(l.root, l.Package, called...)
 }
 
-// lookup finds the library whose module_source provides a call to source
-// (tfconfig.Match) and the subdirectory of the library's own that the call
-// uses ("" for the library's own). When several match, the longest
-// module_source wins, as in the modules manifest: a submodule's own library
-// beats its parent's.
+// lookup finds the library whose module_source provides a call to source and
+// the subdirectory of the library's own that the call uses ("" for the
+// library's own). When several match, the most specific wins
+// (tfconfig.BestMatch), as in the modules manifest: a submodule's own
+// library beats its parent's.
 func lookup(libraries []*library, source string) (*library, string) {
-	var best *library
-	var bestSubdir string
+	var candidates []*library
+	var sources []string
 	for _, l := range libraries {
-		if l.ModuleSource == "" {
-			continue
-		}
-		if subdir, ok := tfconfig.Match(l.ModuleSource, source); ok && (best == nil || len(l.ModuleSource) > len(best.ModuleSource)) {
-			best, bestSubdir = l, subdir
+		if l.ModuleSource != "" {
+			candidates = append(candidates, l)
+			sources = append(sources, l.ModuleSource)
 		}
 	}
-	return best, bestSubdir
+	i, subdir := tfconfig.BestMatch(sources, source)
+	if i < 0 {
+		return nil, ""
+	}
+	return candidates[i], subdir
 }
 
 // target is one object of `bazel query --output=streamed_jsonproto`: a

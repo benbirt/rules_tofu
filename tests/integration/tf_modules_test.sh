@@ -5,6 +5,8 @@
 #
 #   1. fixtures/network becomes a git repository with an annotated tag v1.0.0,
 #      and fixtures/dns an archive; @FIXTURES@ and @DNS_SHA256@ are filled in.
+#      The git module calls a submodule of its own by its own address, which
+#      it provides itself (issue #95).
 #      The git repository also gets what a real one may hold: a BUILD file, a
 #      file named `files` at its root and one named `module` in the module's
 #      directory (the names of the generated targets once collided with
@@ -58,6 +60,11 @@ git_() {
 
 echo "--- 1. fixtures ---" >&2
 mv "${FIXTURES}/network" "${FIXTURES}/network.git"
+# The module's call to its own address must name this repository.
+sed -i.bak "s|@FIXTURES@|${FIXTURES}|g" "${FIXTURES}/network.git/vpc/main.tf"
+rm "${FIXTURES}/network.git/vpc/main.tf.bak"
+grep -q -F "git::file://${FIXTURES}/network.git//vpc/tags?ref=v1.0.0" "${FIXTURES}/network.git/vpc/main.tf" ||
+  fail "couldn't fill in the git module's call to its own address"
 # Files named like the generated targets, a Bazel file, and symlinks. The
 # subnet submodule's outputs come through the one symlink that must survive;
 # `cp -RL` above would have dereferenced them, so they're made here.

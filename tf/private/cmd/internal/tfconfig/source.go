@@ -151,6 +151,23 @@ func Match(provider, source string) (subdir string, ok bool) {
 	return "", false
 }
 
+// BestMatch picks, among providers (module addresses), the one that supplies
+// a call to source most specifically (see Match): the one that leaves the
+// shortest subdirectory, so a submodule's own library beats the module
+// containing it however either address is written. Every match's remainder
+// is a suffix of the call's own subdirectory, so the shortest is the deepest
+// provider; equal remainders mean the same address, and the first wins. It
+// returns the provider's index and the remaining subdirectory, or -1.
+func BestMatch(providers []string, source string) (index int, subdir string) {
+	index = -1
+	for i, p := range providers {
+		if rest, ok := Match(p, source); ok && (index < 0 || len(rest) < len(subdir)) {
+			index, subdir = i, rest
+		}
+	}
+	return index, subdir
+}
+
 // SplitSubdir splits off a source's `//<subdir>` as go-getter does: at the
 // first `//` that isn't part of a `scheme://`. A query string (`?ref=`)
 // stays with the base address.

@@ -11,8 +11,10 @@
 //   - --modules=<path>: a JSON object {modules, packages}. `modules` lists
 //     the tf_library deps that set `module_source`, each {label, source,
 //     version, dir, direct}, where `dir` is the library's work-tree-relative
-//     directory; `packages` is the work-tree-relative directory of every
-//     tf_library package in deps, transitively.
+//     directory, and the library being built itself when it sets one (never
+//     `direct`), since a module may call its own address with `//<subdir>`;
+//     `packages` is the work-tree-relative directory of every tf_library
+//     package in deps, transitively.
 //   - --provider=<address>: the canonical address of a provider in the rule's
 //     plugin tree (`registry.opentofu.org/hashicorp/aws`), repeatable.
 //   - --test-dir=<dir>: for tf_test, the test files' directory relative to the
@@ -51,7 +53,9 @@
 // from there are that library's business and use none of the root's direct
 // deps. A local call into a package uses the deps with module_source there,
 // and the deps in the root's own package are used, since their files are part
-// of the root module.
+// of the root module. A call by module_source that lands in the root's own
+// package (the library calling a submodule of its own by address) stays in
+// the root's configuration like a local one.
 package main
 
 import (
@@ -248,6 +252,12 @@ func buildManifest(workTree, root, label string, deps []dep, packages []string, 
 				used[d.Label] = true
 			}
 			childDir = path.Join(d.Dir, subdir)
+			// A library's call to its own module_source with `//<subdir>`
+			// stays in its package, as a local path there would: what that
+			// module calls is still the root's own business.
+			if packageOf(packages, root, childDir) == root {
+				childOwn = own
+			}
 			if subdir == "" {
 				childModule += fmt.Sprintf(" (%s)", d.Label)
 			} else {
@@ -527,20 +537,20 @@ func repoOf(dir string) string {
 	return name
 }
 
-// lookup finds the dep providing source (see tfconfig.Match) and the
-// subdirectory of the dep's directory that the call uses. When several deps
-// match, the one with the longest module_source wins, so a submodule's own
-// library takes precedence over the module containing it.
+// lookup finds the dep providing source and the subdirectory of the dep's
+// directory that the call uses. When several deps match, the most specific
+// wins (tfconfig.BestMatch), so a submodule's own library takes precedence
+// over the module containing it.
 func lookup(deps []*dep, source string) (*dep, string) {
-	var best *dep
-	var bestSubdir string
-	for _, d := range deps {
-		subdir, ok := tfconfig.Match(d.Source, source)
-		if ok && (best == nil || len(d.Source) > len(best.Source)) {
-			best, bestSubdir = d, subdir
-		}
+	sources := make([]string, len(deps))
+	for i, d := range deps {
+		sources[i] = d.Source
 	}
-	return best, bestSubdir
+	i, subdir := tfconfig.BestMatch(sources, source)
+	if i < 0 {
+		return nil, ""
+	}
+	return deps[i], subdir
 }
 
 func missingHint(source string) string {

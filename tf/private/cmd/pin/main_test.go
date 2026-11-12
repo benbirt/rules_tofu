@@ -462,6 +462,61 @@ terraform {
 	}
 }
 
+// A call into a submodule that has a library of its own counts that
+// library's directory, as the modules manifest resolves it, not the
+// directory of the module containing it, however the two are written: the
+// parent's module_source here is the longer string (#97).
+func TestRun_MostSpecificLibrary(t *testing.T) {
+	ws := t.TempDir()
+	writeFile(t, filepath.Join(ws, "app/main.tf"), nullFloor+`
+module "x" {
+  source = "acme/net/aws//parts/x"
+}
+`)
+	requires := func(name string) string {
+		return fmt.Sprintf("terraform {\n  required_providers {\n    %s = { source = \"hashicorp/%s\" }\n  }\n}\n", name, name)
+	}
+	whole := filepath.Join(t.TempDir(), "rules_tofu++tf_modules+tf_modules_whole")
+	writeFile(t, filepath.Join(whole, "main.tf"), requires("time"))
+	writeFile(t, filepath.Join(whole, "parts/x/main.tf"), requires("http"))
+	parts := filepath.Join(t.TempDir(), "rules_tofu++tf_modules+tf_modules_parts")
+	writeFile(t, filepath.Join(parts, "parts/main.tf"), requires("dns"))
+	writeFile(t, filepath.Join(parts, "parts/x/main.tf"), requires("tls"))
+
+	wholeRepo := "@@rules_tofu++tf_modules+tf_modules_whole"
+	partsRepo := "@@rules_tofu++tf_modules+tf_modules_parts"
+	bazel := fakeBazelOutput(t,
+		sourceFile("//app:main.tf", filepath.Join(ws, "app/main.tf")),
+		sourceFile(wholeRepo+"//:main.tf", filepath.Join(whole, "main.tf")),
+		sourceFile(wholeRepo+"//:parts/x/main.tf", filepath.Join(whole, "parts/x/main.tf")),
+		sourceFile(partsRepo+"//parts:main.tf", filepath.Join(parts, "parts/main.tf")),
+		sourceFile(partsRepo+"//parts:x/main.tf", filepath.Join(parts, "parts/x/main.tf")),
+		libraryRule(wholeRepo+"//:module", filepath.Join(whole, "BUILD.bazel"), "registry.opentofu.org/acme/net/aws"),
+		libraryRule(partsRepo+"//parts:module", filepath.Join(parts, "parts/BUILD.bazel"), "acme/net/aws//parts"))
+	tofu, _ := fakeTofu(t)
+
+	var log strings.Builder
+	if err := run(ws, "", tofu, bazel, nil, nil, nil, &log); err != nil {
+		t.Fatalf("run: %v\n%s", err, log.String())
+	}
+	lock, err := os.ReadFile(filepath.Join(ws, ".terraform.lock.hcl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, children := lockedModules(t, lock)
+	locked := map[string]bool{}
+	for _, c := range children {
+		for name := range c {
+			locked[name] = true
+		}
+	}
+	// Not http: the parent's copy of the directory is not the one called.
+	want := map[string]bool{"null": true, "time": true, "dns": true, "tls": true}
+	if !reflect.DeepEqual(locked, want) {
+		t.Errorf("locked %v, want %v", locked, want)
+	}
+}
+
 // A library from another Bazel module needs no module_source for its files
 // to count: it serves its own directory, and what that calls locally. One
 // with no configuration of its own, deps alone, serves nothing.
