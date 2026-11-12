@@ -43,6 +43,8 @@ func TestParseSource(t *testing.T) {
 		{input: "https://example.com/module.TAR.GZ//sub/", want: Source{Kind: KindArchive, URL: "https://example.com/module.TAR.GZ", Type: "tar.gz", Subdir: "sub"}},
 		{input: "https://example.com/module?archive=tgz&id=3", want: Source{Kind: KindArchive, URL: "https://example.com/module?id=3", Type: "tar.gz"}},
 		{input: "file:///tmp/module.tar.tbz2", want: Source{Kind: KindArchive, URL: "file:///tmp/module.tar.tbz2", Type: "tar.bz2"}},
+		// A `//` in the query is the query's, not a subdirectory.
+		{input: "https://example.com/dl.zip?path=a//b", want: Source{Kind: KindArchive, URL: "https://example.com/dl.zip?path=a//b", Type: "zip"}},
 		{input: "https://example.com/module", wantErr: "isn't an archive OpenTofu would unpack"},
 		{input: "https://example.com/module?archive=tar", wantErr: "isn't an archive OpenTofu would unpack"},
 
@@ -74,6 +76,14 @@ func TestSplitSubdir(t *testing.T) {
 		"acme/net/aws//modules/x":                {"acme/net/aws", "modules/x"},
 		"git::https://e.com/x.git//vpc?ref=v1.0": {"git::https://e.com/x.git?ref=v1.0", "vpc"},
 		"https://e.com/x.tar.gz":                 {"https://e.com/x.tar.gz", ""},
+		// Neither `://` nor `//` counts inside a query, as in go-getter's
+		// SourceDirSubdir (issue #102).
+		"https://e.com/dl.zip?path=a//b":                  {"https://e.com/dl.zip?path=a//b", ""},
+		"https://e.com/a.zip//sub?next=http://y//z":       {"https://e.com/a.zip?next=http://y//z", "sub"},
+		"github.com/acme/net//vpc?ref=feature://x":        {"github.com/acme/net?ref=feature://x", "vpc"},
+		"github.com/acme/net?ref=a//b":                    {"github.com/acme/net?ref=a//b", ""},
+		"git::ssh://git@e.com/x.git//modules/a?ref=v1//2": {"git::ssh://git@e.com/x.git?ref=v1//2", "modules/a"},
+		"file:///srv/modules/x//sub":                      {"file:///srv/modules/x", "sub"},
 	} {
 		base, subdir := SplitSubdir(in)
 		if base != want[0] || subdir != want[1] {

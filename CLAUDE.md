@@ -109,7 +109,10 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   `MODULE.bazel.lock`; only facts are recorded.
   Facts are validated on read (`valid_cached_sha256s`, `valid_fact`),
   treated as a miss if malformed, and only the facts in use are returned,
-  so stale ones drop out.
+  so stale ones drop out. For `tf_modules` that includes a well-formed fact
+  of the other kind (`valid_fact` takes the kind its key implies) and a
+  registry fact whose pin doesn't suit its location (`_cached_registry`):
+  re-resolve, never `fail()` on a recorded fact (issue #96).
 - The download repository rules (`_tofu_download`, `_tf_provider_download`,
   `_tf_module_repo`) end with `return reproducible(repository_ctx)`
   (`tf/private/repo_metadata.bzl`), so Bazel 9's repo contents cache
@@ -227,9 +230,16 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   version bump therefore changes `MODULE.bazel.lock`, unlike a provider
   lock update; the README tells bots to run
   `bazel mod deps --lockfile_mode=update`. The repository rule deletes
-  upstream Bazel files and every symlink but those to a file of the module
+  upstream Bazel files (`_BAZEL_FILES`; a `.bazelignore` too, which Bazel
+  obeys at the root of any repository, issue #102) and every symlink but
+  those to a file of the module
   (`_tidy`; README, "From a registry, git or an archive"), then runs
   `modscan`; an undeclared call fails the fetch naming the tag to add.
+  Git submodules are not fetched (README, "Known gaps"): `_fetch` lists
+  the commit's gitlinks and `modscan --git-submodule` fails a module that
+  is in one, or whose own calls lead into one, where the submodule can be
+  named (issue #94). Fetching them was left out on purpose: it can't be
+  tested offline, and brings fetches from URLs the commit names.
   Walk fetched trees with `walk` in `tf/private/fetched_tree.bzl`, never
   by `is_dir` alone: it is true for a symlink to a directory, and a link
   back to an ancestor loops, while Bazel's `glob` fails the package on one

@@ -9,12 +9,16 @@
 // `error`. The extension uses it to tell registry, git and archive sources
 // apart and to find where each is fetched from.
 //
-//	modscan [--module=<label>=<source>...] [--self=<label>] <repository dir> <module dir>
+//	modscan [--module=<label>=<source>...] [--self=<label>] [--git-submodule=<path>...] <repository dir> <module dir>
 //
 // describes a fetched module, for the repository rule that generates its
 // tf_library. <module dir> is relative to the repository ("" for its root),
-// each --module is a declared tf_modules.module, its label and source, and
-// --self is the label of the one being described.
+// each --module is a declared tf_modules.module, its label and source,
+// --self is the label of the one being described, and each --git-submodule
+// is the path of a git submodule of the fetched commit. rules_tofu doesn't
+// fetch those, so the module's own directory, or a call of its own, that
+// leads into one is an error here, where it can be named, rather than a
+// missing directory when a caller builds.
 // The module's library serves the module and its submodules, which callers
 // reach with `//<subdir>`, so modscan scans the directories
 // tfconfig.ModuleDirs lists: the module directory, each directory below its
@@ -50,6 +54,7 @@ import (
 var (
 	declared = flags.StringList("module", "`<label>=<source>` of a declared module (repeatable)")
 	self     = flag.String("self", "", "`label` of the declared module being described")
+	gitlinks = flags.StringList("git-submodule", "`path` of a git submodule of the fetched commit, which was not fetched (repeatable)")
 )
 
 // Result is modscan's output.
@@ -81,7 +86,7 @@ func main() {
 	}
 	flag.Parse()
 	if flag.NArg() != 2 {
-		fmt.Fprintln(os.Stderr, "usage: modscan [--module=<label>=<source>...] [--self=<label>] <repository dir> <module dir>")
+		fmt.Fprintln(os.Stderr, "usage: modscan [--module=<label>=<source>...] [--self=<label>] [--git-submodule=<path>...] <repository dir> <module dir>")
 		os.Exit(2)
 	}
 	var modules []Module
@@ -93,7 +98,7 @@ func main() {
 		}
 		modules = append(modules, Module{Label: label, Source: source})
 	}
-	result, err := scan(flag.Arg(0), flag.Arg(1), modules, *self)
+	result, err := scan(flag.Arg(0), flag.Arg(1), modules, *self, *gitlinks)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -104,10 +109,35 @@ func main() {
 	}
 }
 
+// notFetched is what every error about a git submodule ends with.
+const notFetched = "rules_tofu does not fetch git submodules (OpenTofu does)"
+
 // scan describes the module at moduleDir of repo. modules are the declared
 // modules, and self is the label of the one being described ("" if it isn't
-// among them).
-func scan(repo, moduleDir string, modules []Module, self string) (*Result, error) {
+// among them). submodules are the paths in repo of the git submodules that
+// the fetch left out.
+func scan(repo, moduleDir string, modules []Module, self string, submodules []string) (*Result, error) {
+	moduleDir = strings.Trim(moduleDir, "/")
+	var gitlinks []string
+	for _, s := range submodules {
+		if s = strings.Trim(s, "/"); s != "" {
+			gitlinks = append(gitlinks, s)
+		}
+	}
+	submodules = gitlinks
+	// submodule is the git submodule that dir is, or is inside, or "".
+	submodule := func(dir string) string {
+		for _, s := range submodules {
+			if dir == s || strings.HasPrefix(dir, s+"/") {
+				return s
+			}
+		}
+		return ""
+	}
+	if s := submodule(moduleDir); s != "" {
+		return nil, fmt.Errorf("%q is in the git submodule %q of the repository, and %s", "/"+moduleDir, s, notFetched)
+	}
+
 	sources := make([]string, len(modules))
 	for i, m := range modules {
 		sources[i] = m.Source
@@ -134,6 +164,11 @@ func scan(repo, moduleDir string, modules []Module, self string) (*Result, error
 	for {
 		dirs, err := tfconfig.ModuleDirs(repo, moduleDir, sorted(called)...)
 		if err != nil {
+			// A local path that leads below a submodule's own directory,
+			// which is all a checkout leaves of it, is a missing directory.
+			if len(submodules) > 0 {
+				return nil, fmt.Errorf("%w (the repository has git submodules, and %s: %s)", err, notFetched, strings.Join(submodules, ", "))
+			}
 			return nil, err
 		}
 		providers = map[string]bool{}
@@ -152,15 +187,21 @@ func scan(repo, moduleDir string, modules []Module, self string) (*Result, error
 				return nil, err
 			}
 			for _, c := range found {
-				if tfconfig.IsLocal(c.Source) {
-					continue
-				}
 				where := c.Range.Filename
 				if rel, err := filepath.Rel(repo, where); err == nil {
 					where = filepath.ToSlash(rel)
 				}
+				where = fmt.Sprintf("%s:%d", where, c.Range.Start.Line)
+				if tfconfig.IsLocal(c.Source) {
+					// The submodule's directory is there, and empty, so
+					// ModuleDirs made nothing of the call.
+					if s := submodule(tfconfig.ResolveLocal(dir, c.Source)); s != "" {
+						return nil, fmt.Errorf("%s: module source %q leads into the git submodule %q, and %s", where, c.Source, s, notFetched)
+					}
+					continue
+				}
 				if _, ok := calls[c.Source]; !ok {
-					calls[c.Source] = Call{Source: c.Source, Where: fmt.Sprintf("%s:%d", where, c.Range.Start.Line)}
+					calls[c.Source] = Call{Source: c.Source, Where: where}
 				}
 			}
 		}
@@ -170,7 +211,11 @@ func scan(repo, moduleDir string, modules []Module, self string) (*Result, error
 			if m == nil || m.Label != self {
 				continue
 			}
-			if dir := path.Join(moduleDir, subdir); !called[dir] {
+			dir := path.Join(moduleDir, subdir)
+			if s := submodule(dir); s != "" {
+				return nil, fmt.Errorf("%s: module source %q leads into the git submodule %q, and %s", c.Where, c.Source, s, notFetched)
+			}
+			if !called[dir] {
 				called[dir] = true
 				grew = true
 			}

@@ -11,6 +11,7 @@ load(
     "check_name",
     "check_version",
     "hub_path",
+    "looks_abbreviated",
     "ls_remote_commit",
     "modules_service_url",
     "registry_download_endpoint",
@@ -82,11 +83,43 @@ _ls_remote_test = unittest.make(_ls_remote_test_impl)
 def _checks_test_impl(ctx):
     env = unittest.begin(ctx)
 
-    asserts.true(env, valid_fact({"commit": _SHA}))
-    asserts.true(env, valid_fact({"location": "git::x", "commit": _SHA}))
-    asserts.true(env, valid_fact({"location": "https://x.zip", "sha256": _SHA256}))
-    for fact in [None, {}, {"commit": "abc"}, {"location": "git::x"}, {"commit": _SHA, "extra": 1}, ["commit"]]:
-        asserts.false(env, valid_fact(fact), "accepted {}".format(fact))
+    git_fact = {"commit": _SHA}
+    registry_facts = [{"location": "git::x", "commit": _SHA}, {"location": "https://x.zip", "sha256": _SHA256}]
+    asserts.true(env, valid_fact(git_fact, "git"))
+    for fact in registry_facts:
+        asserts.true(env, valid_fact(fact, "registry"), "rejected {}".format(fact))
+
+    # A fact of the other kind is as malformed as any (issue #96).
+    asserts.false(env, valid_fact(git_fact, "registry"))
+    for fact in registry_facts:
+        asserts.false(env, valid_fact(fact, "git"), "accepted {} as a git fact".format(fact))
+    for fact in [
+        None,
+        {},
+        ["commit"],
+        {"commit": "abc"},
+        {"commit": 1},
+        {"commit": _SHA, "extra": 1},
+        {"commit": _SHA, 1: _SHA},
+        {"location": "git::x"},
+        {"location": "", "commit": _SHA},
+        {"location": "git::x", "commit": "abc"},
+        {"location": "https://x.zip", "sha256": "abc"},
+        {"location": "https://x.zip", "sha256": _SHA256.upper()},
+        {"location": "git::x", "commit": _SHA, "sha256": _SHA256},
+        {"location": "git::x", "commit": _SHA, "extra": 1},
+        {"sha256": _SHA256},
+    ]:
+        for kind in ["git", "registry"]:
+            asserts.false(env, valid_fact(fact, kind), "accepted {} as a {} fact".format(fact, kind))
+    asserts.false(env, valid_fact(git_fact, "archive"))
+
+    asserts.false(env, looks_abbreviated(_SHA))
+    asserts.false(env, looks_abbreviated(_SHA256))
+    for ref in ["abc1234", "ABC1234", _SHA[:39], _SHA256[:41], _SHA256[:63]]:
+        asserts.true(env, looks_abbreviated(ref), "missed {}".format(ref))
+    for ref in ["", "abc123", "v1.2.3", "main", "feature/abc1234", _SHA + "0g"]:
+        asserts.false(env, looks_abbreviated(ref), "took {} for a commit".format(repr(ref)))
 
     asserts.equals(env, None, check_version("5.8.1"))
     for version in ["5.8", "~> 5.8", "5.8.1-beta", ""]:

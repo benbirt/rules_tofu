@@ -642,7 +642,10 @@ Each module is pinned, so a tag that moves later changes nothing:
 | `git::<url>` or `github.com/<owner>/<repo>` | `commit`, or the commit that `?ref=` names when first fetched, recorded in `MODULE.bazel.lock`. |
 | Archive URL | `sha256`, which is required. |
 
-git sources are fetched with `git`, which must be on the `PATH`.
+git sources are fetched with `git`, which must be on the `PATH`. A commit,
+in `commit` or in `?ref=`, is given in full: an abbreviation can't be looked
+up without fetching the whole repository, and in `?ref=` is taken for a
+branch or tag that the repository doesn't have.
 Fetched modules are described by a small Go helper compiled, like
 `from_lock`'s, by the host Go SDK rules_go selects, which must be at least as
 new as the `go` directive in rules_tofu's [`go.mod`](go.mod) when the
@@ -652,7 +655,8 @@ A module's files are its own. A symlink to a file of the module is kept and
 read as that file; a symlink to a directory, to nothing or to anything
 outside the module is removed when the module is fetched, as are any Bazel
 files it ships. A module can't therefore be declared by a `//<subdir>` that
-is a symlink: the fetch fails, naming the directory to declare instead. Any
+is a symlink: the fetch fails, naming the directory to declare instead. Git
+submodules are not fetched (see [Known gaps](#known-gaps)). Any
 `.terraform.lock.hcl`, `terraform.tfvars[.json]` and `*.auto.tfvars[.json]`
 a module ships are left out of its library: OpenTofu reads none of them from
 a module that is called, and no rule accepts them (see
@@ -853,6 +857,14 @@ in memory and ignores backends), then `tofu test`.
 - The build host must match the run host: validation and the launcher both
   use the exec-platform provider binaries.
 - Windows: downloads work, but the launcher is bash-only.
+- Git submodules of a module's repository are not fetched, which OpenTofu
+  does: their directories are left out. That goes for every module fetched
+  with git, the registry modules whose source is a git repository included.
+  Fetching fails, naming the submodule, when the module's own directory is
+  in one or its own `module` calls lead into one. A submodule that nothing
+  calls is no obstacle, but one that only supplies files, to `file()` say,
+  or that another module calls by `//<subdir>`, is missed without a message
+  until the plan or the caller's build fails for want of it.
 
 ## Contributing
 
