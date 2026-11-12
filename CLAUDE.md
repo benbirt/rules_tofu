@@ -280,6 +280,10 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   agree are never parsed, and differing ones must be plain numeric or it
   returns an error naming the modules (issue #98). Don't add prerelease
   ordering: which of `2.0.0-rc1` and `1.9.0` to use is the root's call.
+  The error becomes a `_tf_provider_download` with `error` set, like an
+  unusable lock entry, never a `fail()` in the extension: a root that pins
+  with `from_lock` makes that call by running `pin`
+  (`unorderable_versions`).
 - OpenTofu is downloaded, not built from source, and that is a decision,
   not a gap (`versions.bzl` has the reasoning; README, "Non-goals"). Don't
   reintroduce a from-source TODO. `toolchain/versions.bzl` is written by

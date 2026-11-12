@@ -246,11 +246,14 @@ def _tf_provider_download_impl(repository_ctx):
     parsed = _parse_source_or_fail(source)
     namespace, name = parsed.namespace, parsed.name
 
-    # A lock entry that can't be used. Failing here rather than in the
-    # extension keeps `@tf_providers//:pin` runnable, so the lock can be
-    # regenerated.
+    # A lock entry that can't be used, or dependencies' tags that can't be
+    # settled on one version. Failing here rather than in the extension
+    # keeps `@tf_providers//:pin` runnable, so the lock can be regenerated,
+    # or the provider locked.
     if repository_ctx.attr.error:
-        _fail_lock(repository_ctx, repository_ctx.attr.error)
+        if repository_ctx.attr.lock_path:
+            _fail_lock(repository_ctx, repository_ctx.attr.error)
+        fail(repository_ctx.attr.error)
 
     urls = {}
     if repository_ctx.attr.zh:
@@ -517,8 +520,8 @@ _from_lock_tag = tag_class(
         "lock": attr.label(
             doc = "The workspace's `.terraform.lock.hcl`. Defaults to `//:.terraform.lock.hcl`. " +
                   "The file need not exist yet: `bazel run @tf_providers//:pin` writes it. " +
-                  "Its directory must be a Bazel package, as for any label: one with a " +
-                  "`BUILD.bazel` file, which may be empty.",
+                  "The label's package must exist, as for any label: for the default, a " +
+                  "`BUILD.bazel` or `BUILD` file at the workspace root, which may be empty.",
         ),
     },
 )
@@ -644,7 +647,18 @@ def _tf_providers_extension_impl(module_ctx):
             # The one version the tags agree on, else the highest.
             highest = highest_version(source, tags)
             if highest.error:
-                fail(highest.error)
+                # Reported by the provider's repo when it is fetched, not
+                # here: a root module that pins with `from_lock` settles
+                # this by locking the provider, so `pin` must stay runnable,
+                # as for a lock entry that can't be used. The version is
+                # never read.
+                _tf_provider_download(
+                    name = repo_name(namespace, name),
+                    source = source,
+                    version = tags[0].version,
+                    error = highest.error,
+                )
+                continue
             resolved_version = highest.version
 
         # Merge sha256 maps from all tags that declared the winning version.

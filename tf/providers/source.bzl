@@ -213,7 +213,9 @@ def highest_version(source, requests):
             in the order the tags were read.
 
     Returns:
-        `struct(version, error)`: one of the two is None.
+        `struct(version, error)`: one of the two is None. The extension
+        doesn't fail on the error: the provider's repository does, when a
+        build needs it, so that `pin` can still run and lock the provider.
     """
     modules = {}
     for request in requests:
@@ -231,8 +233,9 @@ def highest_version(source, requests):
             return struct(version = None, error = (
                 "Provider `{}` is tagged with different versions by modules the root module " +
                 "depends on: {}. rules_tofu can only order plain numeric versions, and `{}` is " +
-                "not one. Tag the provider in the root module's MODULE.bazel, or pin it with " +
-                "`tf_providers.from_lock`, to choose a version."
+                "not one. Choose a version in the root module: tag the provider in its " +
+                "MODULE.bazel, or, if it pins providers with `tf_providers.from_lock`, lock " +
+                "this one with `bazel run @tf_providers//:pin`."
             ).format(
                 source,
                 ", ".join([

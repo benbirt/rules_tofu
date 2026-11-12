@@ -282,10 +282,17 @@ def _highest_version_unorderable_test_impl(ctx):
         env,
         "Provider `acme/thing` is tagged with different versions by modules the root module " +
         "depends on: `1.9.0` (from `net`, `app`), `2.0.0-rc1` (from `dns`). rules_tofu can only " +
-        "order plain numeric versions, and `2.0.0-rc1` is not one. Tag the provider in the root " +
-        "module's MODULE.bazel, or pin it with `tf_providers.from_lock`, to choose a version.",
+        "order plain numeric versions, and `2.0.0-rc1` is not one. Choose a version in the root " +
+        "module: tag the provider in its MODULE.bazel, or, if it pins providers with " +
+        "`tf_providers.from_lock`, lock this one with `bazel run @tf_providers//:pin`.",
         resolved.error,
     )
+
+    # Whichever comes first.
+    resolved = highest_version("acme/thing", [_request("2.0.0-rc1", "dns"), _request("1.9.0", "net")])
+    asserts.equals(env, None, resolved.version)
+    asserts.true(env, "`2.0.0-rc1` (from `dns`), `1.9.0` (from `net`)" in resolved.error, resolved.error)
+    asserts.true(env, "`2.0.0-rc1` is not one" in resolved.error, resolved.error)
 
     # So is anything else that isn't dot-separated digits.
     for bad in ["v1.2.3", "1.2.x", "1..2", "", "1.2.3+build"]:
