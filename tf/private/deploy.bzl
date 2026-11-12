@@ -38,6 +38,7 @@ load(
     ":work_tree.bzl",
     "ALLOWED_SRC_EXTS",
     "MODULES_BIN",
+    _check_no_auto_tfvars = "check_no_auto_tfvars",
     _check_no_test_files = "check_no_test_files",
     _files_entries = "files_entries",
     _materialize = "materialize",
@@ -52,6 +53,7 @@ load(
 
 def _tf_deploy_impl(ctx):
     _check_no_test_files(ctx, ctx.files.srcs)
+    _check_no_auto_tfvars(ctx, ctx.files.data)
     direct = _files_entries(ctx.files.srcs + ctx.files.data)
     var_file_entries = _files_entries(ctx.files.var_files)
     transitive = [d[TfLibraryInfo].transitive_files for d in ctx.attr.deps]
@@ -149,7 +151,10 @@ tf_deploy_rule = rule(
         "data": attr.label_list(
             allow_files = True,
             doc = "Arbitrary files to include in the work tree. " +
-                  "Use to expose files for `file()` calls in Terraform configs.",
+                  "Use to expose files for `file()` calls in Terraform configs. " +
+                  "Variables files that OpenTofu loads by itself (`terraform.tfvars[.json]`, " +
+                  "`*.auto.tfvars[.json]`) are rejected: set the values with `vars`, or list " +
+                  "the file in `var_files`.",
         ),
         "providers": attr.label_list(
             providers = [TfProviderInfo],
@@ -218,7 +223,9 @@ def tf_deploy(name, srcs = None, deps = None, vars = None, var_files = None, dat
           `vars` or other `var_files` entries; a duplicate key fails
           `bazel build`.
       data: arbitrary files to include in the work tree, enabling `file()` calls
-          in Terraform configs.
+          in Terraform configs. Variables files that OpenTofu loads by itself
+          (`terraform.tfvars[.json]`, `*.auto.tfvars[.json]`) are rejected:
+          set the values with `vars`, or list the file in `var_files`.
       providers: providers (`@tf_providers//<namespace>/<name>`, from the
           `tf_providers` extension in MODULE.bazel) declared at the deploy
           level, in addition to those its `deps` bring in. `tofu init` runs

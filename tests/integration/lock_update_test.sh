@@ -4,8 +4,10 @@
 # workspace). Unlike assert_bazel_fails.sh, every step here must succeed:
 #
 #   1. `bazel run @tf_providers//:pin` writes the first lock, although the
-#      workspace's tf_library already names `@tf_providers//hashicorp/null`,
-#      which has no package in the hub until it is locked.
+#      workspace's libraries already name `@tf_providers//hashicorp/null`,
+#      which has no package in the hub until it is locked. The package's two
+#      libraries each require the provider, in a file of their own, and the
+#      lock meets both constraints (issue #99).
 #   2. A build records MODULE.bazel.lock.
 #   3. hashicorp/null is bumped the way Dependabot or Renovate does it: in
 #      versions.tf and .terraform.lock.hcl, and nowhere else.
@@ -55,9 +57,12 @@ echo "--- 1. first pin, with the provider already named ---" >&2
 [[ ! -e .terraform.lock.hcl ]] || fail "the workspace already has a lock"
 "${BAZEL}" run @tf_providers//:pin >&2 || fail "the first pin failed"
 grep -q 'version *= "3.2.3"' .terraform.lock.hcl || fail "pin didn't lock hashicorp/null 3.2.3: $(cat .terraform.lock.hcl)"
+constraints="$(grep 'constraints *=' .terraform.lock.hcl)"
+[[ "${constraints}" == *'3.2.3'* && "${constraints}" == *'>= 3.0'* ]] ||
+  fail "pin didn't lock against both libraries' constraints (versions.tf's 3.2.3 and floor.tf's >= 3.0): ${constraints}"
 
 echo "--- 2. build, recording MODULE.bazel.lock ---" >&2
-"${BAZEL}" build //:versions >&2 || fail "the build against the first lock failed"
+"${BAZEL}" build //:versions //:floor >&2 || fail "the build against the first lock failed"
 cp MODULE.bazel.lock "${_TMPDIR}/MODULE.bazel.lock.before"
 
 echo "--- 3. bump hashicorp/null as a bot would ---" >&2
@@ -66,7 +71,7 @@ rm versions.tf.bak
 cp bumped.lock.hcl .terraform.lock.hcl
 
 echo "--- 4. build with --lockfile_mode=error ---" >&2
-"${BAZEL}" build --lockfile_mode=error //:versions >&2 ||
+"${BAZEL}" build --lockfile_mode=error //:versions //:floor >&2 ||
   fail "the build after a lock-only bump failed; does MODULE.bazel.lock depend on the provider version?"
 cmp MODULE.bazel.lock "${_TMPDIR}/MODULE.bazel.lock.before" >&2 ||
   fail "MODULE.bazel.lock changed after a lock-only bump"
@@ -93,6 +98,6 @@ if grep -q 'hashicorp/null' .terraform.lock.hcl; then
 fi
 
 echo "--- 7. the tag alone pins the provider ---" >&2
-"${BAZEL}" build //:versions >&2 || fail "the build with the provider tagged failed"
+"${BAZEL}" build //:versions //:floor >&2 || fail "the build with the provider tagged failed"
 
 echo "OK: the first pin worked, a lock-only bump needed no MODULE.bazel.lock change, and a tag conflict left pin runnable" >&2

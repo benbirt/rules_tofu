@@ -294,8 +294,9 @@
     "@@rules_bazel_integration_test+//:extensions.bzl%bazel_binaries": {
       "general": {
         "bzlTransitiveDigest": "XC9nqZ31LIbq8N7cEK+rYa2iXNQLcJ3cyGWw+zPZlc0=",
-        "usagesDigest": "ZwjzAMH8dZBuH9aetctbApqCu8x32sdt9q3lTEvRVY8=",
+        "usagesDigest": "ot4pmaKMnsWAJ9GDtwuokyPsP1IazPDeovBlaegc1gU=",
         "recordedInputs": [
+          "REPO_MAPPING:,running_bazel +running_bazel+running_bazel",
           "REPO_MAPPING:rules_bazel_integration_test+,bazel_skylib bazel_skylib+",
           "REPO_MAPPING:rules_bazel_integration_test+,cgrindel_bazel_starlib cgrindel_bazel_starlib+"
         ],
@@ -306,10 +307,10 @@
               "version": "1.26.0"
             }
           },
-          "build_bazel_bazel_.bazelversion": {
+          "build_bazel_bazel_version": {
             "repoRuleId": "@@rules_bazel_integration_test+//bazel_integration_test/private:bazel_binaries.bzl%bazel_binary",
             "attributes": {
-              "version_file": "@@//:.bazelversion",
+              "version_file": "@@+running_bazel+running_bazel//:version",
               "bazelisk": "@bazel_binaries_bazelisk//:bazelisk"
             }
           },
@@ -317,9 +318,9 @@
             "repoRuleId": "@@rules_bazel_integration_test+//bazel_integration_test/bzlmod:bazel_binaries.bzl%_bazel_binaries_helper",
             "attributes": {
               "version_to_repo": {
-                "'@@//:.bazelversion'": "build_bazel_bazel_.bazelversion"
+                "'@@+running_bazel+running_bazel//:version'": "build_bazel_bazel_version"
               },
-              "current_version": "'@@//:.bazelversion'"
+              "current_version": "'@@+running_bazel+running_bazel//:version'"
             }
           }
         },
@@ -327,7 +328,7 @@
           "explicitRootModuleDirectDeps": [],
           "explicitRootModuleDirectDevDeps": [
             "bazel_binaries_bazelisk",
-            "build_bazel_bazel_.bazelversion",
+            "build_bazel_bazel_version",
             "bazel_binaries"
           ],
           "useAllRepos": "NO",

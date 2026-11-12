@@ -150,9 +150,12 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   that counted files call with `//<subdir>` (resolved with
   `tfconfig.BestMatch` like the manifest, to a fixpoint), so a fetched
   module's examples never reach the lock (`tf_modules_test`). Every
-  `_tf_library` in `deps` is
-  queried, not only those with `module_source` (issue #60). It locks a
-  scratch configuration from scratch,
+  `_tf_library` in `deps` is queried, not only those with `module_source`
+  (issue #60). A directory's requirements are combined by provider source,
+  never by local name (`requirements`): the query gives files, not targets,
+  and two targets in one package may each require a provider under the same
+  name (issue #99); don't go back to `ReadRequiredProviders` there, which is
+  one root module's view. It locks a scratch configuration from scratch,
   because `tofu providers lock` keeps an existing lock's versions and has
   no `-upgrade`, and leaves out providers the root tags
   (`--exclude-source`). The `constraints` line it writes is the combined
@@ -289,8 +292,18 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   `module_ctx.facts` unconditionally (no `hasattr` fallback). CI runs Linux
   and macOS on the pinned version and 8.5.0; the uncommitted-changes check
   runs only on the pinned jobs, because other versions rewrite
-  `MODULE.bazel.lock` in their own format. Raising the floor means bumping
-  `bazel_compatibility`, the CI matrix and the README together.
+  `MODULE.bazel.lock` in their own format. The Bazel inside the integration
+  tests is the version of the Bazel running them, not `.bazelversion`'s:
+  `bazel_binaries.download` reads it from `@running_bazel`
+  (`tests/integration/running_bazel.bzl`, `native.bazel_version`), so
+  `USE_BAZEL_VERSION=8.5.0`, in CI or at a desk, tests the nested builds on
+  8.5.0 too. They once ran on the pinned version whatever ran the tests
+  (issue #88); `nested_bazel.sh` fails a test whose nested Bazel isn't the
+  running one, from `RUNNING_BAZEL_VERSION` in every test's `env`. `MODULE.bazel`
+  names that `.bzl` file although releases leave `tests` out: its one use
+  is a dev dependency, so a dependent module never loads it. Raising the
+  floor means bumping `bazel_compatibility`, the CI matrix and the README
+  together.
 
 ### Rules and the runner
 
@@ -307,6 +320,20 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   and run in every dependant. `ALLOWED_SRC_EXTS` still admits `.hcl`, so
   the analysis-time check is the gate. Fetched modules' own tests arrive as
   `data`, which is not checked, and are ignored unless a run loads them.
+- The variables files tofu loads by itself (`terraform.tfvars[.json]`,
+  `*.auto.tfvars[.json]`) are rejected in every rule's `data`
+  (`check_no_auto_tfvars`; `auto_tfvars_in_data`), by name in any
+  directory: a library's package is the root module of its own validation
+  and of any `tf_test` of it, so "not a root" is not the listing rule's to
+  know, and such a file would set variables that the duplicate-key check
+  never reads, over `vars` if its name sorts later (issue #93). `var_files`
+  is exempt, since those are passed with `-var-file`, in the rule's order
+  and after a deploy's duplicate-key check; the one name it can't take is
+  the generated `rules_tofu.auto.tfvars.json` (`auto_tfvars_conflict`).
+  `tf_modules` leaves the same names out of a
+  fetched module's library (`_EXCLUDED`), or every module shipping an
+  example `terraform.tfvars` would fail to build; keep the two lists in
+  step.
 - A `tf_test`'s root module is the package of its `module` attribute, not
   its own, so tests can sit in a `tests/` sub-package. It is read from the
   provider (`TfLibraryInfo.package_dir`, `TfDeployInfo.package_dir`), never
@@ -323,7 +350,13 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   (an absent plugin tree gets an empty directory under `$TEST_TMPDIR`), and
   fails on `errored_test.tfstate`, which tofu writes with exit 0 when a
   run's destroy fails. Don't route tests through the plan/apply path or its
-  ephemeral-state gate.
+  ephemeral-state gate. The copy keeps a file's executable bit and nothing
+  else of its mode (`copyFile`: `0o755` or `0o644`, never `Perm()`): Bazel's
+  outputs are read-only, and tofu must be able to write the copy. Both walks
+  of a work tree (`copyTree`, and `linkTree` for the run directory) refuse a
+  symlink to a directory (`errDirectoryLink`) rather than follow it: the
+  rules never make one, and following one that leads to its own ancestor
+  never ends (issue #89).
 - `mock_provider` still needs the provider package in `.terraform/providers`
   (verified: tofu fails without it), so a tf_test's plugin tree is built
   for every test. Real infrastructure is gated by Bazel, not by parsing run

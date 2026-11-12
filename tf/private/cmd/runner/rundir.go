@@ -69,8 +69,9 @@ func syncRunDir(workTree, runRoot, cwd string) error {
 
 // linkTree creates, for every file under src, a symlink to it at the same
 // relative path under dst. src is absolute, so the links are too. Directories
-// are created rather than linked, a symlinked one included, so that nothing
-// tofu writes beside the configuration can land in src.
+// are created rather than linked, so that nothing tofu writes beside the
+// configuration can land in src. A symlink to a directory is an error
+// (errDirectoryLink).
 func linkTree(src, dst string) error {
 	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -89,7 +90,7 @@ func linkTree(src, dst string) error {
 			return err
 		}
 		if info.IsDir() {
-			return linkTree(p, target)
+			return errDirectoryLink(p)
 		}
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 			return fmt.Errorf("%s is in the way of the configuration: %w", filepath.Dir(target), err)

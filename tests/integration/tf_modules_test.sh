@@ -77,6 +77,11 @@ ln -s ../.. "${FIXTURES}/network.git/vpc/examples/complete/parent"
 ln -s ../../../missing.tf "${FIXTURES}/network.git/vpc/examples/complete/missing.tf"
 ln -s /dev/null "${FIXTURES}/network.git/vpc/examples/complete/outside"
 ln -s vpc/peering "${FIXTURES}/network.git/peering_link"
+# Variables files that tofu loads by itself, as a module's root and its
+# examples often carry. No rule accepts one as data, so the generated
+# libraries must leave them out: every build below would fail otherwise.
+echo 'name = "upstream"' >"${FIXTURES}/network.git/terraform.tfvars"
+echo 'name = "example"' >"${FIXTURES}/network.git/vpc/examples/complete/demo.auto.tfvars"
 git_ init -q
 git_ add -A
 git_ commit -q -m v1

@@ -58,6 +58,13 @@ bazel test //toolchain/tests/... //tf/providers/tests/... //tf/modules/tests/...
 # Integration tests (Bazel-in-Bazel, slower):
 bazel test //tests/integration/...
 
+# The same on another Bazel, 8.5.0 (the supported floor) here, as CI does.
+# The Bazel the integration tests run inside themselves is the version of
+# the one running them, so this tests the nested builds on 8.5.0 too.
+# Another Bazel rewrites MODULE.bazel.lock in its own format; restore it:
+USE_BAZEL_VERSION=8.5.0 bazel test //tests/integration/...
+git checkout -- MODULE.bazel.lock
+
 # Format checks (fmt_check tests) run as part of the full suite:
 bazel test //...
 

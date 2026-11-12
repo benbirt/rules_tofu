@@ -16,6 +16,7 @@ tests/integration/
 │   ├── .bazelversion
 │   └── cases/
 │       ├── auto_tfvars_conflict/{BUILD.bazel, main.tf, rules_tofu.auto.tfvars.json}
+│       ├── auto_tfvars_in_data/ variables files tofu loads by itself, as data
 │       ├── conflicting_providers/{BUILD.bazel, main.tf}
 │       ├── duplicate_vars/{BUILD.bazel, main.tf, extra.tfvars.json}
 │       ├── ephemeral_state_refused/{BUILD.bazel, main.tf}
@@ -121,6 +122,19 @@ Each test spawns a nested Bazel that materializes the case's work tree
 and runs `tofu init/validate` (or the dupcheck action), or — for a
 run-mode case — launches the deploy's runner; the driver checks the
 failure mode.
+
+The nested Bazel is the same version as the Bazel running the tests
+(`@running_bazel` in the root `MODULE.bazel`), whatever a sub-workspace's
+`.bazelversion` says: that file is for running `bazel` inside the
+sub-workspace by hand. So to test on another Bazel, run the tests with it:
+
+```sh
+USE_BAZEL_VERSION=8.5.0 bazel test //tests/integration:all
+```
+
+Every `bazel_integration_test` passes `RUNNING_BAZEL_VERSION` in its `env`
+(`_ENV` in `BUILD.bazel`), and `nested_bazel.sh` fails the test if the
+nested Bazel is another version.
 
 To run a selection of `broken_workspace`'s cases, name them:
 

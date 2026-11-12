@@ -6,9 +6,12 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/benbirt/rules_tofu/tf/private/cmd/internal/tfconfig"
 )
 
 func writeFile(t *testing.T, path, content string) {
@@ -672,5 +675,168 @@ func TestRun_AllProvidersTagged(t *testing.T) {
 	}
 	if _, err := os.Stat(logPath); !os.IsNotExist(err) {
 		t.Errorf("tofu should not have run, got err=%v", err)
+	}
+}
+
+// requiring writes a file that requires the given `<local name> = <entry>`
+// lines.
+func requiring(t *testing.T, path string, entries ...string) string {
+	t.Helper()
+	writeFile(t, path, "terraform {\n  required_providers {\n    "+strings.Join(entries, "\n    ")+"\n  }\n}\n")
+	return path
+}
+
+// The files of a directory may belong to several root modules (issue #99),
+// so its requirements are combined by provider source, never by local name.
+func TestRequirements(t *testing.T) {
+	const aws, acme, null = "registry.opentofu.org/hashicorp/aws", "registry.opentofu.org/acme/aws", "registry.opentofu.org/hashicorp/null"
+	for _, tc := range []struct {
+		name  string
+		files map[string][]string
+		want  []tfconfig.Requirement
+	}{
+		{
+			name: "one name and source, two constraints",
+			files: map[string][]string{
+				"dev.tf":  {`aws = { source = "hashicorp/aws", version = "~> 5.0" }`},
+				"prod.tf": {`aws = { source = "hashicorp/aws", version = ">= 5.40" }`},
+			},
+			want: []tfconfig.Requirement{{Source: aws, Version: ">= 5.40, ~> 5.0"}},
+		},
+		{
+			name: "one name, two sources",
+			files: map[string][]string{
+				"dev.tf":  {`aws = { source = "hashicorp/aws", version = "~> 5.0" }`},
+				"prod.tf": {`aws = { source = "acme/aws", version = "1.2.3" }`},
+			},
+			want: []tfconfig.Requirement{{Source: acme, Version: "1.2.3"}, {Source: aws, Version: "~> 5.0"}},
+		},
+		{
+			name: "the same constraint twice is written once",
+			files: map[string][]string{
+				"dev.tf":  {`aws = { source = "hashicorp/aws", version = "~> 5.0" }`},
+				"prod.tf": {`aws = { source = "hashicorp/aws", version = "~> 5.0" }`},
+			},
+			want: []tfconfig.Requirement{{Source: aws, Version: "~> 5.0"}},
+		},
+		{
+			name: "two names for one source",
+			files: map[string][]string{
+				"main.tf": {`aws = { source = "hashicorp/aws", version = "~> 5.0" }`, `amazon = { source = "HashiCorp/AWS", version = "< 5.90" }`},
+			},
+			want: []tfconfig.Requirement{{Source: aws, Version: "< 5.90, ~> 5.0"}},
+		},
+		{
+			name: "no version constrains nothing",
+			files: map[string][]string{
+				"dev.tf":  {`aws = { source = "hashicorp/aws" }`},
+				"prod.tf": {`aws = { source = "hashicorp/aws", version = "~> 5.0" }`},
+				"null.tf": {`null = { source = "hashicorp/null" }`},
+			},
+			want: []tfconfig.Requirement{{Source: aws, Version: "~> 5.0"}, {Source: null}},
+		},
+		{
+			name: "an override replaces every entry of its name",
+			files: map[string][]string{
+				"dev.tf":          {`aws = { source = "hashicorp/aws", version = "~> 5.0" }`, `null = { source = "hashicorp/null", version = "3.2.4" }`},
+				"prod.tf":         {`aws = { source = "hashicorp/aws", version = ">= 5.40" }`},
+				"pin_override.tf": {`aws = { source = "hashicorp/aws", version = "5.50.0" }`},
+			},
+			want: []tfconfig.Requirement{{Source: aws, Version: "5.50.0"}, {Source: null, Version: "3.2.4"}},
+		},
+		{
+			name: "a later override replaces an earlier one, source included",
+			files: map[string][]string{
+				"main.tf":       {`aws = { source = "hashicorp/aws", version = "~> 5.0" }`},
+				"a_override.tf": {`aws = { source = "hashicorp/aws", version = "5.50.0" }`},
+				"b_override.tf": {`aws = { source = "acme/aws", version = "1.2.3" }`},
+			},
+			want: []tfconfig.Requirement{{Source: acme, Version: "1.2.3"}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			var files []string
+			for name, entries := range tc.files {
+				files = append(files, requiring(t, filepath.Join(dir, name), entries...))
+			}
+			got, err := requirements(files)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("requirements = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestLocalNames(t *testing.T) {
+	got := localNames([]tfconfig.Requirement{
+		{Source: "registry.opentofu.org/acme/aws"},
+		{Source: "registry.opentofu.org/hashicorp/aws"},
+		{Source: "registry.opentofu.org/hashicorp/null"},
+		{Source: "example.com/other/aws"},
+		{Source: "registry.opentofu.org/acme/aws-2"},
+	})
+	if want := []string{"aws", "aws-2", "null", "aws-3", "aws-2-2"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("localNames = %q, want %q", got, want)
+	}
+	// tofu refuses a required_providers entry under any other kind of name
+	// ("must contain only letters, digits, and dashes, and may not use
+	// leading or trailing dashes"), and the fake tofu of these tests would
+	// not notice.
+	valid := regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+	for _, name := range got {
+		if !valid.MatchString(name) {
+			t.Errorf("%q is not a provider local name tofu accepts", name)
+		}
+	}
+}
+
+// Two tf_deploys in one package, each with its own srcs, each requiring the
+// provider: pin sees one directory with two entries named `null`, which must
+// lock against both constraints rather than fail (issue #99). A second
+// provider under the same local name in another pair of files is locked too.
+func TestRun_TwoTargetsOneDirectory(t *testing.T) {
+	ws := t.TempDir()
+	requiring(t, filepath.Join(ws, "stacks/dev.tf"), `null = { source = "hashicorp/null", version = "~> 3.2" }`)
+	requiring(t, filepath.Join(ws, "stacks/prod.tf"), `null = { source = "hashicorp/null", version = ">= 3.2.3" }`)
+	requiring(t, filepath.Join(ws, "mixed/a.tf"), `aws = { source = "hashicorp/aws", version = "~> 5.0" }`)
+	requiring(t, filepath.Join(ws, "mixed/b.tf"), `aws = { source = "acme/aws", version = "1.2.3" }`)
+	bazel := fakeBazel(t, ws, "//stacks:dev.tf", "//stacks:prod.tf", "//mixed:a.tf", "//mixed:b.tf")
+	tofu, _ := fakeTofu(t)
+
+	var log strings.Builder
+	if err := run(ws, "", tofu, bazel, []string{"linux_amd64"}, nil, nil, &log); err != nil {
+		t.Fatalf("run: %v\n%s", err, log.String())
+	}
+	lock, err := os.ReadFile(filepath.Join(ws, ".terraform.lock.hcl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, children := lockedModules(t, lock)
+	want := []map[string]any{
+		{
+			"aws":   map[string]any{"source": "registry.opentofu.org/acme/aws", "version": "1.2.3"},
+			"aws-2": map[string]any{"source": "registry.opentofu.org/hashicorp/aws", "version": "~> 5.0"},
+		},
+		{
+			"null": map[string]any{"source": "registry.opentofu.org/hashicorp/null", "version": ">= 3.2.3, ~> 3.2"},
+		},
+	}
+	if !reflect.DeepEqual(children, want) {
+		t.Errorf("locked against %v, want %v", children, want)
+	}
+
+	// The summary printed when tofu can't meet the constraints shows the
+	// combined one.
+	t.Setenv("FAKE_TOFU_FAIL", "1")
+	log.Reset()
+	if err := run(ws, "", tofu, bazel, []string{"linux_amd64"}, nil, nil, &log); err == nil {
+		t.Fatal("expected run to fail")
+	}
+	if want := "stacks  >= 3.2.3, ~> 3.2"; !strings.Contains(log.String(), want) {
+		t.Errorf("log lacks %q:\n%s", want, log.String())
 	}
 }

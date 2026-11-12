@@ -21,7 +21,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       # Bazelisk reads this for every invocation, including the nested
-      # e2e/smoke module. Empty means "use .bazelversion".
+      # e2e/smoke module. Empty means "use .bazelversion". The Bazel the
+      # integration tests run inside themselves is the one that runs them
+      # (@running_bazel in MODULE.bazel), so it follows this too.
       USE_BAZEL_VERSION: ${{ matrix.bazel != 'pinned' && matrix.bazel || '' }}
       # gazelle's go_repository then reads Go modules from the user's module
       # cache (restored below) instead of downloading each into a cache

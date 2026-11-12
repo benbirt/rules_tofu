@@ -120,9 +120,21 @@ _BAZEL_FILES = ["BUILD", "BUILD.bazel", "MODULE.bazel", "REPO.bazel", "WORKSPACE
 _MODULE_TARGET = "_rules_tofu_module"
 _FILES_TARGET = "_rules_tofu_files"
 
-# Files that never belong in a work tree: VCS metadata, and tofu's own state
-# and lock, which a module repository may have committed.
-_EXCLUDED = ["**/.git/**", "**/.terraform/**", "**/.terraform.lock.hcl", "BUILD.bazel"]
+# Files that never belong in a work tree: VCS metadata; tofu's own state and
+# lock, which a module repository may have committed; and the variables files
+# tofu loads by itself, which a module's root and its examples often carry
+# and no rule accepts as data (`check_no_auto_tfvars`). tofu reads none of
+# them from a module that is called.
+_EXCLUDED = [
+    "**/.git/**",
+    "**/.terraform/**",
+    "**/.terraform.lock.hcl",
+    "**/terraform.tfvars",
+    "**/terraform.tfvars.json",
+    "**/*.auto.tfvars",
+    "**/*.auto.tfvars.json",
+    "BUILD.bazel",
+]
 
 def _git(ctx, args, context, working_directory = ""):
     result = ctx.execute(
