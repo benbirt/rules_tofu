@@ -39,8 +39,10 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -165,9 +167,15 @@ func scan(repo, moduleDir string, modules []Module, self string, submodules []st
 		dirs, err := tfconfig.ModuleDirs(repo, moduleDir, sorted(called)...)
 		if err != nil {
 			// A local path that leads below a submodule's own directory,
-			// which is all a checkout leaves of it, is a missing directory.
-			if len(submodules) > 0 {
-				return nil, fmt.Errorf("%w (the repository has git submodules, and %s: %s)", err, notFetched, strings.Join(submodules, ", "))
+			// which is all a checkout leaves of it, is a directory that
+			// isn't there. Any other error is not about submodules.
+			var missing *fs.PathError
+			if errors.As(err, &missing) {
+				if rel, relErr := filepath.Rel(repo, missing.Path); relErr == nil {
+					if s := submodule(filepath.ToSlash(rel)); s != "" {
+						return nil, fmt.Errorf("%w (it is in the git submodule %q, and %s)", err, s, notFetched)
+					}
+				}
 			}
 			return nil, err
 		}

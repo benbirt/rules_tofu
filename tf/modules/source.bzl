@@ -78,8 +78,12 @@ def is_commit(ref):
     return len(ref) in (40, 64) and all([c in _HEX for c in ref.elems()])
 
 def looks_abbreviated(ref):
-    """Whether `ref` could be a commit ID cut short: 7 or more hex characters, but not all of one."""
-    return len(ref) >= 7 and len(ref) < 64 and len(ref) != 40 and all([c in _HEX for c in ref.lower().elems()])
+    """Whether `ref` could be a commit ID cut short: 7 or more hex characters, but not all of one.
+
+    Lower case only, as `is_commit`: the hint this decides on must lead to
+    something that is then accepted.
+    """
+    return len(ref) >= 7 and len(ref) < 64 and len(ref) != 40 and all([c in _HEX for c in ref.elems()])
 
 def ls_remote_commit(output, ref):
     """The commit `git ls-remote` reports for `ref`, or None.

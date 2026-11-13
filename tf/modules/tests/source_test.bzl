@@ -116,9 +116,9 @@ def _checks_test_impl(ctx):
 
     asserts.false(env, looks_abbreviated(_SHA))
     asserts.false(env, looks_abbreviated(_SHA256))
-    for ref in ["abc1234", "ABC1234", _SHA[:39], _SHA256[:41], _SHA256[:63]]:
+    for ref in ["abc1234", _SHA[:39], _SHA256[:41], _SHA256[:63]]:
         asserts.true(env, looks_abbreviated(ref), "missed {}".format(ref))
-    for ref in ["", "abc123", "v1.2.3", "main", "feature/abc1234", _SHA + "0g"]:
+    for ref in ["", "abc123", "ABC1234", "v1.2.3", "main", "feature/abc1234", _SHA + "0g"]:
         asserts.false(env, looks_abbreviated(ref), "took {} for a commit".format(repr(ref)))
 
     asserts.equals(env, None, check_version("5.8.1"))

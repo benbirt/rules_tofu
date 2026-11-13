@@ -25,6 +25,8 @@
 #      label to add: the network module's library can't carry the providers of
 #      a submodule outside modules/ that only its callers reach (#76).
 #   4. MODULE.bazel.lock records the commits of the git and registry modules.
+#      With the git module's record replaced by one of the kind a registry
+#      module has, the build resolves it again and puts it right (#96).
 #   5. v1.0.0 is moved to a new commit. After `bazel clean --expunge`, //app
 #      still plans the old commit's content, and the build passes with
 #      --lockfile_mode=error.
@@ -160,6 +162,25 @@ mv "${_TMPDIR}/app.BUILD.bazel" app/BUILD.bazel
 echo "--- 4. facts ---" >&2
 grep -q -F "\"commit\": \"${first_commit}\"" MODULE.bazel.lock || fail "MODULE.bazel.lock doesn't record ${first_commit}"
 grep -q -F '"cloudposse/label/null@0.25.0"' MODULE.bazel.lock || fail "MODULE.bazel.lock doesn't record the registry module"
+# A badly merged lockfile: under the git module's key, a well-formed fact of
+# the kind a registry module with an archive has. It is no use there, so it
+# must be resolved again (from the fixture, offline), not trusted or tripped
+# over.
+sed -i.bak "s|\"commit\": \"${first_commit}\"|\"location\": \"https://example.com/x.zip\", \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"|" MODULE.bazel.lock
+rm MODULE.bazel.lock.bak
+if grep -q -F "\"commit\": \"${first_commit}\"" MODULE.bazel.lock; then
+  fail "couldn't replace the git module's fact in MODULE.bazel.lock"
+fi
+# As on another machine: a server that has yet to evaluate the extension,
+# and none of the facts Bazel keeps for itself in the output base's own
+# lockfile, which would stand in for the bad one.
+bazel shutdown >&2
+rm -f "${NESTED_OUTPUT_BASE}/MODULE.bazel.lock"
+bazel build //app >&2 || fail "the build failed with a fact of the wrong kind in MODULE.bazel.lock"
+grep -q -F "\"commit\": \"${first_commit}\"" MODULE.bazel.lock || fail "the git module's fact wasn't resolved again"
+if grep -q -F 'https://example.com/x.zip' MODULE.bazel.lock; then
+  fail "the fact of the wrong kind is still in MODULE.bazel.lock"
+fi
 
 echo "--- 5. move the tag ---" >&2
 sed -i.bak 's/"v1"/"v2"/' "${FIXTURES}/network.git/shared/main.tf"

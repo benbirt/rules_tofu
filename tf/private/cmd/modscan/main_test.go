@@ -232,7 +232,7 @@ func TestScan_GitSubmodule(t *testing.T) {
 		// is an error of ModuleDirs's own; it gains the reason.
 		"a local call leads inside one": {
 			mainTF: `module "shared" { source = "./vendor/shared/nested" }`,
-			want:   `(the repository has git submodules, and rules_tofu does not fetch git submodules (OpenTofu does): vendor/shared, docs/theme)`,
+			want:   `(it is in the git submodule "vendor/shared", and rules_tofu does not fetch git submodules (OpenTofu does))`,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -240,6 +240,39 @@ func TestScan_GitSubmodule(t *testing.T) {
 			_, err := scan(repo, tc.moduleDir, modules, self, submodules)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Errorf("got %v, want an error containing %q", err, tc.want)
+			}
+			if err != nil && strings.Contains(err.Error(), "docs/theme") && !strings.Contains(tc.want, "docs/theme") {
+				t.Errorf("the error names a submodule it isn't about: %v", err)
+			}
+		})
+	}
+
+	// An error that has nothing to do with a submodule says nothing of
+	// them, though the repository has some.
+	for name, tc := range map[string]struct {
+		moduleDir, mainTF, want string
+	}{
+		"a local call to a directory that isn't there": {
+			mainTF: `module "gone" { source = "./gone" }`,
+			want:   "gone",
+		},
+		"a module directory without configuration": {
+			moduleDir: "vendor",
+			want:      `"/vendor" holds no .tf`,
+		},
+		"configuration that can't be read": {
+			mainTF: `module "broken" {`,
+			want:   "main.tf",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			repo := tree(t, tc.mainTF)
+			_, err := scan(repo, tc.moduleDir, modules, self, submodules)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("got %v, want an error containing %q", err, tc.want)
+			}
+			if strings.Contains(err.Error(), "submodule") {
+				t.Errorf("the error blames a git submodule: %v", err)
 			}
 		})
 	}
