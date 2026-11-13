@@ -46,7 +46,7 @@ echo "tofu.version(version = \"${TOFU_VERSION}\")" >>"${WS}/MODULE.bazel"
 cd "${WS}"
 
 echo "--- 1. srcs only in a subdirectory ---" >&2
-bazel test //sub_only:deploy.fmt_check --test_output=errors >&2 || fail "fmt_check of a target whose srcs are all in a subdirectory failed"
+bazel test //sub_only:lib.fmt_check --test_output=errors >&2 || fail "fmt_check of a target whose srcs are all in a subdirectory failed"
 
 echo "--- 2. unformatted srcs in subdirectories fail the check ---" >&2
 cp nested/not_src.tf "${_TMPDIR}/not_src.tf.before"

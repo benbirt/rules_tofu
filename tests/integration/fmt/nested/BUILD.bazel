@@ -12,6 +12,7 @@ tf_library(
         ],
         exclude = ["not_src.tf"],
     ),
+    visibility = ["//empty:__pkg__"],
 )
 
 # The module's test file, which a `tf_library` doesn't take: a `tf_test` has
@@ -24,8 +25,8 @@ tf_test(
 )
 
 # No `srcs`: nothing to format, so no `.fmt` or `.fmt_check` target. They
-# are in this package because a root module needs some configuration in its
-# own directory (issue #119), which here is the library's.
+# are in this package because a deploy needs a configuration file in its
+# root module's directory (issue #119), which here is the library's.
 tf_library(
     name = "no_srcs_lib",
     deps = [":lib"],

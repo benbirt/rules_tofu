@@ -35,8 +35,11 @@ func runTest(extraArgs []string) error {
 	if err := copyTree(*workTree, copyRoot); err != nil {
 		return fmt.Errorf("copy work tree: %w", err)
 	}
+	// The root module's directory, which the work tree lacks when no file
+	// is at or below it: an empty module, as in the run directory of a
+	// deploy (rundir.go).
 	cwd := filepath.Join(copyRoot, filepath.FromSlash(*packageDir))
-	if _, err := os.Stat(cwd); err != nil {
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
 		return fmt.Errorf("work-tree cwd %s: %w", cwd, err)
 	}
 

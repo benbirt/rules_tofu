@@ -92,7 +92,11 @@ fi
 PLUGIN_DIR="$PWD/$PLUGIN_TREE_ROOT"
 SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/rules_tofu-validate-XXXXXX")
 trap 'rm -rf "$SCRATCH"' EXIT
-cp -RL "$WORK_TREE_ROOT"/. "$SCRATCH"/
+# A library with no files and no deps declares nothing under its work tree,
+# so there is none to copy: an empty module, valid like any other.
+if [ -d "$WORK_TREE_ROOT" ]; then
+    cp -RL "$WORK_TREE_ROOT"/. "$SCRATCH"/
+fi
 # Zero-providers case: no files are declared under the plugin root, so its
 # input directory is absent from the sandbox. Fall back to an empty dir so
 # init runs offline and installs nothing.
@@ -106,12 +110,15 @@ if [ -e "$CWD/.terraform.lock.hcl" ]; then
          "Lock files are managed implicitly via Bazel's provider pinning; remove it from srcs/data." 1>&2
     exit 1
 fi
+# The root module's directory is in the work tree only if some file is at or
+# below it. One that isn't there is an empty module, which this creates
+# (issue #119), before anything is copied into it.
+mkdir -p "$CWD/.terraform/modules"
 if [ -n "$LOCK" ]; then
     cp "$LOCK" "$CWD/.terraform.lock.hcl"
 fi
 # Every module call is already in the work tree; the manifest says where, and
 # -get=false makes init check the calls against it rather than fetch.
-mkdir -p "$CWD/.terraform/modules"
 cp "$MODULES" "$CWD/.terraform/modules/modules.json"
 # Redirect init stdout to suppress "Installing provider" progress spam.
 # Stderr is kept so error messages (e.g. "Failed to query available provider

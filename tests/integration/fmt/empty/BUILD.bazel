@@ -1,0 +1,14 @@
+load("@rules_tofu//tf:defs.bzl", "tf_library")
+
+# Libraries whose root module is empty, and has no directory in the work
+# tree either, since nothing of theirs is at or below this package: one of
+# deps alone, one of nothing at all. Both build (issue #119), and without
+# `srcs` neither has a `.fmt` or `.fmt_check` target.
+tf_library(
+    name = "lib",
+    deps = ["//nested:lib"],
+)
+
+tf_library(
+    name = "nothing",
+)
