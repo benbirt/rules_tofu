@@ -391,17 +391,19 @@ _module_tag = tag_class(
         "source": attr.string(
             mandatory = True,
             doc = "The module's address, as HCL's `source` gives it: a registry address " +
-                  "(`<namespace>/<name>/<system>`), `git::<url>[//<subdir>][?ref=<ref>]`, " +
+                  "(`[<host>/]<namespace>/<name>/<system>`), `git::<url>[//<subdir>][?ref=<ref>]`, " +
                   "`github.com/<owner>/<repo>[//<subdir>][?ref=<ref>]`, or the URL of an archive.",
         ),
         "version": attr.string(
-            doc = "For a registry module, the exact version to pin, e.g. \"5.8.1\". Required " +
-                  "for registry modules and not allowed for other sources.",
+            doc = "For a registry module, the exact version to pin, as `X.Y.Z`, e.g. \"5.8.1\" " +
+                  "(no constraint and no prerelease suffix). Required for registry modules and " +
+                  "not allowed for other sources.",
         ),
         "name": attr.string(
             doc = "For a git or archive source, the module's label: `@tf_modules//<name>`. " +
                   "Required for those and not allowed for registry modules, whose label is " +
-                  "their address.",
+                  "their address in lower case, `@tf_modules//<namespace>/<name>/<system>`, " +
+                  "with the host in front unless it is registry.opentofu.org.",
         ),
         "commit": attr.string(
             doc = "For a git source, the commit to fetch. If unset, the commit that `?ref=` " +

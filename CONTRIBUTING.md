@@ -106,8 +106,18 @@ its cosign signature against the OpenTofu release workflow's identity with the
 [cosign](https://github.com/sigstore/cosign) release pinned in `MODULE.bazel`,
 and copies the five platform digests into
 [`toolchain/versions.bzl`](toolchain/versions.bzl). Don't paste digests in by
-hand. Build `//examples/hello:hello` afterwards to check the new binary
-downloads, and run the Starlark tests under `//toolchain/tests`.
+hand.
+
+Nothing else uses a version that is only in `KNOWN_VERSIONS`, so check the new
+binary with the integration tests generated for each entry, named with the
+version's dots as underscores:
+
+```sh
+bazel test //tests/integration:module_dependency_1_12_1_test //tests/integration:fmt_1_12_1_test
+```
+
+With `--default`, the examples, `e2e/smoke` and the other integration tests
+use the new version too.
 
 ## Go version floor
 
