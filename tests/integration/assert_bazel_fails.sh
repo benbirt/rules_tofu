@@ -45,6 +45,8 @@ echo "  date:               $(date -u)" >&2
 cd "${BIT_WORKSPACE_DIR}"
 
 only=",${ONLY_CASES:-},"
+# Every non-empty line of CASES is a case the loop below must run.
+expected="$(grep -c . <<<"${CASES}" || true)"
 passed=()
 failed=()
 ran=0
@@ -57,7 +59,10 @@ while IFS='|' read -r name command target pattern; do
   LOG="${_TMPDIR}/${name}.log"
   echo "--- ${name}: bazel ${command} ${target}, expecting '${pattern}' ---" >&2
   start=${SECONDS}
-  bazel "${command}" "${target}" >"${LOG}" 2>&1
+  # Not the loop's stdin, which is CASES: a `run` case whose program reads
+  # its input (tofu asking for a variable, or for approval) would consume
+  # the remaining cases, and the loop would end early with nothing failed.
+  bazel "${command}" "${target}" >"${LOG}" 2>&1 </dev/null
   rc=$?
   elapsed=$((SECONDS - start))
   if [[ ${rc} -eq 0 ]]; then
@@ -85,6 +90,10 @@ bazel shutdown >/dev/null 2>&1 || true
 echo "=== ${ran} cases: ${#passed[@]} passed, ${#failed[@]} failed ===" >&2
 if [[ ${ran} -eq 0 ]]; then
   echo "FAIL: no case matched ONLY_CASES='${ONLY_CASES:-}'" >&2
+  exit 1
+fi
+if [[ -z "${ONLY_CASES:-}" && ${ran} -ne ${expected} ]]; then
+  echo "FAIL: ran ${ran} of ${expected} cases" >&2
   exit 1
 fi
 if [[ ${#failed[@]} -gt 0 ]]; then

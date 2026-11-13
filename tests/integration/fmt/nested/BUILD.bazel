@@ -1,16 +1,38 @@
-load("@rules_tofu//tf:defs.bzl", "tf_library")
+load("@rules_tofu//tf:defs.bzl", "tf_deploy", "tf_library", "tf_test")
 
-# `srcs` reach into subdirectories, as a module with submodules and tests
-# does. `not_src.tf` is in the package directory but not in `srcs`, so
-# neither `.fmt` nor `.fmt_check` may touch it.
+# `srcs` reach into subdirectories, as a module with submodules does.
+# `not_src.tf` is in the package directory but not in `srcs`, so neither
+# `.fmt` nor `.fmt_check` may touch it.
 tf_library(
     name = "lib",
     srcs = glob(
         [
             "**/*.tf",
             "**/*.tofu",
-            "**/*.tftest.hcl",
         ],
         exclude = ["not_src.tf"],
     ),
+)
+
+# The module's test file, which a `tf_library` doesn't take: a `tf_test` has
+# `.fmt` and `.fmt_check` targets of its own for it. The driver never runs
+# the test itself.
+tf_test(
+    name = "tests",
+    srcs = glob(["tests/*.tftest.hcl"]),
+    module = ":lib",
+)
+
+# No `srcs`: nothing to format, so no `.fmt` or `.fmt_check` target. They
+# are in this package because a root module needs some configuration in its
+# own directory (issue #119), which here is the library's.
+tf_library(
+    name = "no_srcs_lib",
+    deps = [":lib"],
+)
+
+tf_deploy(
+    name = "no_srcs_deploy",
+    allow_ephemeral_state = True,
+    deps = [":no_srcs_lib"],
 )

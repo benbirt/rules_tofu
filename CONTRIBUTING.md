@@ -32,7 +32,7 @@ bazel test //...
 | `toolchain/` | OpenTofu binary download + toolchain registration |
 | `docs/` | `starlark_doc_extract` per public `.bzl` file; shipped as the BCR entry's `docs_url` |
 | `tools/` | Maintainer tools (dev-only, not in the release tarball): `update_versions` pins an OpenTofu release |
-| `tests/integration/` | Bazel-in-Bazel negative integration tests |
+| `tests/integration/` | Bazel-in-Bazel integration tests |
 | `examples/` | End-to-end usage examples |
 | `e2e/smoke/` | Standalone downstream module; the BCR presubmit test module |
 | `.bcr/` | Bazel Central Registry metadata/source/presubmit templates |
