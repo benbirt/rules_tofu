@@ -207,6 +207,47 @@ func TestConfigFiles_TofuShadowsTf(t *testing.T) {
 	}
 }
 
+// tofu passes over a file whose name starts with a dot (checked on 1.12.0: a
+// directory holding only `.hidden.tf` is "an empty directory" to init, and
+// validates whatever the file says), so such a file is no configuration, and
+// a directory named like one never was.
+func TestConfigFiles_IgnoresDotfilesAndDirectories(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir, map[string]string{
+		".hidden.tf":         ``,
+		".tf":                ``,
+		".also.tofu.json":    `{}`,
+		".hidden.tftest.hcl": ``,
+	})
+	for _, name := range []string{"dir.tf", "dir.tftest.hcl"} {
+		if err := os.Mkdir(filepath.Join(dir, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if HasConfig(dir) {
+		t.Errorf("HasConfig is true for a directory of dotfiles: %v", mustConfigFiles(t, dir))
+	}
+	if got, err := TestFiles(dir); err != nil || len(got) != 0 {
+		t.Errorf("TestFiles = %v, %v, want none", got, err)
+	}
+	writeFiles(t, dir, map[string]string{"shown.tf": ``, "shown.tftest.hcl": ``})
+	if got := mustConfigFiles(t, dir); len(got) != 1 || filepath.Base(got[0]) != "shown.tf" {
+		t.Errorf("ConfigFiles = %v, want only shown.tf", got)
+	}
+	if got, err := TestFiles(dir); err != nil || len(got) != 1 || filepath.Base(got[0]) != "shown.tftest.hcl" {
+		t.Errorf("TestFiles = %v, %v, want only shown.tftest.hcl", got, err)
+	}
+}
+
+func mustConfigFiles(t *testing.T, dir string) []string {
+	t.Helper()
+	files, err := ConfigFiles(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return files
+}
+
 func TestHasConfig_TofuOnly(t *testing.T) {
 	dir := t.TempDir()
 	if HasConfig(dir) {

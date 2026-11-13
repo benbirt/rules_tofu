@@ -83,11 +83,19 @@ func ConfigFiles(dir string) ([]string, error) {
 	}
 	var files []string
 	for _, e := range entries {
-		if !e.IsDir() && IsConfigFile(e.Name()) {
+		if !e.IsDir() && !ignored(e.Name()) && IsConfigFile(e.Name()) {
 			files = append(files, filepath.Join(dir, e.Name()))
 		}
 	}
 	return Effective(files), nil
+}
+
+// ignored reports whether tofu passes over a file of this name when it
+// reads a directory: one that starts with a dot. (It passes over editors'
+// `name~` and `#name#` files too, which no configuration or test file's
+// name can be.)
+func ignored(name string) bool {
+	return strings.HasPrefix(name, ".")
 }
 
 // configFiles lists the configuration files tofu reads in dir: primary

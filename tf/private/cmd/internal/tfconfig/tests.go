@@ -67,7 +67,7 @@ func TestFiles(dir string) ([]string, error) {
 	}
 	var files []string
 	for _, e := range entries {
-		if !e.IsDir() && IsTestFile(e.Name()) {
+		if !e.IsDir() && !ignored(e.Name()) && IsTestFile(e.Name()) {
 			files = append(files, filepath.Join(dir, e.Name()))
 		}
 	}

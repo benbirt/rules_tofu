@@ -346,9 +346,14 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   gives an empty root the lock (init would leave it unpruned, and tofu then
   holds it against a plugin cache nothing filled), and a test whose runs
   load modules that need providers fails there with tofu's "Missing
-  required provider": the validate action adds what to do, since nothing
-  rules_tofu can do makes init install them. Don't make an empty root an
-  error, and don't teach
+  required provider": the validate action adds what to do
+  (`empty_root_test_provider`), since nothing rules_tofu can do makes init
+  install them. "Has configuration" is asked in three places that must
+  agree with tofu and each other: `HAS_CONFIG` in the validate script,
+  `tfconfig.HasConfig`, and `check_has_configuration`. All count files, not
+  directories, with one of the four extensions, and not those whose names
+  start with a dot, which tofu passes over (checked on 1.12.0). Don't make
+  an empty root an error, and don't teach
   `tfconfig` that a missing directory is empty: `modscan` and `pin` rely on
   the failure. A `tf_deploy` is the exception, at analysis
   (`check_has_configuration`; `deploy_deps_only`,

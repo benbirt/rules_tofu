@@ -104,7 +104,8 @@ def check_has_configuration(ctx, entries):
     root = package_dir(ctx.label)
     for entry in entries:
         directory, _, name = entry.path.rpartition("/")
-        if directory == root and name.endswith(_CONFIG_EXTS):
+        # tofu passes over a file whose name starts with a dot.
+        if directory == root and name.endswith(_CONFIG_EXTS) and not name.startswith("."):
             return
     fail(("`{label}` has no configuration file in its root module's directory, {dir}: there is nothing " +
           "to deploy, and tofu refuses to plan it. `deps`, and files in subdirectories, are only reached " +

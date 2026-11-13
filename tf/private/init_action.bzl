@@ -45,7 +45,9 @@ def tf_init_validate(ctx, work_tree_files, work_tree_root, package_dir, plugin_t
           (see `provider_lock` in work_tree.bzl).
       test_dir: for a `tf_test`, the test files' directory relative to
           `package_dir`, passed to init and validate as `-test-directory` so
-          the test files are checked too; "" or None for tofu's default.
+          the test files are checked too; "" when they are in `package_dir`
+          itself, which tofu reads without being told. None for a rule that
+          has no test files.
 
     Returns:
       File: a stamp file declared as an action output.
@@ -79,11 +81,11 @@ STAMP=$5
 MODULES=$6
 LOCK=${7:-}
 TEST_DIR=${8:-}
-# The test files' directory, for a tf_test. Without it tofu reads the root
-# module's own directory and its default, `tests`. A string, not an array: an
-# empty array fails under `set -u` in bash 3.
+# The test files' directory, for a tf_test: `.` when it is the root module's
+# own, which tofu reads anyway, with its default, `tests`. A string, not an
+# array: an empty array fails under `set -u` in bash 3.
 TEST_FLAG=""
-if [ -n "$TEST_DIR" ]; then
+if [ -n "$TEST_DIR" ] && [ "$TEST_DIR" != "." ]; then
     TEST_FLAG="-test-directory=$TEST_DIR"
 fi
 # Resolve the input plugin tree to an absolute path up front: tofu resolves a
@@ -118,9 +120,11 @@ mkdir -p "$CWD/.terraform/modules"
 # ("initialized in an empty directory"): it installs no provider, and leaves
 # a lock as it finds it, which validate then holds against the empty plugin
 # cache. An empty root module requires no provider, so it gets no lock.
+# What tofu counts: files, and not those whose names start with a dot, which
+# these patterns don't match either (tfconfig.ConfigFiles).
 HAS_CONFIG=""
 for f in "$CWD"/*.tf "$CWD"/*.tf.json "$CWD"/*.tofu "$CWD"/*.tofu.json; do
-    if [ -e "$f" ]; then
+    if [ -f "$f" ]; then
         HAS_CONFIG=1
         break
     fi
@@ -168,7 +172,7 @@ touch "$STAMP"
             plugin_tree_root,
             stamp.path,
             modules_manifest.path,
-        ] + [lock.path if lock else ""] + ([test_dir] if test_dir else []),
+        ] + [lock.path if lock else ""] + ([test_dir or "."] if test_dir != None else []),
         env = {"TF_IN_AUTOMATION": "1"},
         mnemonic = "TofuValidate",
         progress_message = "TofuValidate %{label}",

@@ -9,9 +9,8 @@
 #      libraries each require the provider, in a file of their own, and the
 #      lock meets both constraints (issue #99).
 #   2. A build records MODULE.bazel.lock. It includes a library with the
-#      locked provider and no files, whose root module has no directory for
-#      the lock to be copied into until the validate action makes one
-#      (issue #119).
+#      locked provider and no files: an empty root module, which validates
+#      because it is not given the lock (issue #119).
 #   3. hashicorp/null is bumped the way Dependabot or Renovate does it: in
 #      versions.tf and .terraform.lock.hcl, and nowhere else.
 #   4. The build passes with --lockfile_mode=error and leaves MODULE.bazel.lock
