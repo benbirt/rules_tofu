@@ -65,6 +65,7 @@ load(
     "check_version",
     "hub_path",
     "is_commit",
+    "looks_abbreviated",
     "ls_remote_commit",
     "modules_service_url",
     "registry_download_endpoint",
@@ -110,8 +111,10 @@ def _parse_sources(module_ctx, sources):
     ]
 
 # Bazel's own files in a fetched module would split it into packages of its
-# own, so they're removed before the module's BUILD file is written.
-_BAZEL_FILES = ["BUILD", "BUILD.bazel", "MODULE.bazel", "REPO.bazel", "WORKSPACE", "WORKSPACE.bazel"]
+# own, or, for the ignore file (which Bazel reads at the root of any
+# repository), hide directories from the module's `glob`. They're removed
+# before the module's BUILD file is written.
+_BAZEL_FILES = [".bazelignore", "BUILD", "BUILD.bazel", "MODULE.bazel", "REPO.bazel", "WORKSPACE", "WORKSPACE.bazel"]
 
 # The generated targets: the module's library, in its directory, and, when
 # that is a subdirectory, the rest of the fetched files, which local paths
@@ -154,6 +157,10 @@ def _resolve_ref(module_ctx, remote, ref, context):
     patterns = [ref, ref + "^{}"] if ref else ["HEAD"]
     commit = ls_remote_commit(_git(module_ctx, ["ls-remote", remote] + patterns, context), ref)
     if not commit:
+        if looks_abbreviated(ref):
+            fail(("{}: {} has no branch or tag `{}`. If it is a commit, give all 40 (or 64) characters: " +
+                  "rules_tofu pins the commit, and can't look up an abbreviation without fetching the " +
+                  "whole repository.").format(context, remote, ref))
         fail("{}: {} has no ref `{}`".format(context, remote, ref or "HEAD"))
     return commit
 
@@ -164,7 +171,11 @@ def _download_json(module_ctx, url, output, context):
     return json.decode(module_ctx.read(output))
 
 def _resolve_registry(module_ctx, parsed, version, context):
-    """Where a registry module version's source is, and what pins it: a fact."""
+    """Where a registry module version's source is, and what pins it.
+
+    Returns `struct(fact, location)`: the fact to record, and its location as
+    `_parse_sources` reads it.
+    """
     discovery = _download_json(
         module_ctx,
         "https://{}/.well-known/terraform.json".format(parsed.host),
@@ -184,16 +195,43 @@ def _resolve_registry(module_ctx, parsed, version, context):
     if located.error:
         fail(located.error)
     location = _parse_sources(module_ctx, [located.location])[0]
-    if location.error or location.kind == "registry":
-        fail("{}: the registry gave a location rules_tofu can't fetch, `{}`: {}".format(context, located.location, location.error or "it is another registry address"))
+    if location.error or location.kind not in ("git", "archive"):
+        fail("{}: the registry gave a location rules_tofu can't fetch, `{}`: {}".format(
+            context,
+            located.location,
+            location.error or "it is {}, not a git repository or an archive".format(
+                "another registry address" if location.kind == "registry" else "a local path",
+            ),
+        ))
     if location.kind == "git":
-        return {"location": located.location, "commit": _resolve_ref(module_ctx, location.remote, location.ref, context)}
-    downloaded = module_ctx.download(url = location.url, output = "registry/archive")
-    return {"location": located.location, "sha256": downloaded.sha256}
+        fact = {"location": located.location, "commit": _resolve_ref(module_ctx, location.remote, location.ref, context)}
+    else:
+        downloaded = module_ctx.download(url = location.url, output = "registry/archive")
+        fact = {"location": located.location, "sha256": downloaded.sha256}
+    return struct(fact = fact, location = location)
 
-def _cached(module_ctx, key):
+def _cached(module_ctx, key, kind):
+    """The fact recorded under `key`, if it is a well-formed one of `kind`, else None."""
     fact = module_ctx.facts.get(key)
-    return dict(fact) if valid_fact(fact) else None
+    return dict(fact) if valid_fact(fact, kind) else None
+
+def _cached_registry(module_ctx, key):
+    """A registry module's recorded fact and its location, as `_resolve_registry` returns them, or None.
+
+    Like any other malformed fact, one whose location can't be read, or
+    whose pin is not the kind its location needs (a commit for a git
+    repository, a digest for an archive), is a miss: the registry is asked
+    again and the lockfile's record replaced (issue #96).
+    """
+    fact = _cached(module_ctx, key, "registry")
+    if not fact:
+        return None
+    location = _parse_sources(module_ctx, [fact["location"]])[0]
+    if location.error:
+        return None
+    if location.kind == "git" and "commit" in fact or location.kind == "archive" and "sha256" in fact:
+        return struct(fact = fact, location = location)
+    return None
 
 def _tidy(repository_ctx, context):
     """Remove what the fetched files hold that Bazel must not see.
@@ -235,8 +273,14 @@ def _tidy(repository_ctx, context):
             repository_ctx.delete(entry.path)
 
 def _fetch(repository_ctx):
+    """Fetch the module's files and tidy them.
+
+    Returns the paths of the fetched commit's git submodules, which are not
+    fetched: `modscan` fails the module if it is in one or calls into one.
+    """
     attr = repository_ctx.attr
     context = "tf_modules.module `{}`".format(attr.source)
+    submodules = []
     if attr.kind == "git":
         _git(repository_ctx, ["init", "-q"], context)
         fetched = repository_ctx.execute(
@@ -251,18 +295,28 @@ def _fetch(repository_ctx):
         head = _git(repository_ctx, ["rev-parse", "HEAD"], context).strip()
         if head != attr.commit:
             fail("{}: checked out {}, expected {}".format(context, head, attr.commit))
+
+        # A submodule is a tree entry of mode 160000, a commit of another
+        # repository: `<mode> commit <id>\t<path>`.
+        for line in _git(repository_ctx, ["-c", "core.quotepath=false", "ls-tree", "-r", attr.commit], context).splitlines():
+            entry, _, path = line.partition("\t")
+            if entry.startswith("160000 ") and path:
+                submodules.append(path)
         repository_ctx.delete(".git")
     else:
         repository_ctx.download_and_extract(url = attr.url, sha256 = attr.sha256, type = attr.archive_type)
     _tidy(repository_ctx, context)
+    return submodules
 
-def _scan(repository_ctx):
+def _scan(repository_ctx, submodules):
     # Every declared module, this one included: it may call its own address
     # for a submodule, and another tag may declare one of its subdirectories,
     # which then provides the calls into it.
     args = [repository_ctx.path(_MODSCAN), "--self=" + repository_ctx.attr.label]
     for label, source in repository_ctx.attr.modules.items():
         args.append("--module={}={}".format(label, source))
+    for path in submodules:
+        args.append("--git-submodule=" + path)
     args += [repository_ctx.path("."), repository_ctx.attr.subdir]
     result = repository_ctx.execute(args)
     if result.return_code != 0:
@@ -281,8 +335,7 @@ def _provider_label(source, context):
 def _tf_module_repo_impl(repository_ctx):
     attr = repository_ctx.attr
     context = "tf_modules.module `{}`".format(attr.source)
-    _fetch(repository_ctx)
-    scanned = _scan(repository_ctx)
+    scanned = _scan(repository_ctx, _fetch(repository_ctx))
 
     if scanned["undeclared"]:
         fail("{} calls modules that MODULE.bazel doesn't declare. Add:\n{}".format(
@@ -525,13 +578,9 @@ def _tf_modules_extension_impl(module_ctx):
         context = "tf_modules.module `{}`".format(tag.source)
         if parsed.kind == "registry":
             key = "{}@{}".format(path, tag.version)
-            fact = _cached(module_ctx, key) or _resolve_registry(module_ctx, parsed, tag.version, context)
+            pinned = _cached_registry(module_ctx, key) or _resolve_registry(module_ctx, parsed, tag.version, context)
+            fact, location = pinned.fact, pinned.location
             facts[key] = fact
-            location = _parse_sources(module_ctx, [fact["location"]])[0]
-            if location.error or location.kind == "registry":
-                fail("{}: MODULE.bazel.lock records a location rules_tofu can't fetch, `{}`".format(context, fact["location"]))
-            if location.kind == "git" and "commit" not in fact or location.kind == "archive" and "sha256" not in fact:
-                fail("{}: MODULE.bazel.lock's record of it is incomplete; delete it from the file".format(context))
             resolved[path] = struct(
                 source = tag.source,
                 version = tag.version,
@@ -546,7 +595,7 @@ def _tf_modules_extension_impl(module_ctx):
         elif parsed.kind == "git":
             commit = tag.commit
             if not commit:
-                fact = _cached(module_ctx, tag.source) or {"commit": _resolve_ref(module_ctx, parsed.remote, parsed.ref, context)}
+                fact = _cached(module_ctx, tag.source, "git") or {"commit": _resolve_ref(module_ctx, parsed.remote, parsed.ref, context)}
                 facts[tag.source] = fact
                 commit = fact["commit"]
             resolved[path] = struct(

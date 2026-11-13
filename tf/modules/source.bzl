@@ -77,6 +77,14 @@ def is_commit(ref):
     """Whether `ref` is a full git commit ID (SHA-1 or SHA-256)."""
     return len(ref) in (40, 64) and all([c in _HEX for c in ref.elems()])
 
+def looks_abbreviated(ref):
+    """Whether `ref` could be a commit ID cut short: 7 or more hex characters, but not all of one.
+
+    Lower case only, as `is_commit`: the hint this decides on must lead to
+    something that is then accepted.
+    """
+    return len(ref) >= 7 and len(ref) < 64 and len(ref) != 40 and all([c in _HEX for c in ref.elems()])
+
 def ls_remote_commit(output, ref):
     """The commit `git ls-remote` reports for `ref`, or None.
 
@@ -95,27 +103,46 @@ def ls_remote_commit(output, ref):
             return found[name]
     return None
 
-def valid_fact(fact):
-    """Whether a recorded fact is a well-formed `{"commit": ...}` or `{"sha256": ...}`.
+def valid_fact(fact, kind):
+    """Whether a recorded fact is a well-formed one of its kind.
 
     Facts come from MODULE.bazel.lock, which is a checked-in file anyone can
-    edit; a malformed one is treated as a miss and resolved again.
+    edit or mis-merge; a malformed one is treated as a miss and resolved
+    again. A fact of the other kind is malformed too: the two are told apart
+    by the key they are stored under, not by their shape.
+
+    Args:
+        fact: A value from `module_ctx.facts`, or None.
+        kind: `"git"`, for a git module's `?ref=`: exactly `{"commit": ...}`.
+            `"registry"`, for a registry module's version: a `location` and
+            exactly one of `commit` and `sha256`. Whether that pin suits the
+            location is for the caller, who can parse it.
+
+    Returns:
+        True if `fact` can be used as one of `kind`.
     """
-    if type(fact) != "dict" or len(fact) == 0:
+    if type(fact) != "dict":
+        return False
+    if kind == "git":
+        keys = ["commit"]
+    elif kind == "registry" and "commit" in fact:
+        keys = ["commit", "location"]
+    elif kind == "registry":
+        keys = ["location", "sha256"]
+    else:
+        return False
+    if len(fact) != len(keys) or not all([key in fact for key in keys]):
         return False
     for key, value in fact.items():
-        if key == "commit":
-            if type(value) != "string" or not is_commit(value):
-                return False
-        elif key == "sha256":
-            if type(value) != "string" or len(value) != 64 or not all([c in _HEX for c in value.elems()]):
-                return False
-        elif key == "location":
-            if type(value) != "string" or not value:
-                return False
-        else:
+        if type(value) != "string":
             return False
-    return "commit" in fact or "sha256" in fact
+        if key == "commit" and not is_commit(value):
+            return False
+        if key == "sha256" and (len(value) != 64 or not all([c in _HEX for c in value.elems()])):
+            return False
+        if key == "location" and not value:
+            return False
+    return True
 
 def _parse_version(version):
     parts = []

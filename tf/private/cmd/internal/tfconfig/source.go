@@ -172,18 +172,23 @@ func BestMatch(providers []string, source string) (index int, subdir string) {
 // first `//` that isn't part of a `scheme://`. A query string (`?ref=`)
 // stays with the base address.
 func SplitSubdir(source string) (string, string) {
-	rest := source
-	offset := 0
-	if i := strings.Index(rest, "://"); i >= 0 {
-		offset = i + 3
-		rest = rest[offset:]
+	// Neither the scheme's `://` nor the subdirectory's `//` is looked for
+	// in the query, which may hold a URL or a path of its own.
+	stop := len(source)
+	if q := strings.Index(source, "?"); q >= 0 {
+		stop = q
 	}
-	i := strings.Index(rest, "//")
+	offset := 0
+	if i := strings.Index(source[:stop], "://"); i >= 0 {
+		offset = i + 3
+	}
+	i := strings.Index(source[offset:stop], "//")
 	if i < 0 {
 		return source, ""
 	}
-	base := source[:offset+i]
-	subdir := rest[i+2:]
+	i += offset
+	base := source[:i]
+	subdir := source[i+2:]
 	if q := strings.Index(subdir, "?"); q >= 0 {
 		base += subdir[q:]
 		subdir = subdir[:q]

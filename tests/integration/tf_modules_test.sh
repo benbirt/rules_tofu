@@ -12,7 +12,10 @@
 #      directory (the names of the generated targets once collided with
 #      them, issue #61), and symlinks of every kind: to a file the module
 #      needs, to a directory, to an ancestor (which Bazel's glob can't
-#      follow), to nothing, and out of the repository.
+#      follow), to nothing, and out of the repository; a `.bazelignore`
+#      naming a directory the plan needs, which Bazel would otherwise obey
+#      (issue #102); and a git submodule that nothing calls, which is not
+#      fetched and must not matter (issue #94).
 #   2. //app plans: it calls a git module (which calls a registry module and
 #      requires a provider that only the module names), a submodule of it
 #      under modules/ and one outside modules/ by `//<subdir>`, the archive,
@@ -22,6 +25,8 @@
 #      label to add: the network module's library can't carry the providers of
 #      a submodule outside modules/ that only its callers reach (#76).
 #   4. MODULE.bazel.lock records the commits of the git and registry modules.
+#      With the git module's record replaced by one of the kind a registry
+#      module has, the build resolves it again and puts it right (#96).
 #   5. v1.0.0 is moved to a new commit. After `bazel clean --expunge`, //app
 #      still plans the old commit's content, and the build passes with
 #      --lockfile_mode=error.
@@ -32,6 +37,8 @@
 #      tag to add.
 #   8. A module declared by a `//<subdir>` that is a symlink fails when
 #      fetched, naming the directory the link leads to.
+#   9. A module declared by a `//<subdir>` inside a git submodule fails when
+#      fetched, naming the submodule.
 
 set -euo pipefail
 
@@ -82,8 +89,17 @@ ln -s vpc/peering "${FIXTURES}/network.git/peering_link"
 # libraries must leave them out: every build below would fail otherwise.
 echo 'name = "upstream"' >"${FIXTURES}/network.git/terraform.tfvars"
 echo 'name = "example"' >"${FIXTURES}/network.git/vpc/examples/complete/demo.auto.tfvars"
+# Bazel reads a `.bazelignore` at the root of any repository: left in the
+# fetched module, this one would hide the subnet submodule from its library.
+echo "vpc/modules" >"${FIXTURES}/network.git/.bazelignore"
 git_ init -q
 git_ add -A
+# A git submodule, as the index records one: a commit of another repository
+# at a path. There is nothing to fetch it from, and nothing fetches it. Its
+# directory exists and is empty, as in a checkout that hasn't initialised
+# it, so that `commit -a` below finds it unchanged.
+mkdir -p "${FIXTURES}/network.git/vendor/shared"
+git_ update-index --add --cacheinfo 160000,1111111111111111111111111111111111111111,vendor/shared
 git_ commit -q -m v1
 git_ tag -a -m v1.0.0 v1.0.0
 first_commit="$(git_ rev-parse HEAD)"
@@ -116,7 +132,7 @@ plan "app-v1 10.0.0.0/24 www.example.com direct hub-peered"
 network_repo="$(find "$(bazel info output_base)/external" -maxdepth 1 -name '*tf_modules_network')"
 [[ -d "${network_repo}" ]] || fail "can't find the network module's repository: '${network_repo}'"
 [[ -L "${network_repo}/vpc/modules/subnet/outputs.tf" ]] || fail "the symlink to a file of the module was removed"
-for removed in vpc/examples/BUILD.bazel vpc/examples/complete/modules vpc/examples/complete/parent vpc/examples/complete/missing.tf vpc/examples/complete/outside peering_link; do
+for removed in .bazelignore vpc/examples/BUILD.bazel vpc/examples/complete/modules vpc/examples/complete/parent vpc/examples/complete/missing.tf vpc/examples/complete/outside peering_link; do
   if [[ -e "${network_repo}/${removed}" || -L "${network_repo}/${removed}" ]]; then
     fail "${removed} is still in the fetched module"
   fi
@@ -146,6 +162,25 @@ mv "${_TMPDIR}/app.BUILD.bazel" app/BUILD.bazel
 echo "--- 4. facts ---" >&2
 grep -q -F "\"commit\": \"${first_commit}\"" MODULE.bazel.lock || fail "MODULE.bazel.lock doesn't record ${first_commit}"
 grep -q -F '"cloudposse/label/null@0.25.0"' MODULE.bazel.lock || fail "MODULE.bazel.lock doesn't record the registry module"
+# A badly merged lockfile: under the git module's key, a well-formed fact of
+# the kind a registry module with an archive has. It is no use there, so it
+# must be resolved again (from the fixture, offline), not trusted or tripped
+# over.
+sed -i.bak "s|\"commit\": \"${first_commit}\"|\"location\": \"https://example.com/x.zip\", \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"|" MODULE.bazel.lock
+rm MODULE.bazel.lock.bak
+if grep -q -F "\"commit\": \"${first_commit}\"" MODULE.bazel.lock; then
+  fail "couldn't replace the git module's fact in MODULE.bazel.lock"
+fi
+# As on another machine: a server that has yet to evaluate the extension,
+# and none of the facts Bazel keeps for itself in the output base's own
+# lockfile, which would stand in for the bad one.
+bazel shutdown >&2
+rm -f "${NESTED_OUTPUT_BASE}/MODULE.bazel.lock"
+bazel build //app >&2 || fail "the build failed with a fact of the wrong kind in MODULE.bazel.lock"
+grep -q -F "\"commit\": \"${first_commit}\"" MODULE.bazel.lock || fail "the git module's fact wasn't resolved again"
+if grep -q -F 'https://example.com/x.zip' MODULE.bazel.lock; then
+  fail "the fact of the wrong kind is still in MODULE.bazel.lock"
+fi
 
 echo "--- 5. move the tag ---" >&2
 sed -i.bak 's/"v1"/"v2"/' "${FIXTURES}/network.git/shared/main.tf"
@@ -211,5 +246,20 @@ fi
 echo "${out}" >&2
 grep -q -F '`peering_link` is a symlink in the fetched files, to vpc/peering' <<<"${out}" ||
   fail "the failure doesn't name the directory the link leads to"
+
+echo "--- 9. a module directory in a git submodule ---" >&2
+git_ ls-tree HEAD vendor/shared | grep -q '^160000 commit' || fail "the fixture's git submodule didn't survive to the tagged commit"
+cat >>MODULE.bazel <<EOF
+tf_modules.module(
+    name = "shared_submodule",
+    source = "git::file://${FIXTURES}/network.git//vendor/shared?ref=v1.0.0",
+)
+EOF
+if out="$(bazel build @tf_modules//shared_submodule 2>&1)"; then
+  fail "@tf_modules//shared_submodule built, but its directory is a git submodule, which is not fetched"
+fi
+echo "${out}" >&2
+grep -q -F '"/vendor/shared" is in the git submodule "vendor/shared" of the repository, and rules_tofu does not fetch git submodules' <<<"${out}" ||
+  fail "the failure doesn't name the git submodule"
 
 echo "OK: tf_modules fetched git, archive and registry modules, pinned by commit" >&2

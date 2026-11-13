@@ -51,7 +51,7 @@ terraform {
 	got, err := scan(repo, "vpc", []Module{
 		{Label: "@tf_modules//acme/dns/aws", Source: "Acme/DNS/aws"},
 		{Label: "@tf_modules//unused", Source: "git::https://e.com/unused.git"},
-	}, "")
+	}, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ terraform {
 
 func TestScan_Root(t *testing.T) {
 	repo := writeTree(t, map[string]string{"main.tf": `output "x" { value = 1 }`})
-	got, err := scan(repo, "", nil, "")
+	got, err := scan(repo, "", nil, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ module "label" { source = "git::https://e.com/label.git?ref=v1" }
 		"vpc/examples/demo/main.tf":   `module "x" { source = "acme/unused/aws" }`,
 		"vpc/examples/demo/extras.tf": "terraform {\n  required_providers {\n    tls = {}\n  }\n}\n",
 	})
-	got, err := scan(repo, "vpc", modules, self)
+	got, err := scan(repo, "vpc", modules, self, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +150,7 @@ module "b" { source = "acme/net/aws//parts/b" }
 		// The longer string, and the less specific address.
 		{Label: self, Source: "registry.opentofu.org/acme/net/aws"},
 		{Label: "@tf_modules//a", Source: "acme/net/aws//parts/a"},
-	}, self)
+	}, self, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,9 +166,115 @@ module "b" { source = "acme/net/aws//parts/b" }
 
 func TestScan_NoConfig(t *testing.T) {
 	repo := writeTree(t, map[string]string{"README.md": ``})
-	_, err := scan(repo, "vpc", nil, "")
+	_, err := scan(repo, "vpc", nil, "", nil)
 	if err == nil || !strings.Contains(err.Error(), `"/vpc" holds no .tf`) {
 		t.Errorf("got %v", err)
+	}
+}
+
+// A git submodule of the fetched commit is an empty directory: the fetch
+// leaves it out. A module that is in one, or whose own calls lead into one,
+// fails here, naming the submodule; one that merely has them does not.
+func TestScan_GitSubmodule(t *testing.T) {
+	const self = "@tf_modules//net"
+	modules := []Module{{Label: self, Source: "git::https://e.com/net.git"}}
+	submodules := []string{"vendor/shared", "docs/theme/"}
+	tree := func(t *testing.T, mainTF string) string {
+		repo := writeTree(t, map[string]string{
+			"main.tf":     mainTF,
+			"vpc/main.tf": ``,
+		})
+		// What a checkout makes of a gitlink.
+		for _, dir := range submodules {
+			if err := os.MkdirAll(filepath.Join(repo, filepath.FromSlash(dir)), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return repo
+	}
+
+	t.Run("an uncalled submodule is nobody's business", func(t *testing.T) {
+		repo := tree(t, `module "vpc" { source = "./vpc" }`)
+		if _, err := scan(repo, "", modules, self, submodules); err != nil {
+			t.Fatal(err)
+		}
+		// Nor is a sibling whose name only starts like the submodule's.
+		repo = writeTree(t, map[string]string{"vendor/shared-not/main.tf": ``})
+		if _, err := scan(repo, "vendor/shared-not", modules, self, submodules); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	for name, tc := range map[string]struct {
+		moduleDir, mainTF, want string
+	}{
+		"the module's own directory is one": {
+			moduleDir: "vendor/shared",
+			want:      `"/vendor/shared" is in the git submodule "vendor/shared" of the repository, and rules_tofu does not fetch git submodules`,
+		},
+		"the module's own directory is inside one": {
+			moduleDir: "/docs/theme/tf/",
+			want:      `"/docs/theme/tf" is in the git submodule "docs/theme" of the repository`,
+		},
+		"a local call leads to one": {
+			mainTF: "\nmodule \"shared\" { source = \"./vendor/shared\" }",
+			want:   `main.tf:2: module source "./vendor/shared" leads into the git submodule "vendor/shared", and rules_tofu does not fetch git submodules`,
+		},
+		"a call by its own address leads to one": {
+			mainTF: `module "shared" { source = "git::https://e.com/net.git//vendor/shared" }`,
+			want:   `main.tf:1: module source "git::https://e.com/net.git//vendor/shared" leads into the git submodule "vendor/shared"`,
+		},
+		"a call by its own address leads inside one": {
+			mainTF: `module "shared" { source = "git::https://e.com/net.git//vendor/shared/nested" }`,
+			want:   `leads into the git submodule "vendor/shared"`,
+		},
+		// The directory below the submodule's doesn't exist at all, which
+		// is an error of ModuleDirs's own; it gains the reason.
+		"a local call leads inside one": {
+			mainTF: `module "shared" { source = "./vendor/shared/nested" }`,
+			want:   `(it is in the git submodule "vendor/shared", and rules_tofu does not fetch git submodules (OpenTofu does))`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			repo := tree(t, tc.mainTF)
+			_, err := scan(repo, tc.moduleDir, modules, self, submodules)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("got %v, want an error containing %q", err, tc.want)
+			}
+			if err != nil && strings.Contains(err.Error(), "docs/theme") && !strings.Contains(tc.want, "docs/theme") {
+				t.Errorf("the error names a submodule it isn't about: %v", err)
+			}
+		})
+	}
+
+	// An error that has nothing to do with a submodule says nothing of
+	// them, though the repository has some.
+	for name, tc := range map[string]struct {
+		moduleDir, mainTF, want string
+	}{
+		"a local call to a directory that isn't there": {
+			mainTF: `module "gone" { source = "./gone" }`,
+			want:   "gone",
+		},
+		"a module directory without configuration": {
+			moduleDir: "vendor",
+			want:      `"/vendor" holds no .tf`,
+		},
+		"configuration that can't be read": {
+			mainTF: `module "broken" {`,
+			want:   "main.tf",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			repo := tree(t, tc.mainTF)
+			_, err := scan(repo, tc.moduleDir, modules, self, submodules)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("got %v, want an error containing %q", err, tc.want)
+			}
+			if strings.Contains(err.Error(), "submodule") {
+				t.Errorf("the error blames a git submodule: %v", err)
+			}
+		})
 	}
 }
 
