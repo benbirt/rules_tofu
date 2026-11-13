@@ -8,3 +8,13 @@ tf_library(
     providers = ["@tf_providers//hashicorp/null"],
     visibility = ["//visibility:public"],
 )
+
+# Names the provider this module tags twice, at versions that can't be
+# ordered.
+tf_library(
+    name = "unorderable",
+    srcs = ["main.tf"],
+    fmt_test = False,
+    providers = ["@tf_providers//acme/unorderable"],
+    visibility = ["//visibility:public"],
+)

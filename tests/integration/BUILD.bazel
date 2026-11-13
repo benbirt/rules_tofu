@@ -80,6 +80,10 @@ _CASES = [
     ("duplicate_root_version", "broken_module", "//cases/duplicate_root_version:lib", "declares tofu.version more than once"),
     # A dependency's from_lock is ignored, so the root must supply its providers.
     ("dependency_lock_ignored", "lock_dependency", "@lib_module//:lib", "BUILD file not found in directory 'hashicorp/null'"),
+    # Dependencies' tags that can't be settled on one version fail the
+    # provider when it is used, not the extension: the case above still fails
+    # for its own reason, in the same module graph.
+    ("unorderable_versions", "lock_dependency", "@lib_module//:unorderable", "rules_tofu can only order plain numeric versions"),
     # A toolchain the root module registers is the one selected, ahead of
     # rules_tofu's downloads. Its stand-in `tofu` fails with this message.
     ("custom_toolchain", "custom_toolchain", "//:lib", "custom tofu toolchain selected"),
