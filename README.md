@@ -857,7 +857,10 @@ in memory and ignores backends), then `tofu test`.
   `.tofu.json`) in its own package's directory, from its `srcs` or from a
   library there: OpenTofu refuses to plan an empty root module. A
   `tf_library` or a `tf_test` may have an empty one, as a bundle of files
-  for others to call, or as tests whose runs load other modules.
+  for others to call, or as tests whose runs load other modules. OpenTofu
+  installs no providers for an empty root module, though: when the modules
+  such a test loads need some, give the root a file whose
+  `required_providers` names them.
 - `apply` and `destroy` need a backend that keeps state outside `bazel-bin`,
   or `allow_ephemeral_state`.
 - A deploy's `.plan`, `.apply` and `.destroy` share one run directory and

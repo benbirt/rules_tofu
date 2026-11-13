@@ -337,9 +337,18 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   (runs that load other modules), whether or not anything is at or below
   its package: with nothing there the work tree has no directory for it,
   or doesn't exist at all, so the manifest tool skips the root walk on
-  `fs.ErrNotExist`, the validate action creates `$CWD` before it copies
-  anything in, and the test runner `MkdirAll`s it (issue #119; the fmt
-  fixture's `empty` package). Don't make that an error, and don't teach
+  `fs.ErrNotExist`, and the validate action creates `$CWD` before it copies
+  anything in (issue #119; the fmt fixture's `empty` package, and
+  lock_update's for the lock). A `tf_test`'s own files are at or below its
+  root, so its directory is always there; the test runner `MkdirAll`s it
+  all the same. `tofu init` does nothing in a directory without
+  configuration files, so neither the validate action nor the test runner
+  gives an empty root the lock (init would leave it unpruned, and tofu then
+  holds it against a plugin cache nothing filled), and a test whose runs
+  load modules that need providers fails there with tofu's "Missing
+  required provider": the validate action adds what to do, since nothing
+  rules_tofu can do makes init install them. Don't make an empty root an
+  error, and don't teach
   `tfconfig` that a missing directory is empty: `modscan` and `pin` rely on
   the failure. A `tf_deploy` is the exception, at analysis
   (`check_has_configuration`; `deploy_deps_only`,

@@ -697,6 +697,11 @@ func TestBuild_EmptyRoot(t *testing.T) {
 	if _, err := build(tree, "lib/main.tf", "//x:x", nil, nil, nil); err == nil {
 		t.Error("a file in place of the root module's directory was taken for an empty module")
 	}
+	// Nor is a path through a file, which fails differently: there the
+	// stat itself does, and not because nothing is there.
+	if _, err := build(tree, "lib/main.tf/sub", "//x:x", nil, nil, nil); err == nil {
+		t.Error("a root module's directory below a file was taken for an empty module")
+	}
 }
 
 // A tf_test of an empty root: its directory is there, since the test files

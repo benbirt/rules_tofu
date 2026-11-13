@@ -114,7 +114,18 @@ fi
 # below it. One that isn't there is an empty module, which this creates
 # (issue #119), before anything is copied into it.
 mkdir -p "$CWD/.terraform/modules"
-if [ -n "$LOCK" ]; then
+# In a directory without configuration files `tofu init` does nothing
+# ("initialized in an empty directory"): it installs no provider, and leaves
+# a lock as it finds it, which validate then holds against the empty plugin
+# cache. An empty root module requires no provider, so it gets no lock.
+HAS_CONFIG=""
+for f in "$CWD"/*.tf "$CWD"/*.tf.json "$CWD"/*.tofu "$CWD"/*.tofu.json; do
+    if [ -e "$f" ]; then
+        HAS_CONFIG=1
+        break
+    fi
+done
+if [ -n "$LOCK" ] && [ -n "$HAS_CONFIG" ]; then
     cp "$LOCK" "$CWD/.terraform.lock.hcl"
 fi
 # Every module call is already in the work tree; the manifest says where, and
@@ -138,7 +149,16 @@ if ! "$TOFU" -chdir="$CWD" init -backend=false -input=false -get=false -plugin-d
     fi
     exit 1
 fi
-"$TOFU" -chdir="$CWD" validate ${TEST_FLAG:+"$TEST_FLAG"}
+if ! "$TOFU" -chdir="$CWD" validate ${TEST_FLAG:+"$TEST_FLAG"}; then
+    # The one way an empty root module is not like any other: tofu sets up
+    # no providers for it, whatever the modules its test runs load require.
+    if [ -z "$HAS_CONFIG" ] && [ -n "$TEST_DIR" ]; then
+        echo "rules_tofu: the root module, ${PACKAGE_DIR:-the workspace root}, has no configuration file," \\
+             'and `tofu init` installs no providers for one. If a provider is reported missing, give the' \\
+             'root module a file whose `required_providers` names it.' 1>&2
+    fi
+    exit 1
+fi
 touch "$STAMP"
 """,
         arguments = [

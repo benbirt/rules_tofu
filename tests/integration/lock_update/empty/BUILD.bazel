@@ -1,0 +1,9 @@
+load("@rules_tofu//tf:defs.bzl", "tf_library")
+
+# A library with no files at all that still lists the locked provider: its
+# root module has no directory in the work tree, and validating it must
+# create one before the lock is copied in (issue #119).
+tf_library(
+    name = "lib",
+    providers = ["@tf_providers//hashicorp/null"],
+)

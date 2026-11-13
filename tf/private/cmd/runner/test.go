@@ -6,6 +6,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+
+	"github.com/benbirt/rules_tofu/tf/private/cmd/internal/tfconfig"
 )
 
 // runTest is `--command=test`: `tofu test` for a tf_test target, run as a
@@ -53,7 +55,11 @@ func runTest(extraArgs []string) error {
 			return fmt.Errorf("create plugin dir %s: %w", plugins, err)
 		}
 	}
-	if *lockFile != "" {
+	// Not for a root module without configuration, as in the validate
+	// action: `tofu init` does nothing there, so it installs no provider and
+	// leaves the lock as it is, which tofu then holds against the empty
+	// plugin cache.
+	if *lockFile != "" && tfconfig.HasConfig(cwd) {
 		if err := installLockFile(*lockFile, cwd); err != nil {
 			return err
 		}

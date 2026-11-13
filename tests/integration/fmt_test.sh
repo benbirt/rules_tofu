@@ -13,7 +13,8 @@
 #   5. The toolchain's tofu reports TOFU_VERSION, so a version that didn't
 #      take is caught: which extensions `tofu fmt` accepts by name is the
 #      binary's to decide.
-#   6. Everything in the workspace builds, so the fixture stays a shape the
+#   6. Everything in the workspace builds, including libraries, and a test,
+#      whose root module is empty; so the fixture stays a shape the
 #      rules accept (it once listed the test file in a library's `srcs`,
 #      which nothing noticed: the steps above only format and query).
 
