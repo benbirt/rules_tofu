@@ -51,9 +51,12 @@ func IsConfigFile(name string) bool {
 	return configExt(name) != ""
 }
 
-// Effective drops each `.tf` or `.tf.json` file of files that a `.tofu` or
-// `.tofu.json` file of the same path shadows, as tofu ignores them. The order
-// of the rest is kept.
+// Effective drops the files of files that tofu doesn't read: each `.tf` or
+// `.tf.json` file that a `.tofu` or `.tofu.json` file of the same path
+// shadows, and each whose name starts with a dot (see ignored). The order of
+// the rest is kept. Every reader of configuration goes through it, whether
+// its files come from a directory or, as pin's do, from a `bazel query`,
+// where a `glob` may have matched an archive's `._main.tf`.
 func Effective(files []string) []string {
 	present := map[string]bool{}
 	for _, f := range files {
@@ -61,6 +64,9 @@ func Effective(files []string) []string {
 	}
 	var kept []string
 	for _, f := range files {
+		if ignored(filepath.Base(f)) {
+			continue
+		}
 		ext := configExt(f)
 		if ext == ".tf" || ext == ".tf.json" {
 			tofu := strings.TrimSuffix(f, ext) + strings.Replace(ext, ".tf", ".tofu", 1)
@@ -83,7 +89,7 @@ func ConfigFiles(dir string) ([]string, error) {
 	}
 	var files []string
 	for _, e := range entries {
-		if !e.IsDir() && !ignored(e.Name()) && IsConfigFile(e.Name()) {
+		if !e.IsDir() && IsConfigFile(e.Name()) {
 			files = append(files, filepath.Join(dir, e.Name()))
 		}
 	}

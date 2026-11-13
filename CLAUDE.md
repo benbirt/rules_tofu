@@ -352,8 +352,10 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   agree with tofu and each other: `HAS_CONFIG` in the validate script,
   `tfconfig.HasConfig`, and `check_has_configuration`. All count files, not
   directories, with one of the four extensions, and not those whose names
-  start with a dot, which tofu passes over (checked on 1.12.0). Don't make
-  an empty root an error, and don't teach
+  start with a dot, which tofu passes over (checked on 1.12.0;
+  `tfconfig.Effective` and `EffectiveTests` drop them for every reader,
+  `pin`'s query results included). Don't make an empty root an error, and
+  don't teach
   `tfconfig` that a missing directory is empty: `modscan` and `pin` rely on
   the failure. A `tf_deploy` is the exception, at analysis
   (`check_has_configuration`; `deploy_deps_only`,

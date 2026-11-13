@@ -239,6 +239,19 @@ func TestConfigFiles_IgnoresDotfilesAndDirectories(t *testing.T) {
 	}
 }
 
+// The lists pin reads come from a `bazel query`, not from a directory, and
+// go through the same filters.
+func TestEffective_DropsDotfiles(t *testing.T) {
+	got := Effective([]string{"a/main.tf", "a/._main.tf", "a/.hidden.tofu", ".dir/main.tf", "b/.tf"})
+	if want := []string{"a/main.tf", ".dir/main.tf"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("Effective = %v, want %v", got, want)
+	}
+	gotTests := EffectiveTests([]string{"a/x.tftest.hcl", "a/._x.tftest.hcl", "a/.y.tofutest.hcl"})
+	if want := []string{"a/x.tftest.hcl"}; !reflect.DeepEqual(gotTests, want) {
+		t.Errorf("EffectiveTests = %v, want %v", gotTests, want)
+	}
+}
+
 func mustConfigFiles(t *testing.T, dir string) []string {
 	t.Helper()
 	files, err := ConfigFiles(dir)
