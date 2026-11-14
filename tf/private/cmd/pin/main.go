@@ -155,7 +155,7 @@ func run(workspace, lockDir, tofu, bazel string, defaultPlatforms, excludedSourc
 	dst := filepath.Join(workspace, lockDir, ".terraform.lock.hcl")
 	if len(modules) == 0 {
 		if !excludedAny {
-			return errors.New("no tf_library or tf_deploy in the workspace declares required_providers to lock")
+			return errors.New("no tf_library, tf_deploy or tf_test in the workspace declares required_providers to lock")
 		}
 		// Every requirement is on a provider the root module tags: the lock
 		// has nothing to pin, and a stale entry left in it would conflict
