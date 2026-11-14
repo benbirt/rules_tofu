@@ -1,8 +1,8 @@
 """Unit tests for //tf/modules:source.bzl.
 
-These live in a subpackage so the `@bazel_skylib` load -- a dev-only
-dependency of rules_tofu -- stays out of //tf/modules:BUILD.bazel, which
-downstream modules load.
+These live in a subpackage because `@bazel_skylib` is a dev-only dependency
+of rules_tofu and must stay out of //tf/modules:BUILD.bazel, which downstream
+modules load.
 """
 
 load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")

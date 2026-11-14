@@ -1,9 +1,9 @@
 """Build-time duplicate-variable check for `tf_deploy`.
 
-The deploy rule calls `tf_check_var_files(...)` to attach a check stamp
-to its outputs, so any overlap between keys in `vars` and `var_files`
-(or between two `var_files` entries) fails at `bazel build` time (with
-action caching) rather than later at `bazel run` time.
+`tf_deploy` calls `tf_check_var_files` and attaches its stamp to the target's
+outputs, so any duplicate key across `vars` and `var_files` or between two
+`var_files` entries fails in a cached `bazel build` action rather than silently
+overriding earlier values at `bazel run` time.
 """
 
 DUPCHECK_BIN = "//tf/private/cmd/dupcheck:dupcheck"
@@ -13,13 +13,13 @@ def tf_check_var_files(ctx, vars_keys, var_files):
 
     Args:
       ctx: rule ctx. Must declare `_dupcheck_bin` (cfg = "exec") on the rule.
-      vars_keys: list[string] — keys of the deploy's `vars` dict.
-      var_files: list[File] — the deploy's var_files inputs.
+      vars_keys: list[string], keys of the deploy's `vars` dict.
+      var_files: list[File], the deploy's `var_files` inputs.
 
     Returns:
       File or None: a stamp declared as the action output, or None when
-      there's no work to do (no var_files; intra-vars duplication is
-      impossible for a Starlark dict).
+      `var_files` is empty, since duplicate keys within a Starlark `vars` dict
+      are impossible.
     """
     if len(var_files) == 0:
         return None
@@ -43,10 +43,10 @@ def tf_check_var_files(ctx, vars_keys, var_files):
     return stamp
 
 def _var_file_flags(f):
-    # `short_path` is the workspace-relative path, which is the most
-    # human-recognizable identifier we can hand the user in an error message.
-    # `path` is the exec-root-relative path the action will actually read.
-    # They travel as two flags, paired by position, because a colon is legal
-    # in a target name and so in both, which makes any `label:path` string
+    # `short_path` is workspace-relative for main-repository files and
+    # ../<repo>/... for external ones, giving a readable path to report in
+    # errors. `path` is the exec-root-relative path the action reads. They
+    # travel as two flags paired by position because colons are legal in Bazel
+    # target names and therefore in both paths, making any `label:path` string
     # ambiguous (issue #62).
     return ["--var-file-label=" + f.short_path, "--var-file=" + f.path]

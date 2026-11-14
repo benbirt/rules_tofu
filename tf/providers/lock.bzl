@@ -3,12 +3,11 @@
 The file itself is parsed by `lockjson` (//tf/private/cmd/lockjson, built by
 `//tf/private:host_tools.bzl`) with the standard HCL library, and each
 entry's address is checked and split there with OpenTofu's registry-address
-library, the way tofu reads a lock. These pure functions decide what
+library, the way `tofu` reads a lock. These pure functions decide what
 rules_tofu makes of the entries, so //tf/providers/tests can exercise them
 without a module graph. Errors are returned, not raised: the extension
 decides which ones abort evaluation and which become a repository that fails
-only when fetched (so `@tf_providers//:pin` still runs and can rewrite the
-lock).
+only when fetched, keeping `@tf_providers//:pin` runnable to rewrite the lock.
 """
 
 load(":source.bzl", "DEFAULT_HOST", "is_sha256")
@@ -26,14 +25,13 @@ def lock_entries(providers):
             "version", "hashes"}` dicts. `lockjson` has already checked
             that each address is a full, canonical
             `<host>/<namespace>/<name>`, so the parts are in their
-            normalised (lower-case) form.
+            normalised lower-case form.
 
     Returns:
         `struct(entries, error)`. `error` is set if the lock can't be used at
         all. Each entry is `struct(source, namespace, name, version, zh,
-        error)`: `source` is `<namespace>/<name>`, `zh` the lock's `zh:`
-        hashes (the SHA256s of the provider zips), and `error` None if the
-        entry is usable.
+        error)`, where `source` is `<namespace>/<name>`, `zh` lists the lock's
+        `zh:` provider-zip SHA256s and `error` is None if the entry is usable.
     """
     entries = []
     seen = {}
@@ -80,11 +78,11 @@ def lock_sha256s(registry_sha256s, zh, context):
     """Keep the registry's digests that the lock vouches for.
 
     The registry says where each zip is and what its SHA256 is; the lock's
-    `zh:` hashes are what the user (or their bot) recorded when they last
-    locked. Each platform is accepted only if both agree. Lock files list
-    the `zh:` hash of every platform the provider publishes, whichever
-    platforms they were locked for, so any disagreement means the lock and
-    the registry describe different builds.
+    `zh:` hashes are what the user or a bot recorded when they last locked.
+    Each platform is accepted only if both agree. Lock files list the `zh:`
+    hash of every platform the provider publishes, whichever platforms they
+    were locked for, so any disagreement means the lock and the registry
+    describe different builds.
 
     Args:
         registry_sha256s: `{platform: sha256}` from the registry.
