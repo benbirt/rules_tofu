@@ -1,10 +1,8 @@
 load("@rules_tofu//tf:defs.bzl", "tf_test")
 
-# The library's tests: `tofu test` on `greet_lib`, with the subject's name
-# from a helper module in `deps` that a `run` block loads. The test files sit
-# in the module's `tests/` directory, tofu's default, in a package of their
-# own; `bazel test` runs them offline, with the network blocked. One file is
-# a `.tofutest.hcl`, OpenTofu's own test extension.
+# greet_test runs `tofu test` against greet_lib offline, with network access
+# blocked in the sandbox. Its run blocks load a helper module from deps. srcs
+# mixes .tftest.hcl with OpenTofu's .tofutest.hcl extension.
 tf_test(
     name = "greet_test",
     srcs = [
@@ -15,15 +13,16 @@ tf_test(
     deps = ["//examples/hello/tests/subject"],
 )
 
-# The deploy's tests: its `vars` bind `name`, so the test file sets nothing.
+# This target tests the hello deploy. The deploy's vars bind name, so the test
+# file sets nothing.
 tf_test(
     name = "hello_test",
     srcs = ["hello.tftest.hcl"],
     module = "//examples/hello:hello",
 )
 
-# `module` may be an alias: the root module is the aliased library's
-# directory, examples/hello, not this package's.
+# module on tf_test may be an alias. The root module is still examples/hello,
+# not this package.
 alias(
     name = "greet_alias",
     actual = "//examples/hello:greet_lib",
@@ -32,7 +31,7 @@ alias(
 tf_test(
     name = "greet_alias_test",
     srcs = ["greet.tftest.hcl"],
-    # greet_test checks the file's formatting already.
+    # greet_test already checks greet.tftest.hcl's formatting.
     fmt_test = False,
     module = ":greet_alias",
     deps = ["//examples/hello/tests/subject"],

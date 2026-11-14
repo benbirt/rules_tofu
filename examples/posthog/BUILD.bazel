@@ -2,8 +2,10 @@ load("@rules_tofu//tf:defs.bzl", "tf_deploy", "tf_library")
 
 package(default_visibility = ["//visibility:public"])
 
-# A provider from outside the `hashicorp/` namespace, with no sha256 pinned in
-# MODULE.bazel: the OpenTofu registry's digests are used, recorded in
+# This library uses PostHog/posthog, a provider outside the hashicorp
+# namespace. BUILD files always name providers in lower case, so its target is
+# @tf_providers//posthog/posthog. MODULE.bazel omits sha256 on the provider
+# tag, so Bazel records the digests from registry.opentofu.org in
 # MODULE.bazel.lock.
 tf_library(
     name = "dashboard_lib",
@@ -11,8 +13,8 @@ tf_library(
     providers = ["@tf_providers//posthog/posthog"],
 )
 
-# This is a demo whose state is disposable, so it opts in to local state under
-# bazel-bin rather than declaring a remote backend.
+# This is a demo, so it keeps disposable state under bazel-bin; a real deploy
+# declares a remote backend instead.
 tf_deploy(
     name = "dashboard",
     allow_ephemeral_state = True,

@@ -1,10 +1,12 @@
 """Rules for OpenTofu and Terraform-compatible configuration.
 
-`tf_library` bundles reusable `.tf` files; `tf_deploy` is a root
-configuration you can plan, apply and destroy with `bazel run`; `tf_test`
-runs a module's `.tftest.hcl` tests with `bazel test`. Load them with:
+`tf_library` bundles reusable configuration files, `tf_deploy` binds variable
+values and generates `.plan`, `.apply` and `.destroy` targets, and `tf_test`
+runs `tofu test` as a Bazel test:
 
-    load("@rules_tofu//tf:defs.bzl", "tf_library", "tf_deploy", "tf_test")
+    load("@rules_tofu//tf:defs.bzl", "tf_deploy", "tf_library", "tf_test")
+
+See the [README](https://github.com/benbirt/rules_tofu#rules) for a full guide.
 """
 
 load("//tf/private:deploy.bzl", _tf_deploy = "tf_deploy")

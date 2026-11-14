@@ -2,21 +2,21 @@ load("@rules_tofu//tf:defs.bzl", "tf_deploy", "tf_library")
 
 package(default_visibility = ["//visibility:public"])
 
-# Reusable library declaring the GCP provider it needs. Any deploy that
-# depends on it inherits the provider through TfLibraryInfo.providers.
+# This library bundles main.tf with the Google Cloud provider it requires.
+# Targets that depend on storage_bucket_lib inherit its providers automatically.
 tf_library(
     name = "storage_bucket_lib",
     srcs = ["main.tf"],
     providers = ["@tf_providers//hashicorp/google"],
 )
 
-# Root invocation that binds variable values. `bazel build :storage_bucket`
-# runs `tofu init -backend=false && tofu validate` offline against the
-# vendored provider tree. `bazel run :storage_bucket.plan` then runs a real
-# plan; GCP credentials are picked up by the provider at that point.
+# This deploy binds variable values for storage_bucket_lib. `bazel build`
+# validates it offline against the vendored provider.
+# `bazel run //examples/gcp:storage_bucket.plan` reads GCP credentials at plan
+# time.
 #
-# This is a demo whose state is disposable, so it opts in to local state under
-# bazel-bin rather than declaring a remote backend.
+# This is a demo, so it keeps disposable state under bazel-bin; a real deploy
+# declares a remote backend instead.
 tf_deploy(
     name = "storage_bucket",
     allow_ephemeral_state = True,

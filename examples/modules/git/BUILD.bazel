@@ -1,8 +1,11 @@
 load("@rules_tofu//tf:defs.bzl", "tf_deploy")
 
-# main.tf calls Cloud Posse's label module straight from GitHub, by tag.
-# MODULE.bazel declares it as `null_label`; the commit the tag names was
-# recorded in MODULE.bazel.lock when it was first fetched.
+# main.tf calls Cloud Posse's label module from GitHub by tag. MODULE.bazel
+# declares it with tf_modules.module as null_label. MODULE.bazel.lock records
+# the commit that the tag resolved to.
+#
+# This is a demo, so it keeps disposable state under bazel-bin; a real deploy
+# declares a remote backend instead.
 tf_deploy(
     name = "git",
     srcs = ["main.tf"],

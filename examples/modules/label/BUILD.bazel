@@ -1,8 +1,11 @@
 load("@rules_tofu//tf:defs.bzl", "tf_deploy")
 
-# main.tf calls cloudposse/label/null from the OpenTofu registry, which
-# MODULE.bazel declares with tf_modules.module. Nothing is fetched by tofu:
-# the module comes from `@tf_modules`.
+# main.tf calls cloudposse/label/null from registry.opentofu.org. MODULE.bazel
+# declares that module with tf_modules.module, so `tofu init` fetches nothing
+# at build or run time.
+#
+# This is a demo, so it keeps disposable state under bazel-bin; a real deploy
+# declares a remote backend instead.
 tf_deploy(
     name = "label",
     srcs = ["main.tf"],

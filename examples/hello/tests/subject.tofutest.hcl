@@ -1,7 +1,6 @@
-# A `.tofutest.hcl` file is OpenTofu's own test extension, read like a
-# `.tftest.hcl`. Its `run` block loads the same helper module as
-# greet.tftest.hcl, so the module manifest records a run module under a
-# `.tofutest.hcl` key, which tofu writes differently from a `.tftest.hcl` one.
+# This .tofutest.hcl file loads the same helper module as greet.tftest.hcl in a
+# run block. That exercises recording a run module in modules.json under a
+# .tofutest.hcl key, which OpenTofu formats differently from a .tftest.hcl key.
 run "subject" {
   module {
     source = "./tests/subject"

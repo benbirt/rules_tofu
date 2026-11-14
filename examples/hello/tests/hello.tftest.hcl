@@ -1,3 +1,4 @@
+# The hello deploy's vars bind name to "world", so this test sets nothing.
 run "greets_the_world" {
   command = plan
 

@@ -1,32 +1,4 @@
-"""`tf_deploy` rule + macro.
-
-The macro always emits:
-  - `:<name>`         — the `_tf_deploy` data target. Its outputs are
-                        the materialized working tree (a symlink-mirror of
-                        every transitive .tf input at its workspace-relative
-                        path, plus a generated `rules_tofu.auto.tfvars.json`),
-                        a validate stamp produced by running
-                        `tofu init -backend=false && tofu validate` at build
-                        time, and (when `var_files` is non-empty) a stamp
-                        produced by a duplicate-variable-key check across
-                        `vars` and every `var_files` entry. So
-                        `bazel build :<name>` exercises both checks.
-  - `:<name>.plan`    — runnable: `bazel run :<name>.plan`
-  - `:<name>.apply`   — runnable: `bazel run :<name>.apply`
-  - `:<name>.destroy` — runnable: `bazel run :<name>.destroy`
-
-When `srcs` is non-empty:
-  - `:<name>.fmt`     — runnable: `bazel run :<name>.fmt`
-
-When additionally `fmt_test=True` (the default):
-  - `:<name>.fmt_check`  — test: `bazel test :<name>.fmt_check`
-
-Materialization happens at analysis time via `ctx.actions.symlink` (one
-action per file). At run time the runner mirrors the work tree into the
-deploy's run directory, `<name>.rules_tofu-state/work/`, and invokes
-`tofu init && tofu <plan|apply|destroy>` there. Nothing is mktemp'd;
-nothing is symlinked from bash.
-"""
+"""The tf_deploy macro and its underlying rule."""
 
 load("//toolchain:toolchain.bzl", "TOOLCHAIN_TYPE")
 load(":fmt.bzl", _tf_fmt = "tf_fmt", _tf_fmt_check = "tf_fmt_check_test")
@@ -134,52 +106,43 @@ tf_deploy_rule = rule(
     attrs = {
         "srcs": attr.label_list(
             allow_files = ALLOWED_SRC_EXTS,
-            doc = "Optional deploy-local config files (e.g. provider/backend setup). " +
-                  "Test files (.tftest.hcl, .tofutest.hcl) go in a `tf_test`.",
+            doc = "Deploy-local `.tf`, `.tf.json`, `.tofu`, `.tofu.json`, `.tftpl` and `.hcl` " +
+                  "files, typically `backend` and `provider` blocks. Test files belong in " +
+                  "`tf_test.srcs`.",
         ),
         "deps": attr.label_list(
             providers = [TfLibraryInfo],
-            doc = "`tf_library` targets whose files join the deploy's work tree. Those in the " +
-                  "deploy's own package are part of its root module; others are reached by " +
-                  "`module` blocks in the root module's files.",
+            doc = "`tf_library` targets included in the deploy's work tree. Same-package " +
+                  "libraries join the root module; others are reached via `module` blocks.",
         ),
         "vars": attr.string_dict(
-            doc = "Variable values bound to this deploy, each a string. Rendered to " +
-                  "rules_tofu.auto.tfvars.json, where OpenTofu converts a string to a variable's " +
-                  "declared `number` or `bool` type; a list, map or object value goes in `var_files`.",
+            doc = "String-valued variable bindings written to `rules_tofu.auto.tfvars.json`, " +
+                  "reserving that filename in the deploy's package. OpenTofu converts strings " +
+                  "for `number` and `bool` variables; pass lists, maps and objects via " +
+                  "`var_files`.",
         ),
         "var_files": attr.label_list(
             allow_files = [".tfvars.json", ".tfvars"],
-            doc = "Variable-value files passed to every tofu invocation via -var-file. " +
-                  "Accepts any Label producing a .tfvars.json or .tfvars file (e.g. a genrule output). " +
-                  "Keys in var_files must not overlap with keys in vars or other var_files entries.",
+            doc = "`.tfvars` and `.tfvars.json` files passed via `-var-file`, including " +
+                  "generated outputs. Keys must not overlap with `vars` or other `var_files`.",
         ),
         "data": attr.label_list(
             allow_files = True,
-            doc = "Arbitrary files to include in the work tree. " +
-                  "Use to expose files for `file()` calls in Terraform configs. " +
-                  "Variables files that OpenTofu loads by itself (`terraform.tfvars[.json]`, " +
-                  "`*.auto.tfvars[.json]`) are rejected: set the values with `vars`, or list " +
-                  "the file in `var_files`.",
+            doc = "Files placed in the work tree for `file()` and `templatefile()`. " +
+                  "`terraform.tfvars`, `terraform.tfvars.json`, `*.auto.tfvars` and " +
+                  "`*.auto.tfvars.json` are rejected; use `vars` or `var_files`.",
         ),
         "providers": attr.label_list(
             providers = [TfProviderInfo],
-            doc = "Vendored OpenTofu/Terraform providers this deploy declares directly. " +
-                  "Unioned with providers contributed transitively by `deps`. " +
-                  "Each entry is a `@tf_providers//<namespace>/<name>` target from the " +
-                  "`tf_providers` extension in MODULE.bazel.",
+            doc = "Providers required directly by `srcs`, as `@tf_providers//<namespace>/<name>`, " +
+                  "combined with providers propagated from `deps`.",
         ),
         "allow_ephemeral_state": attr.bool(
             default = False,
-            doc = "Permit `apply`/`destroy` to run against local, disposable state. " +
-                  "With no `backend`/`cloud` block, or with a `backend \"local\"` whose " +
-                  "`path` and `workspace_dir` aren't both literal absolute paths outside " +
-                  "Bazel's output tree, state lands under " +
-                  "`bazel-bin/<pkg>/<name>.rules_tofu-state/` — machine-local, keyed by " +
-                  "build configuration, and wiped by `bazel clean` — so the runner refuses " +
-                  "those commands by default. Set True only where losing state is harmless: " +
-                  "demos, throwaway sandboxes, or bootstrapping the bucket that will hold real " +
-                  "state. `plan` is never gated.",
+            doc = "Permit `apply` and `destroy` when state lives under `bazel-bin`: either no " +
+                  "`backend` or `cloud` block, or a `backend \"local\"` without literal absolute " +
+                  "`path` and `workspace_dir` outside `bazel-out`. `plan` is never gated. See " +
+                  "[State and backends](https://github.com/benbirt/rules_tofu#state-and-backends).",
         ),
         "_dupcheck_bin": attr.label(
             default = DUPCHECK_BIN,
@@ -193,76 +156,76 @@ tf_deploy_rule = rule(
         ),
     },
     toolchains = [TOOLCHAIN_TYPE],
-    doc = "Underlying data-carrier for `tf_deploy`. Use the macro.",
+    doc = "Underlying rule for `tf_deploy`. Use the macro.",
 )
 
 def tf_deploy(name, srcs = None, deps = None, vars = None, var_files = None, data = None, providers = None, allow_ephemeral_state = False, fmt_test = True, **kwargs):
-    """A root OpenTofu/Terraform configuration, with targets to plan, apply and destroy it.
+    """A root OpenTofu configuration, with targets to plan, apply and destroy it.
 
-    Always generates:
-      - `:<name>`         — data target. Building it materializes the work tree
-                            and runs `tofu init -backend=false && tofu validate`
-                            against it, so `bazel build :<name>` validates.
-      - `:<name>.plan`    — `bazel run` to produce a plan.
-      - `:<name>.apply`   — `bazel run` to apply.
-      - `:<name>.destroy` — `bazel run` to destroy all managed resources.
+    The deploy's own package is its root module and must contain at least one
+    `.tf`, `.tf.json`, `.tofu` or `.tofu.json` file from `srcs` or a
+    `tf_library` in the same package; `deps` in other packages are reached only
+    via `module` blocks.
 
-    The three are ordinary executables: besides `bazel run`, the built
-    `bazel-bin/<pkg>/<name>.<command>.sh` can be run directly, from any
-    directory. tofu runs in the deploy's run directory,
-    `bazel-bin/<pkg>/<name>.rules_tofu-state/work/<pkg>`, which they share.
+    Generated targets:
+      - `:<name>`: materialises the work tree, checks for duplicate variable
+        keys across `vars` and `var_files`, and runs
+        `tofu init -backend=false && tofu validate`.
+      - `:<name>.plan`: `bazel run` target that runs `tofu plan`, saving the
+        plan file to `<state-dir>/tfplan`.
+      - `:<name>.apply`: `bazel run` target that runs a fresh `tofu apply`
+        without reading `tfplan`. Prompts unless `-- -auto-approve` is passed.
+      - `:<name>.destroy`: `bazel run` target that runs `tofu destroy`. Prompts
+        unless `-- -auto-approve` is passed.
+      - `:<name>.fmt`: `bazel run` target, emitted when `srcs` is non-empty,
+        that reformats main-repository `.tf` and `.tofu` source files in `srcs`
+        in place.
+      - `:<name>.fmt_check`: `bazel test` target, emitted when `srcs` is
+        non-empty and `fmt_test = True`, that checks formatting of `.tf` and
+        `.tofu` files in `srcs`, including generated and external files.
 
-    When `srcs` is non-empty:
-      - `:<name>.fmt`     — `bazel run` to reformat the .tf and .tofu files in
-                            `srcs` in place.
-
-    When additionally `fmt_test=True` (the default):
-      - `:<name>.fmt_check` — `bazel test` that fails if those files are not formatted.
+    Each launcher, such as `bazel-bin/<pkg>/<name>.apply.sh`, can also be
+    invoked directly in place from any working directory; do not copy or symlink
+    the script elsewhere. All three share
+    `bazel-bin/<pkg>/<name>.rules_tofu-state/work/<pkg>` without locking, so run
+    one command at a time. See
+    [How it works](https://github.com/benbirt/rules_tofu#how-it-works).
 
     Args:
-      name: target name.
-      srcs: optional deploy-local .tf/.tf.json/.tofu/.tofu.json/.tftpl/.hcl files (e.g. provider/backend config).
-      deps: `tf_library` targets whose files join the deploy's work tree.
-          Those in the deploy's own package are part of its root module;
-          others are reached by `module` blocks in the root module's files.
-          The deploy's package must hold a configuration file, from `srcs`
-          or from a library in that package: `deps` in other packages alone
-          deploy nothing, and fail to build.
-      vars: dict of variable name -> string value, rendered to
-          rules_tofu.auto.tfvars.json. OpenTofu converts a string to a
-          variable's declared `number` or `bool` type; a list, map or object
-          value goes in `var_files`.
-      var_files: `.tfvars.json` or `.tfvars` files passed to tofu with `-var-file`.
-          Any label works, e.g. a genrule output. Keys must not overlap with
-          `vars` or other `var_files` entries; a duplicate key fails
+      name: Target name.
+      srcs: Deploy-local `.tf`, `.tf.json`, `.tofu`, `.tofu.json`, `.tftpl` and
+          `.hcl` files, typically `backend` and `provider` blocks. Test files
+          belong in `tf_test.srcs`.
+      deps: `tf_library` targets included in the deploy's work tree. Those in
+          the deploy's own package join its root module; others are reached via
+          `module` blocks in the root module's files.
+      vars: Dictionary of variable name to string value, written to
+          `rules_tofu.auto.tfvars.json` in the deploy's package directory. That
+          filename is reserved in the package. OpenTofu converts strings to
+          `number` or `bool` where declared; pass lists, maps and objects via
+          `var_files`.
+      var_files: `.tfvars` or `.tfvars.json` files passed to `tofu` via
+          `-var-file`, including outputs of other rules. Keys must not overlap
+          with `vars` or other `var_files` entries; duplicates fail
           `bazel build`.
-      data: arbitrary files to include in the work tree, enabling `file()` calls
-          in Terraform configs. Variables files that OpenTofu loads by itself
-          (`terraform.tfvars[.json]`, `*.auto.tfvars[.json]`) are rejected:
-          set the values with `vars`, or list the file in `var_files`.
-      providers: providers (`@tf_providers//<namespace>/<name>`, from the
-          `tf_providers` extension in MODULE.bazel) declared at the deploy
-          level, in addition to those its `deps` bring in. `tofu init` runs
-          offline against them.
-      allow_ephemeral_state: allow `:<name>.apply` and `:<name>.destroy` to run
-          against local state under `bazel-bin`. State lives there for a
-          deploy with no `backend "..." {}` or `cloud {}` block (at
-          `bazel-bin/<pkg>/<name>.rules_tofu-state/terraform.tfstate`), and for
-          one with a `backend "local"` block unless its `path` and
-          `workspace_dir` are both literal absolute paths outside Bazel's
-          output tree: tofu resolves anything else against the deploy's run
-          directory, `bazel-bin/<pkg>/<name>.rules_tofu-state/work/<pkg>`.
-          State there is machine-local, forks with the build configuration,
-          and is deleted by `bazel clean` — losing it orphans whatever was
-          applied. So by default the runner refuses both mutating commands for
-          such a deploy; `plan` is never gated. Set True only where disposable
-          state is the point: demos and examples, throwaway sandboxes, or
-          bootstrapping the bucket that will hold real state (then move it
-          with `tofu init -migrate-state` once the backend block is in place).
-          Ignored when the deploy's backend keeps state elsewhere.
-      fmt_test: whether to emit a `:<name>.fmt_check` test target. Only emitted
-          when True (the default) and `srcs` is non-empty.
-      **kwargs: forwarded to the underlying rule (visibility, tags, testonly).
+      data: Files placed in the work tree at their workspace-relative paths for
+          `file()` and `templatefile()`. `terraform.tfvars`,
+          `terraform.tfvars.json`, `*.auto.tfvars` and `*.auto.tfvars.json` are
+          rejected; use `vars` or `var_files`.
+      providers: `@tf_providers//<namespace>/<name>` targets required directly
+          by `srcs`, combined with providers propagated from `deps`.
+      allow_ephemeral_state: Permit `:<name>.apply` and `:<name>.destroy` when
+          state lives under `bazel-bin`:
+          - no `backend` or `cloud` block is declared; or
+          - `backend "local"` does not set both `path` and `workspace_dir` to
+            literal absolute paths outside `bazel-out`.
+          Defaults to `False`. See
+          [State and backends](https://github.com/benbirt/rules_tofu#state-and-backends).
+      fmt_test: Emit `:<name>.fmt_check` when `True` and `srcs` is non-empty;
+          defaults to `True`.
+      **kwargs: Forwarded to the underlying rules. `visibility`, `tags` and
+          `testonly` apply to all generated targets; other rule attributes
+          apply to `:<name>`.
     """
     common_kwargs = {}
     for forwarded in ("visibility", "tags", "testonly"):
