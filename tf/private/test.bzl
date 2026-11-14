@@ -280,8 +280,7 @@ Building the target runs `tofu init -backend=false && tofu validate` with
 the test directory, so a broken test file fails `bazel build`. Running it
 copies the work tree into `$TEST_TMPDIR`, runs the same offline init and
 then `tofu test`, with its JSON log in the test's undeclared outputs
-(`tofu-test.json`) where the tofu binary's `test` has `-json-into`, which
-older releases such as 1.8 lack. A run's destroy that fails leaves `errored_test.tfstate`
+(`tofu-test.json`). A run's destroy that fails leaves `errored_test.tfstate`
 behind and tofu still exits 0; the test fails and keeps the file with its
 outputs.
 
@@ -296,10 +295,7 @@ def tf_test(name, srcs, module, deps = None, data = None, providers = None, var_
     Always generates:
       - `:<name>`     — the test. Building it validates the module with the
                         test files; `bazel test` runs `tofu test` offline
-                        against the vendored providers, leaving its JSON log
-                        (`tofu-test.json`) in the test's undeclared outputs
-                        where the tofu binary's `test` has `-json-into`
-                        (older releases such as 1.8 lack it).
+                        against the vendored providers.
       - `:<name>.fmt` — `bazel run` to reformat the test files in place.
 
     When `fmt_test=True` (the default):

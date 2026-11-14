@@ -5,9 +5,7 @@ import (
 	"io/fs"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 
 	"github.com/benbirt/rules_tofu/tf/private/cmd/internal/tfconfig"
 )
@@ -89,11 +87,7 @@ func runTest(extraArgs []string) error {
 	args := append([]string{"test", "-no-color"}, dirArgs...)
 	outputs := os.Getenv("TEST_UNDECLARED_OUTPUTS_DIR")
 	if outputs != "" {
-		if hasJSONInto(env, cwd) {
-			args = append(args, "-json-into="+filepath.Join(outputs, "tofu-test.json"))
-		} else {
-			log.Print("this tofu's `test` has no -json-into, so the test leaves no JSON log (tofu-test.json) in its outputs")
-		}
+		args = append(args, "-json-into="+filepath.Join(outputs, "tofu-test.json"))
 	}
 	// Var files are given relative to the work tree, which has moved.
 	for _, f := range *varFiles {
@@ -120,21 +114,6 @@ func runTest(extraArgs []string) error {
 		return fmt.Errorf("tofu test: %w", testErr)
 	}
 	return nil
-}
-
-// hasJSONInto reports whether this tofu's `test` command takes -json-into,
-// which writes the JSON log to a file beside the readable output. OpenTofu
-// 1.8, which rules_tofu pins among others, doesn't have it, and fails on an
-// unknown flag. The binary is asked rather than its version compared: it may
-// be a root module's own (an opentofu_toolchain), of any version or build.
-// One that can't even print its help is taken not to have the flag; the test
-// run will say what is wrong with it.
-func hasJSONInto(env []string, cwd string) bool {
-	cmd := exec.Command(*tofu, "test", "-help")
-	cmd.Dir = cwd
-	cmd.Env = env
-	out, err := cmd.CombinedOutput()
-	return err == nil && strings.Contains(string(out), "-json-into")
 }
 
 // copyTree copies the directory src to dst, following symlinks to files: a

@@ -56,10 +56,12 @@ Renovate makes it (`versions.tf` and `.terraform.lock.hcl` only, from
 `module_dependency/` and its driver `module_dependency_test.sh` are
 another: `//app` calls a `tf_library` from the `network_module` Bazel module
 by its `module_source`, and that library calls one from `dns_module` by
-its own. Everything must build, each external library on its own too, and
-`//app:app.plan` must plan. The generated module manifest is tofu's
-internal format, so there is one `module_dependency_<version>_test` per
-tofu version in `toolchain/versions.bzl`.
+its own. Everything must build, each external library on its own too,
+`//app:app.plan` must plan, and the deploy's `tf_test` must run and leave
+its JSON log. The generated module manifest is tofu's internal format, so
+there is one `module_dependency_<version>_test` per tofu version in
+`toolchain/versions.bzl`: with the fmt tests, the place where every pinned
+version is exercised, a `tf_test` included.
 
 `tf_modules/` and its driver `tf_modules_test.sh` cover the `tf_modules`
 extension: the driver turns `fixtures/network` into a git repository and

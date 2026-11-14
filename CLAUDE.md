@@ -401,13 +401,19 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   (an absent plugin tree gets an empty directory under `$TEST_TMPDIR`), and
   fails on `errored_test.tfstate`, which tofu writes with exit 0 when a
   run's destroy fails. Don't route tests through the plan/apply path or its
-  ephemeral-state gate. The JSON log goes to `-json-into` only when the
-  binary's own `tofu test -help` lists it (`hasJSONInto`): 1.8.5, which is
-  in `KNOWN_VERSIONS`, has no such flag and fails on it (issue #125). Don't
-  pass it unconditionally, don't fall back to `-json` (it replaces the
-  readable log), and don't decide by version (an `opentofu_toolchain` wraps
-  any binary). `module_dependency_<version>_test` runs a tf_test on every
-  pinned tofu; keep one that does. The copy keeps a file's executable bit and nothing
+  ephemeral-state gate. The JSON log goes to `-json-into`, which OpenTofu
+  1.12.0 introduced; that makes 1.12 the oldest release rules_tofu supports
+  (README, "Quick start" and "Bringing your own binary"; the note in
+  `toolchain/versions.bzl`). 1.8.5 was pinned beside the default until no
+  tf_test turned out to run on it (issue #125): don't pin anything older
+  than the floor, don't probe the binary for the flag or fall back to
+  `-json` (it replaces the readable log) to accommodate one, and if the
+  rules come to need a flag newer than the floor, raise the floor in
+  `KNOWN_VERSIONS`, the README and here together. Nothing checks a root
+  module's own binary: `opentofu_toolchain.version` is whatever its author
+  wrote (the `custom_toolchain` fixture's is `0.0.0`).
+  `module_dependency_<version>_test` runs a tf_test on every pinned tofu;
+  keep one that does. The copy keeps a file's executable bit and nothing
   else of its mode (`copyFile`: `0o755` or `0o644`, never `Perm()`): Bazel's
   outputs are read-only, and tofu must be able to write the copy. Both walks
   of a work tree (`copyTree`, and `linkTree` for the run directory) refuse a

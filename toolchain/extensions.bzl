@@ -4,7 +4,7 @@ Downloads a pinned OpenTofu release for each supported platform and
 registers it as the toolchain every rules_tofu target uses:
 
     tofu = use_extension("@rules_tofu//toolchain:extensions.bzl", "tofu")
-    # tofu.version(version = "1.8.5")  # optional; a default is pinned
+    # tofu.version(version = "1.12.0")  # optional; a default is pinned
     use_repo(tofu, "tofu_toolchains")
 """
 
@@ -42,7 +42,7 @@ def _tofu_download_impl(repository_ctx):
     exe_suffix = repository_ctx.attr.exe_suffix
 
     # OpenTofu release asset URL pattern. Asset name uses os_arch (e.g.
-    # `tofu_1.8.5_linux_amd64.zip`); our platform_key is already in that form.
+    # `tofu_1.12.0_linux_amd64.zip`); our platform_key is already in that form.
     url = "https://github.com/opentofu/opentofu/releases/download/v{v}/tofu_{v}_{p}.zip".format(
         v = version,
         p = platform_key,
@@ -131,7 +131,7 @@ _version_tag = tag_class(
     doc = "Choose the OpenTofu version the build runs.",
     attrs = {
         "version": attr.string(
-            doc = "OpenTofu version, e.g. `\"1.8.5\"`. It must be one rules_tofu has digests " +
+            doc = "OpenTofu version, e.g. `\"1.12.0\"`. It must be one rules_tofu has digests " +
                   "for, listed in `KNOWN_VERSIONS` in " +
                   "[toolchain/versions.bzl](https://github.com/benbirt/rules_tofu/blob/main/toolchain/versions.bzl).",
             mandatory = True,

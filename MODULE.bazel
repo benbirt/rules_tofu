@@ -5,7 +5,7 @@ https://registry.bazel.build/modules/rules_tofu or the GitHub releases page):
 
     bazel_dep(name = "rules_tofu", version = "X.Y.Z")
     tofu = use_extension("@rules_tofu//toolchain:extensions.bzl", "tofu")
-    # tofu.version(version = "1.8.5")  # optional override
+    # tofu.version(version = "1.12.0")  # optional override
     use_repo(tofu, "tofu_toolchains")
 """
 
