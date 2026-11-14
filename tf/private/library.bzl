@@ -142,9 +142,9 @@ def tf_library(name, srcs = None, deps = None, data = None, providers = None, mo
     `../../infra/dns`.
 
     Module calls are resolved offline at build time:
-      - Every `module` block's `source` must be a literal string; `_override`
-        files replace `source` on matching `module` blocks as OpenTofu merges
-        them.
+      - Every `module` block's `source` must be a literal string. `override`
+        and `*_override` files replace `source` on matching `module` blocks,
+        as OpenTofu merges them.
       - Relative paths starting with `./` or `../` resolve within the caller's
         own Bazel repository in the work tree and cannot cross into another
         Bazel repository.
@@ -187,7 +187,8 @@ def tf_library(name, srcs = None, deps = None, data = None, providers = None, mo
         files.
       - A module call cycle.
       - A `required_providers` entry missing from `providers` or `deps`, or
-        outside `registry.opentofu.org`.
+        outside `registry.opentofu.org`. Built-in providers such as
+        `terraform.io/builtin/terraform` are exempt.
     See [Modules](https://github.com/benbirt/rules_tofu#modules).
 
     Generated targets:
