@@ -89,9 +89,9 @@ def _tf_test_impl(ctx):
     root = under_test.package_dir
     test_dir = _test_dir(ctx, root)
 
-    # The work tree: the module under test's files (a deploy's var_files and
-    # generated tfvars included), the test files, their data and var_files,
-    # and the helper libraries' files.
+    # Assemble the work tree from the module under test, including a
+    # deploy's var_files and generated tfvars, together with the test files,
+    # their data and var_files and the helper libraries' files.
     _check_no_auto_tfvars(ctx, ctx.files.data)
     direct = _files_entries(ctx.files.srcs + ctx.files.data + ctx.files.var_files)
     files = depset(
@@ -143,8 +143,9 @@ def _tf_test_impl(ctx):
     work_tree_root = "{}/{}.work".format(package_rel, ctx.label.name)
     plugin_tree_root = "{}/{}.plugins".format(package_rel, ctx.label.name)
 
-    # A deploy's var_files come first, the test's own after, as later -var-file
-    # flags win. Paths are work-tree-relative: the runner moves the tree.
+    # A deploy's var_files come first and the test's own follow, as later
+    # -var-file flags win. Paths are work-tree-relative because the runner
+    # copies the tree into $TEST_TMPDIR.
     var_file_flags = "".join([
         '    --var-file="{}" \\\n'.format(_work_tree_path(f))
         for f in under_test.var_files + ctx.files.var_files

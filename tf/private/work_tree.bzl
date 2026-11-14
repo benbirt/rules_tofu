@@ -1,29 +1,30 @@
-"""Work tree materialization shared between `tf_library` and
-`tf_deploy`.
+"""Work tree, plugin tree and module manifest helpers for `tf_library`, `tf_deploy` and `tf_test`.
 
-A "work tree" is the directory under `bazel-bin/<pkg>/<name>.work/` into
-which a rule symlinks every transitive `.tf`/data file at its
-workspace-relative path, plus (for deploys) a generated
-`rules_tofu.auto.tfvars.json`. The vendored provider plugin tree lives in a
-sibling directory, `bazel-bin/<pkg>/<name>.plugins/`, so `tofu init
--plugin-dir=<plugin_tree>` reads the providers in place without the work
-tree ever carrying the (large) provider binaries.
+A work tree is the directory under `bazel-bin/<pkg>/<name>.work/` into which a
+rule symlinks its configuration, data, test and `var_files` inputs at their
+`work_tree_path`, plus `rules_tofu.auto.tfvars.json` when `vars` are present.
+Main-repository files keep their workspace-relative path and external files go
+under `external/<repo>/...`. The vendored provider packages live in a sibling
+directory, `bazel-bin/<pkg>/<name>.plugins/`, so
+`tofu init -plugin-dir=<plugin_tree>` reads them in place without copying large
+provider packages into the work tree.
 
-`materialize(...)` handles the .tf/data half (with optional tfvars).
-`materialize_plugin_tree(...)` handles the per-provider symlinks.
+`materialize` builds the work tree, `materialize_plugin_tree` builds the
+sibling plugin tree and `modules_manifest` writes `<name>.modules.json`.
 """
 
 load("//toolchain:toolchain.bzl", "TOOLCHAIN_TYPE")
 load(":providers.bzl", "TfLibraryInfo")
 
-# Only structural Terraform inputs are allowed in a rule's srcs. Variable
-# values come from `tf_deploy(vars = {...})`; allowing `.tfvars[.json]`
-# here would create ambiguous precedence with the deploy-emitted
-# `rules_tofu.auto.tfvars.json` and lets a reusable module declare values
-# it has no business owning.
+# Only structural OpenTofu inputs are allowed in a rule's srcs. Variable values
+# come from `tf_deploy(vars = {...})` and var_files on tf_deploy or tf_test;
+# allowing `.tfvars[.json]` here would create ambiguous precedence with
+# `rules_tofu.auto.tfvars.json` and let a reusable module declare values it has
+# no business owning.
 #
 # `.tofu` and `.tofu.json` are OpenTofu-only configuration files: tofu reads
-# `foo.tofu` in place of a `foo.tf` beside it.
+# `foo.tofu` and `foo.tofu.json` in place of `foo.tf` and `foo.tf.json` beside
+# them.
 ALLOWED_SRC_EXTS = [".tf", ".tf.json", ".tofu", ".tofu.json", ".tftpl", ".hcl"]
 
 # The files `tofu test` reads. They go in the srcs of a `tf_test`, never of a
@@ -51,20 +52,20 @@ def _loaded_by_itself(basename):
     )
 
 def check_no_auto_tfvars(ctx, files):
-    """Fail if any of `files`, a rule's data, is a variables file tofu loads by itself.
+    """Fail if any of `files`, a rule's data, is a variables file `tofu` loads by itself.
 
-    OpenTofu reads `terraform.tfvars[.json]` and `*.auto.tfvars[.json]` from
-    the root module's directory (and `tofu test` from the test directory)
-    without being told to. One that arrived as `data` would set variables
-    beside `vars` and `var_files`, over them if its name sorts after
-    `rules_tofu.auto.tfvars.json`, and the duplicate-key check never reads
-    it. `var_files` are not checked here: those tofu is told to load, in an
-    order the rule chooses, and a deploy's are checked against `vars` and
-    each other.
+    OpenTofu automatically reads `terraform.tfvars[.json]` and
+    `*.auto.tfvars[.json]` from the root module's directory, and `tofu test`
+    reads them from the test directory too. One in `data` would set variables
+    alongside `vars` and `var_files`, overriding `vars` if its name sorts after
+    `rules_tofu.auto.tfvars.json`, and the duplicate-key check never reads it.
+    `var_files` are not checked here: `tofu` loads them via `-var-file` in the
+    order the rule chooses, and a deploy's are checked against `vars` and each
+    other.
 
-    The names are refused in any directory, not only a root module's: which
-    directory is a root is not the listing rule's to know (a library's
-    package is the root of its own validation and of any `tf_test` of it).
+    The names are refused in any directory, not only a root module's: the
+    listing rule cannot know which directory will be a root, and a library's
+    package is the root of its own validation and of any `tf_test` of it.
     """
     for f in files:
         if _loaded_by_itself(f.basename):
@@ -94,12 +95,12 @@ _CONFIG_EXTS = (".tf", ".tf.json", ".tofu", ".tofu.json")
 def check_has_configuration(ctx, entries):
     """Fail a deploy whose root module holds no configuration file.
 
-    tofu validates an empty directory and then refuses to plan or apply it,
+    `tofu` validates an empty directory and then refuses to plan or apply it,
     so such a deploy would build and never run. The usual cause is taking
     `deps` for what gets deployed: they are files in the work tree, which
-    only a `module` block in the root module's own files reaches. A library
-    or a test may have an empty root (a bundle of files; runs that load
-    other modules), so only a deploy is checked.
+    only a `module` block in the root module's own files reaches. Only a
+    deploy is checked: a library may just bundle non-root files, and a test's
+    `run` blocks may load other modules.
     """
     root = package_dir(ctx.label)
     for entry in entries:
@@ -119,8 +120,8 @@ def work_tree_path(f):
 
     Main-repository files keep their workspace-relative path. Files from
     other repositories go under `external/<canonical repo name>/`, which no
-    main-repository package can occupy (Bazel reserves `//external`). HCL
-    reaches them by `module_source`, never by a relative path, since the
+    main-repository package can occupy because Bazel reserves `//external`.
+    HCL reaches them by `module_source`, never by a relative path, since the
     canonical names are Bazel's to choose.
     """
     sp = f.short_path
@@ -144,24 +145,23 @@ def files_entries(files):
     return [struct(path = work_tree_path(f), file = f) for f in files]
 
 def materialize(ctx, entries, tfvars_content = None, tfvars_dir = None):
-    """Materialize a work tree under `<pkg>/<name>.work/`.
+    """Materialise a work tree under `<pkg>/<name>.work/`.
 
     For each `struct(path, file)` in `entries`, declares `<name>.work/<path>`
     and symlinks it to `file`. If `tfvars_content` is non-None, also writes
-    `<name>.work/<package>/rules_tofu.auto.tfvars.json` with that content.
+    `rules_tofu.auto.tfvars.json` in `tfvars_dir` under `<name>.work/`.
 
     Args:
       ctx: rule ctx.
-      entries: list[struct(path, file)] — work-tree paths (`work_tree_path`) + Files.
-      tfvars_content: optional string. Pass None for library work trees
-          (which carry no variable values).
-      tfvars_dir: the work-tree directory to write the tfvars file in; the
-          rule's own package by default. A `tf_test` writes the deploy under
-          test's in that deploy's directory.
+      entries: list[struct(path, file)] of work-tree paths (`work_tree_path`) and Files.
+      tfvars_content: optional string; None for work trees with no `vars`.
+      tfvars_dir: work-tree directory for `rules_tofu.auto.tfvars.json`,
+          defaulting to the rule's own package. A `tf_test` passes the tested
+          deploy's package directory.
 
     Returns:
-      list[File]: the declared work-tree outputs (symlinks plus, when
-      `tfvars_content` is set, the generated tfvars file).
+      list[File]: the declared work-tree symlinks, plus the generated tfvars
+      file when `tfvars_content` is set.
     """
     work_prefix = ctx.label.name + ".work"
     outputs = []
@@ -236,13 +236,16 @@ def missing_platform_error(label, address, version, platform, locked):
     )
 
 def materialize_plugin_tree(ctx, providers_depset):
-    """Symlink provider binaries into this rule's sibling plugin tree.
+    """Symlink provider packages into this rule's sibling plugin tree.
 
-    Declares outputs under `<name>.plugins/` (a sibling of the work tree),
-    for each unique `(address, version)`, using Terraform's canonical
-    plugin-dir layout `<host>/<namespace>/<name>/<version>/<os>_<arch>/`: a
-    symlink to the binary and to each other file from the provider's zip, so
-    the directory hashes to the lock's `h1:` value.
+    Declares outputs under `<name>.plugins/` beside the work tree for each
+    unique `(address, version)`, using OpenTofu's canonical plugin-dir layout
+    `<host>/<namespace>/<name>/<version>/<os>_<arch>/`: a symlink to the
+    binary and to each other file from the provider's zip, so the directory
+    hashes to the lock's `h1:` value.
+
+    Fails if two providers share an address with different versions, or if a
+    declared provider has no package for the exec platform.
 
     Args:
       ctx: rule ctx. Must list `TOOLCHAIN_TYPE` in `toolchains` so
@@ -250,10 +253,7 @@ def materialize_plugin_tree(ctx, providers_depset):
       providers_depset: depset[TfProviderInfo].
 
     Returns:
-      list[File]: declared symlink outputs (possibly empty).
-
-    Fails if two providers share an address but differ in version, or if a
-    declared provider has no binary for the exec platform.
+      list[File]: declared symlink outputs, empty when no providers are in scope.
     """
     tofu = ctx.toolchains[TOOLCHAIN_TYPE].tofu
     platform_key = tofu.platform_key
@@ -328,8 +328,8 @@ def work_tree_root(ctx):
 def plugin_tree_root(ctx):
     """Exec-root-relative path to this rule's plugin tree root.
 
-    Sibling of `work_tree_root(ctx)`; the vendored provider binaries
-    declared by `materialize_plugin_tree(...)` live under it.
+    Sibling of `work_tree_root(ctx)`; the vendored provider packages
+    declared by `materialize_plugin_tree` live under it.
     """
     return "{bin}/{pkg}/{name}.plugins".format(
         bin = ctx.bin_dir.path,
@@ -373,8 +373,8 @@ def modules_manifest(ctx, work_tree_outputs, infos, providers_depset, root = Non
           plugin tree.
       root: the root module's work-tree directory; the rule's own package by
           default. A `tf_test`'s is the module under test's.
-      test_dir: for a `tf_test`, the test files' directory relative to `root`
-          ("" for `root` itself); the module each `run` block loads is
+      test_dir: for a `tf_test`, the test files' directory relative to `root`,
+          or "" for `root` itself; the module each `run` block loads is
           recorded too. None for a rule with no test files.
       own: for a `tf_library` with `module_source`, its own
           `TfLibraryInfo.module`: its files may call that address with

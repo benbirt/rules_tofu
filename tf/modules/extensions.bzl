@@ -74,9 +74,9 @@ def _parse_sources(module_ctx, sources):
     ]
 
 # Bazel's own files in a fetched module would split it into packages of its
-# own, or, for the ignore file (which Bazel reads at the root of any
-# repository), hide directories from the module's `glob`. They're removed
-# before the module's BUILD file is written.
+# own. A .bazelignore, which Bazel reads at the root of any repository, would
+# also hide directories from the module's `glob`. They're removed before the
+# module's BUILD file is written.
 _BAZEL_FILES = [".bazelignore", "BUILD", "BUILD.bazel", "MODULE.bazel", "REPO.bazel", "WORKSPACE", "WORKSPACE.bazel"]
 
 # The generated targets: the module's library, in its directory, and, when
@@ -86,11 +86,11 @@ _BAZEL_FILES = [".bazelignore", "BUILD", "BUILD.bazel", "MODULE.bazel", "REPO.ba
 _MODULE_TARGET = "_rules_tofu_module"
 _FILES_TARGET = "_rules_tofu_files"
 
-# Files that never belong in a work tree: VCS metadata; tofu's own state and
-# lock, which a module repository may have committed; and the variables files
-# tofu loads by itself, which a module's root and its examples often carry
-# and no rule accepts as data (`check_no_auto_tfvars`). tofu reads none of
-# them from a module that is called.
+# Files excluded from the module's globs: VCS metadata, any committed
+# .terraform directory or .terraform.lock.hcl, the generated root BUILD.bazel
+# and auto-loaded variable files, which a module's root or examples often
+# carry and tf_library rejects in data. tofu reads none of them from a called
+# module.
 _EXCLUDED = [
     "**/.git/**",
     "**/.terraform/**",
@@ -181,10 +181,10 @@ def _cached(module_ctx, key, kind):
 def _cached_registry(module_ctx, key):
     """A registry module's recorded fact and its location, as `_resolve_registry` returns them, or None.
 
-    Like any other malformed fact, one whose location can't be read, or
-    whose pin is not the kind its location needs (a commit for a git
-    repository, a digest for an archive), is a miss: the registry is asked
-    again and the lockfile's record replaced (issue #96).
+    Like any other malformed fact, one whose location can't be read or whose
+    pin does not match its location kind, a commit for git or a sha256 for an
+    archive, is treated as a miss: the registry is queried again and the
+    lockfile's record replaced (issue #96).
     """
     fact = _cached(module_ctx, key, "registry")
     if not fact:
@@ -197,17 +197,18 @@ def _cached_registry(module_ctx, key):
     return None
 
 def _tidy(repository_ctx, context):
-    """Remove what the fetched files hold that Bazel must not see.
+    """Remove files and symlinks that Bazel must not see in the fetched tree.
 
-    Bazel's own files would split the module into packages of its own. A
-    symlink stays only if it leads to a file of the module, which Bazel
-    reads as that file. Its `glob` skips a symlink to nothing, but follows
-    one to a directory and fails the package when the links lead back up to
-    an ancestor; and through a symlink out of the module, the module's files
-    would depend on the machine's.
+    Upstream Bazel files would split the module into packages or hide
+    directories via `.bazelignore`. A symlink stays only if it resolves to a
+    regular file inside the repository, which Bazel reads as that file: `glob`
+    skips dangling symlinks, follows directory symlinks and fails the package
+    if they cycle to an ancestor, while symlinks outside the repository would
+    make its contents depend on the host machine.
 
-    The module's own directory can't be a symlink then: `//<subdir>` is
-    where its library is written, so that fails, naming where the link leads.
+    If `subdir` is or lies under a directory symlink, removing that symlink
+    leaves nowhere to write `//<subdir>/BUILD.bazel`, so fetching fails naming
+    the symlink target.
     """
     root = repository_ctx.path(".")
     root_real = str(root.realpath)

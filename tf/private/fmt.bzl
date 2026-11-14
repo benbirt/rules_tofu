@@ -1,7 +1,7 @@
-"""Internal fmt rules used by the `tf_library` and `tf_deploy` macros.
+"""Internal `tofu fmt` rules used by the `tf_library`, `tf_deploy` and `tf_test` macros.
 
-Not part of the public API (`//tf:defs.bzl`). Use the `fmt_test`
-parameter on `tf_library`, `tf_deploy` or `tf_test` instead.
+Not part of `//tf:defs.bzl`: the macros emit `:<name>.fmt` whenever `srcs` is
+non-empty, and `:<name>.fmt_check` when `fmt_test = True`.
 
 Both rules name the files they format or check, never a directory:
 `tofu fmt <dir>` reads only the directory's own files, so a `srcs` entry in
@@ -12,9 +12,9 @@ be touched.
 load("//toolchain:toolchain.bzl", "TOOLCHAIN_TYPE")
 load(":work_tree.bzl", "ALLOWED_SRC_EXTS", "TEST_SRC_EXTS", "runfiles_path")
 
-# The extensions `tofu fmt` processes, out of ALLOWED_SRC_EXTS. Named
-# explicitly, it rejects any other (.tf.json, .tofu.json, .tftpl and other
-# .hcl files); in a directory it skips them.
+# The extensions `tofu fmt` processes from ALLOWED_SRC_EXTS and TEST_SRC_EXTS.
+# When passed explicit file paths, `tofu fmt` rejects JSON, .tftpl and generic
+# .hcl files; when passed a directory it skips them.
 FMT_EXTS = [".tf", ".tofu", ".tftest.hcl", ".tofutest.hcl"]
 
 def _formattable(f):

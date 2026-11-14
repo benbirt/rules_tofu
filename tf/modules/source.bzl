@@ -8,8 +8,8 @@ repository rule are entitled to abort the build.
 
 Reading a module's `source` is not done here: `modscan parse` does it in Go
 (//tf/private/cmd/internal/tfconfig), with OpenTofu's own registry-address
-library, so rules_tofu reads addresses as OpenTofu does. `parsed` below is
-what `parse_sources` in `extensions.bzl` makes of its answer.
+library, so rules_tofu reads addresses as OpenTofu does. `parsed` below is a
+struct carrying the fields `modscan parse` emits.
 """
 
 visibility(["//tf/modules/..."])
@@ -74,7 +74,7 @@ def registry_location(response, context):
     return struct(location = location, error = None)
 
 def is_commit(ref):
-    """Whether `ref` is a full git commit ID (SHA-1 or SHA-256)."""
+    """Whether `ref` is a full 40- or 64-character lower-case hex commit ID."""
     return len(ref) in (40, 64) and all([c in _HEX for c in ref.elems()])
 
 def looks_abbreviated(ref):
@@ -88,8 +88,9 @@ def looks_abbreviated(ref):
 def ls_remote_commit(output, ref):
     """The commit `git ls-remote` reports for `ref`, or None.
 
-    A tag's peeled entry (`^{}`, an annotated tag's commit) wins over the tag
-    itself, and tags over branches. An empty `ref` is the remote's HEAD.
+    An annotated tag's peeled commit entry `^{}` wins over the tag object
+    itself, and tags win over branches. An empty `ref` resolves the remote's
+    `HEAD`.
     """
     found = {}
     for line in output.splitlines():

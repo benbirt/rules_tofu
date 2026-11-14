@@ -1,14 +1,15 @@
 """`tf_runner` rule.
 
 Emits an executable that runs `tofu init && tofu <plan|apply|destroy>` for a
-deploy. The executable is a tiny shell wrapper that exec's the Go runner
-binary with all configuration passed as explicit CLI flags — no template
-substitutions inside the runner itself, no runfiles boilerplate in bash.
+deploy. The executable is a small shell wrapper that execs the Go runner binary
+with all configuration passed as explicit CLI flags, avoiding template
+substitutions in the runner and runfiles boilerplate in bash.
 
 It is an ordinary Bazel-built executable: `bazel run` works, and so does
 running the built file from any directory. It finds everything from its own
-location (its runfiles tree beside it, and the deploy's state directory in the
-same output directory), never from the checkout or `BUILD_WORKSPACE_DIRECTORY`.
+location, with its runfiles tree beside it and the deploy's state directory in
+the same output directory, never from the checkout or
+`BUILD_WORKSPACE_DIRECTORY`.
 """
 
 load("//toolchain:toolchain.bzl", "TOOLCHAIN_TYPE")
@@ -40,7 +41,7 @@ def _tf_runner_impl(ctx):
         for p in deploy.var_file_relpaths
     ])
 
-    # Emitted as a bare flag only when the deploy opts in — Go's flag package
+    # Emitted as a bare flag only when the deploy opts in: Go's flag package
     # reads a valueless boolean flag as true, and omitting the line entirely
     # leaves the runner's own `false` default in place.
     ephemeral_state_flag = ""
@@ -53,7 +54,7 @@ def _tf_runner_impl(ctx):
 
     out = ctx.actions.declare_file(ctx.label.name + ".sh")
 
-    # State lives at the deploy's `$(RULEDIR)/<name>.rules_tofu-state` — i.e.
+    # State lives at the deploy's `$(RULEDIR)/<name>.rules_tofu-state`, that is,
     # `bazel-out/<config>/bin/<pkg>/<name>.rules_tofu-state`, which the
     # standard `bazel-*` gitignore covers and `bazel clean` wipes. The launcher
     # is declared in that same directory, so at run time it is the launcher's
