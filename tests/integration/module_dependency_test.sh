@@ -1,24 +1,25 @@
 #!/usr/bin/env bash
 # Driver for //tests/integration:module_dependency_*_test. The
 # bazel_integration_test rule sets BIT_BAZEL_BINARY and BIT_WORKSPACE_DIR (the
-# module_dependency workspace), and the test sets TOFU_VERSION. Unlike
-# assert_bazel_fails.sh, every step here must succeed:
+# module_dependency sub-workspace), and the test sets TOFU_VERSION.
 #
-#   1. Building //... validates //app, which calls a tf_library from another
-#      Bazel module by its module_source, which calls one from a third.
-#   2. Each of those libraries also builds on its own, as a root module in
-#      its own repository.
-#   3. `bazel run //app:app.plan` plans against the same manifest, offline.
-#   4. The toolchain's tofu reports TOFU_VERSION, so a version that didn't
-#      take is caught.
+# Steps:
+#   1. `bazel build //...` validates //app (which calls @network_module//vpc by
+#      module_source, which in turn calls @dns_module//:dns) and //app:app_test.
+#   2. @network_module//vpc and @dns_module//:dns also build on their own, as
+#      root modules in their own repositories.
+#   3. `bazel run //app:app.plan` plans offline against the generated module
+#      manifest and checks the module chain's output.
+#   4. The toolchain's `tofu` reports TOFU_VERSION, catching a version override
+#      that did not take effect.
 #   5. `bazel test //app:app_test` runs the deploy's tf_test, whose run block
-#      loads a module from the manifest. It passes on every pinned tofu and
-#      leaves the JSON log in its outputs: the runner passes `tofu test` a
-#      flag for it that OpenTofu before 1.12 lacks, and a tf_test was once
-#      run on no version but the default (issue #125).
+#      loads a module from the manifest, and checks that tofu-test.json is
+#      written to its test outputs. The runner passes `tofu test` a flag
+#      (-json-into) that OpenTofu before 1.12 lacks, and tf_test once ran on no
+#      version except the default (issue #125).
 #
-# The module manifest is tofu's internal format, so there is one test per tofu
-# version rules_tofu pins.
+# Runs once per `tofu` version rules_tofu pins because the module manifest is
+# `tofu`'s internal format.
 
 set -euo pipefail
 
@@ -60,7 +61,7 @@ echo "${out}" >&2
 grep -q -F 'www.app.example.com' <<<"${out}" || fail "the plan doesn't show the module chain's output"
 
 echo "--- 4. check the tofu version ---" >&2
-# Only the exec platform's tofu repository has been fetched.
+# Only the exec platform's `tofu` repository has been fetched.
 versions="$(for t in "$(bazel info output_base)"/external/rules_tofu++tofu+tofu_*/tofu; do "$t" version; done)"
 grep -q -F "v${TOFU_VERSION}" <<<"${versions}" || fail "expected tofu ${TOFU_VERSION}, got: ${versions}"
 

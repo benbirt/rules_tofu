@@ -1,32 +1,29 @@
 #!/usr/bin/env bash
 # Driver for //tests/integration:lock_update_test. The bazel_integration_test
 # rule sets BIT_BAZEL_BINARY and BIT_WORKSPACE_DIR (the lock_update
-# workspace). Unlike assert_bazel_fails.sh, every step here must succeed:
+# sub-workspace).
 #
-#   1. `bazel run @tf_providers//:pin` writes the first lock, although the
-#      workspace's libraries already name `@tf_providers//hashicorp/null`,
-#      which has no package in the hub until it is locked. The package's two
-#      libraries each require the provider, in a file of their own, and the
-#      lock meets both constraints (issue #99). One of them calls a
-#      submodule of a library in another Bazel module that has a
-#      `module_source` and no configuration in its own directory, a bundle,
-#      and the lock meets that submodule's constraint too (issue #123).
-#   2. A build records MODULE.bazel.lock. It includes a library with the
-#      locked provider and no files: an empty root module, which validates
-#      because it is not given the lock (issue #119).
-#   3. hashicorp/null is bumped the way Dependabot or Renovate does it: in
-#      versions.tf and infra/.terraform.lock.hcl, and nowhere else.
-#   4. The build passes with --lockfile_mode=error and leaves MODULE.bazel.lock
-#      byte-identical, so the bot's change is complete on its own.
-#   5. Dependabot's `bazel` updater, which has only the files it fetches
-#      rather than a clone, can regenerate MODULE.bazel.lock, and leaves it
-#      and MODULE.bazel unchanged (issue #131).
-#   6. A root `tf_providers.provider` tag for hashicorp/null, still in the
-#      lock, fails the build naming the conflict, in the provider's fetch and
-#      not in the extension.
-#   7. So `pin` still runs: it leaves the tagged provider out, and with
-#      nothing else to lock writes an empty lock.
-#   8. The tag alone pins the provider, and the build passes.
+# Steps:
+#   1. `bazel run @tf_providers//:pin` writes the initial .terraform.lock.hcl
+#      although the libraries already name `@tf_providers//hashicorp/null`,
+#      which has no package in the hub until it is locked. The lock meets the
+#      constraints of both root-package libraries (versions.tf and floor.tf,
+#      issue #99) and of a submodule in @bundle_module//bundle, a
+#      `module_source` bundle with no configuration in its own directory
+#      (issue #123).
+#   2. Building //:versions, //:floor and //empty:lib writes MODULE.bazel.lock.
+#      //empty:lib lists the locked provider and has no files; it validates
+#      because an empty root module is not given the lock (issue #119).
+#   3. Bump hashicorp/null as Dependabot or Renovate does: in versions.tf and
+#      .terraform.lock.hcl, and nowhere else.
+#   4. Building //:versions and //:floor passes with --lockfile_mode=error and
+#      leaves MODULE.bazel.lock byte-identical.
+#   5. Adding a root tf_providers.provider tag for hashicorp/null while it is
+#      still in .terraform.lock.hcl fails `bazel build //:versions` in the
+#      provider's fetch (not in the extension), naming the conflict.
+#   6. Because the extension still evaluates, `pin` remains runnable: it omits
+#      the tagged provider and writes an empty lock.
+#   7. Building //:versions and //:floor passes with the root tag alone.
 
 set -euo pipefail
 

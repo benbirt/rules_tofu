@@ -1,19 +1,21 @@
-"""Bazel-in-Bazel negative tests: assert that misusing the rules_tofu rules
-fails with a stable, user-visible error message.
+"""Bazel-in-Bazel integration tests for rules_tofu.
 
-Each case names a sub-workspace, a target inside it under
-`cases/<case>/`, and a short stderr fragment expected when the nested Bazel
-fails on that target: `_CASES` drives the target with `bazel build`,
-`_RUN_CASES` with `bazel run`. Most cases live in `broken_workspace`, whose
-single MODULE.bazel they share, and run as one test against one nested
-Bazel: starting a server and fetching and analysing rules_tofu's
-dependencies costs more than any case, so after the first they are
-incremental builds. A case whose break *is* the module graph needs a
-sub-workspace of its own (`broken_module`, `lock_dependency`) and a test of
-its own. The child workspace packages are excluded from the parent Bazel via
-the `--deleted_packages` flag in `.bazelrc` (the "deleted packages" trick
-recommended by rules_bazel_integration_test), so the outer Bazel never
-analyzes the intentionally-broken case targets when expanding `//...`.
+`_CASES` (`bazel build`) and `_RUN_CASES` (`bazel run`) drive
+assert_bazel_fails: each entry names a sub-workspace, a target inside it, and a
+stderr fragment expected when the nested Bazel fails. Most negative cases live
+in `broken_workspace`, sharing its MODULE.bazel and one nested Bazel server so
+every case after the first is an incremental build. Cases that test the module
+graph or toolchain registration (broken_module, lock_dependency,
+custom_toolchain) each have their own sub-workspace and test target.
+
+Multi-step positive tests (lock_update_test, module_dependency_*_test,
+run_directory_test, tf_modules_test, fmt_*_test) each have their own driver
+script and sub-workspace below.
+
+The sub-workspace packages are excluded from the outer Bazel via
+--deleted_packages in .bazelrc (as recommended by
+rules_bazel_integration_test), so expanding `//...` at the root never analyses
+them directly.
 """
 
 load("@bazel_binaries//:defs.bzl", "bazel_binaries")
@@ -50,8 +52,8 @@ _WORKSPACE_FILES = {
     ],
 }
 
-# Failures raised by the outer Bazel itself — loading, analysis, or an action
-# the rules emit. Driven by `bazel build`, the driver's default command.
+# Failures raised during `bazel build` in the nested Bazel: module resolution,
+# loading, analysis, or an action the rules emit.
 _CASES = [
     # (case_name, workspace_path, target inside that workspace, stderr fragment)
     ("duplicate_vars", "broken_workspace", "//cases/duplicate_vars:dup", "declared in both"),
@@ -162,11 +164,10 @@ bazel_integration_test(
     if workspace != _BUNDLED_WORKSPACE
 ]
 
-# A positive test: a workspace's first `pin`, then a provider update
-# as Dependabot or Renovate makes it (versions.tf and .terraform.lock.hcl
-# only), which must build with MODULE.bazel.lock untouched, then a root tag
-# for the locked provider, which must fail the build but leave `pin`
-# runnable. See lock_update_test.sh.
+# Provider lock workflow: a workspace's first `pin`, a Dependabot/Renovate
+# update (versions.tf and .terraform.lock.hcl only) that must leave
+# MODULE.bazel.lock untouched, and a root tag for the locked provider that
+# fails the build while leaving `pin` runnable. See lock_update_test.sh.
 sh_binary(
     name = "lock_update_driver",
     srcs = ["lock_update_test.sh"],
@@ -187,10 +188,11 @@ bazel_integration_test(
     workspace_path = "lock_update",
 )
 
-# The other positive test: a root module calls a tf_library from another
-# Bazel module by its module_source, which in turn calls one from a third,
-# and builds and plans offline. The module manifest this relies on is tofu's
-# internal format, so it runs with every tofu version rules_tofu pins. See
+# Cross-module module_source dependencies: a root module calls a tf_library
+# from another Bazel module by its module_source, which calls one from a third,
+# then builds, plans, and runs tf_test offline. Runs on every `tofu` version
+# rules_tofu pins because the module manifest is `tofu`'s internal format and
+# tf_test passes flags that older OpenTofu releases lack. See
 # module_dependency_test.sh.
 sh_binary(
     name = "module_dependency_driver",
@@ -216,9 +218,9 @@ sh_binary(
 ]
 
 # The launchers a `tf_deploy` generates, run for real: `.apply` under
-# `bazel run`, then the built `.destroy` launcher directly from another
-# directory, sharing the state of a `backend "local"` with a relative path in
-# the deploy's run directory. See run_directory_test.sh.
+# `bazel run`, the built `.destroy` launcher directly from another directory,
+# and `.plan` under `bazel run`, sharing the state of a `backend "local"` with
+# a relative path in the deploy's run directory. See run_directory_test.sh.
 sh_binary(
     name = "run_directory_driver",
     srcs = ["run_directory_test.sh"],
@@ -265,7 +267,7 @@ bazel_integration_test(
 # `.fmt` and `.fmt_check` act on the files in `srcs` by name, in
 # subdirectories too, and on nothing else in the package; a target without
 # `srcs` has neither. Which extensions `tofu fmt` accepts by name is the
-# binary's to decide, so this runs with every tofu version rules_tofu pins.
+# binary's to decide, so this runs with every `tofu` version rules_tofu pins.
 # See fmt_test.sh.
 sh_binary(
     name = "fmt_driver",

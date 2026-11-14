@@ -1,15 +1,17 @@
 # Sourced by the //tests/integration drivers once _TMPDIR is set: where the
 # nested Bazel keeps its caches, and `bazel`, the function that runs it.
 #
-# Bazel sees TEST_TMPDIR and puts the nested Bazel's output user root under
-# it, so every test would extract an install base and fetch each repository
-# from nothing (the Go SDK alone is ten seconds). Give it the outer Bazel's
-# user root instead, Bazel's own default for the platform (HOME is inherited
-# by bazel_integration_test): the install base and the repository and repo
-# contents caches are then shared with the outer Bazel and across tests,
-# while the output base below stays per test. The nested `bazel` binary is a
-# bazelisk wrapper that likewise caches its Bazel download under $PWD unless
-# told otherwise; use its per-user cache, which setup-bazel saves on CI.
+# Bazel sets TEST_TMPDIR, so by default the nested Bazel puts its output user
+# root there and extracts an install base and every repository from scratch
+# (the Go SDK alone takes ten seconds). Point --output_user_root at the
+# platform's default user root instead, using HOME inherited through
+# bazel_integration_test. The install base, repository cache and repo contents
+# cache are then shared with the outer Bazel and across tests, while
+# --output_base below stays per-test.
+#
+# The nested `bazel` binary is a bazelisk wrapper that caches its Bazel
+# download under $PWD unless told otherwise. Point BAZELISK_HOME at its
+# per-user cache, which setup-bazel saves on CI.
 _user="${USER:-$(id -un)}"
 if [[ "$(uname -s)" == Darwin ]]; then
   NESTED_USER_ROOT="/var/tmp/_bazel_${_user}"
@@ -41,12 +43,11 @@ bazel() {
   "${BIT_BAZEL_BINARY}" --output_user_root="${NESTED_USER_ROOT}" --output_base="${NESTED_OUTPUT_BASE}" "$@"
 }
 
-# The nested Bazel is the version of the Bazel running this test
-# (bazel_binaries.download in MODULE.bazel takes it from @running_bazel), so
-# that a run on another Bazel than the pinned one, such as CI's on the oldest
-# supported, tests the nested builds on it too. Check it is: they once ran on
-# the pinned version whatever ran the tests (issue #88). Every
-# bazel_integration_test sets RUNNING_BAZEL_VERSION in its env.
+# Check that the nested Bazel matches the outer Bazel version (@running_bazel
+# in MODULE.bazel), so CI runs on another Bazel such as 8.5.0 test the nested
+# builds on that version too. Nested builds once ran on the pinned version
+# regardless of what ran the tests (issue #88); every bazel_integration_test
+# sets RUNNING_BAZEL_VERSION in its env.
 _running="${RUNNING_BAZEL_VERSION:?set it in the env of the bazel_integration_test, as the others in tests/integration/BUILD.bazel do}"
 _nested="$("${BIT_BAZEL_BINARY}" --version)"
 if [[ "${_nested}" != "bazel ${_running}" ]]; then

@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 # Driver for //tests/integration:run_directory_test. The
 # bazel_integration_test rule sets BIT_BAZEL_BINARY and BIT_WORKSPACE_DIR (the
-# run_directory workspace). Unlike assert_bazel_fails.sh, every step here must
-# succeed:
+# run_directory sub-workspace).
 #
-#   1. `bazel run //app:deploy.apply` creates a resource. The deploy's
-#      `backend "local"` has a relative `path`, which tofu resolves itself:
-#      the state lands in the deploy's run directory under bazel-bin, and
-#      nowhere in the launcher's runfiles tree.
-#   2. The built `.destroy` launcher, run directly by a relative path from
-#      another directory and without the variables `bazel run` sets, finds
-#      that state and destroys the resource: the launchers are ordinary
-#      executables sharing one run directory.
-#   3. `bazel run //app:deploy.plan` then plans against the same, now empty,
-#      state.
+# Steps:
+#   1. `bazel run //app:deploy.apply` creates a resource and reads greeting.txt
+#      through path.module. The deploy's `backend "local"` has a relative path,
+#      which `tofu` resolves inside deploy.rules_tofu-state under bazel-bin,
+#      leaving no .tfstate, .terraform or .terraform.lock.hcl elsewhere under
+#      bazel-bin/app.
+#   2. Building //app:deploy.destroy and running the `.destroy` launcher
+#      directly by relative path from bazel-bin (without the variables
+#      `bazel run` sets) finds that state and destroys the resource: the
+#      launchers are ordinary executables sharing one run directory.
+#   3. `bazel run //app:deploy.plan` plans against the same, now empty, state.
 
 set -euo pipefail
 

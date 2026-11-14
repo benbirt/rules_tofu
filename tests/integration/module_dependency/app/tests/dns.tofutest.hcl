@@ -1,10 +1,9 @@
-# A run block loading a module by its module_source from a `.tofutest.hcl`
-# file: the manifest records it under tofu's key for that extension, which
-# `tofu init -get=false` must find. Built, and so validated, and then run,
-# for every tofu version rules_tofu pins (module_dependency_test.sh, steps 1
-# and 5). The source is a registry address, which a run block's module has
-# always accepted (older OpenTofu took only local and registry sources there),
-# and dns_module's library provides this one.
+# Loads @dns_module//:dns (acme/dns/null) by module_source from a .tofutest.hcl
+# `run` block so `tofu init -get=false` checks the manifest key `tofu` uses for
+# that extension. Validated and run on every pinned `tofu` version
+# (module_dependency_test.sh, steps 1 and 5). Keep source as a registry
+# address: older OpenTofu releases accepted only local and registry sources in
+# `run` blocks.
 run "dns" {
   command = plan
 

@@ -1,23 +1,24 @@
 #!/usr/bin/env bash
 # Driver for //tests/integration:fmt_*_test. The bazel_integration_test rule
-# sets BIT_BAZEL_BINARY and BIT_WORKSPACE_DIR (the fmt workspace), and the
-# test sets TOFU_VERSION. Every step must succeed:
+# sets BIT_BAZEL_BINARY and BIT_WORKSPACE_DIR (the fmt sub-workspace), and the
+# test sets TOFU_VERSION.
 #
-#   1. A target whose `srcs` are all in a subdirectory passes `.fmt_check`.
-#   2. A target with unformatted `srcs` in subdirectories fails `.fmt_check`,
-#      naming each of them: a library's .tf and .tofu files, and a tf_test's
-#      .tftest.hcl.
-#   3. `.fmt` reformats exactly those files: afterwards `.fmt_check` passes
-#      and the package's file outside `srcs` is byte-identical.
-#   4. Targets without `srcs` have no `.fmt` or `.fmt_check`.
-#   5. The toolchain's tofu reports TOFU_VERSION, so a version that didn't
-#      take is caught: which extensions `tofu fmt` accepts by name is the
-#      binary's to decide.
-#   6. Everything in the workspace builds, including libraries, and a test,
-#      whose root module is empty; so the fixture stays a shape the
-#      rules accept (it once listed the test file in a library's `srcs`,
-#      which nothing noticed: the steps above only format and query). The
-#      test of the empty root module is then run, and passes.
+# Steps:
+#   1. //sub_only:lib.fmt_check passes when all `srcs` live in a subdirectory.
+#   2. //nested:lib.fmt_check and //nested:tests.fmt_check fail on unformatted
+#      .tf, .tofu and .tftest.hcl files in subdirectories, naming only their
+#      own `srcs` and ignoring nested/not_src.tf.
+#   3. `.fmt` reformats those `srcs` in place; `.fmt_check` then passes while
+#      nested/not_src.tf stays byte-identical.
+#   4. Targets without `srcs` (no_srcs_lib, no_srcs_deploy) have no `.fmt` or
+#      `.fmt_check` targets.
+#   5. The toolchain's `tofu` reports TOFU_VERSION, catching a version override
+#      that did not take effect: which extensions `tofu fmt` accepts by name is
+#      the binary's to decide.
+#   6. `bazel build //...` builds every target in the sub-workspace (catching
+#      invalid fixtures that format and query steps alone would miss, such as a
+#      test file in a library's `srcs`), and `bazel test //empty:test` runs a
+#      tf_test of an empty root module (issue #119).
 
 set -euo pipefail
 
@@ -86,7 +87,7 @@ grep -q -x -F '//nested:no_srcs_deploy.plan' <<<"${targets}" || fail "the deploy
 grep -q '^//nested:no_srcs_.*\.fmt' <<<"${targets}" && fail "a target without srcs has fmt targets"
 
 echo "--- 5. check the tofu version ---" >&2
-# Only the exec platform's tofu repository has been fetched.
+# Only the exec platform's `tofu` repository has been fetched.
 versions="$(for t in "$(bazel info output_base)"/external/rules_tofu++tofu+tofu_*/tofu; do "$t" version; done)"
 grep -q -F "v${TOFU_VERSION}" <<<"${versions}" || fail "expected tofu ${TOFU_VERSION}, got: ${versions}"
 

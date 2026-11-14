@@ -1,1 +1,1 @@
-# This file should never reach the work tree. init_action.bzl rejects it.
+# Smuggled via srcs in BUILD.bazel for lock_file_smuggled; validation must reject it.

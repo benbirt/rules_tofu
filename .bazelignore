@@ -1,11 +1,12 @@
 # Bazel's convenience symlinks from building a nested module in its own
-# directory: e2e/smoke, or one of the tests/integration workspaces by hand.
+# directory: e2e/smoke, or one of the tests/integration sub-workspaces by hand.
 # bazel-<dir>/external/rules_tofu+ points back at this repo (the module's
-# local_path_override), so a later `//...` from the root would loop through
-# it. Listed one by one, since this file takes no patterns and a pattern in
+# local_path_override), so a later `//...` from the root would loop through it.
+#
+# Listed one by one because .bazelignore takes no patterns, and a pattern in
 # REPO.bazel's ignore_directories still logs "infinite symlink expansion
-# detected" while scanning them. CI's lint job checks that every nested
-# workspace (every directory with a .bazelversion) has its four lines here.
+# detected" while scanning them. CI's lint job checks that every directory with
+# a .bazelversion has its four lines here.
 e2e/smoke/bazel-bin
 e2e/smoke/bazel-out
 e2e/smoke/bazel-smoke

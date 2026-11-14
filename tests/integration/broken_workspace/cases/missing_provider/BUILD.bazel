@@ -1,10 +1,11 @@
 load("@rules_tofu//tf:defs.bzl", "tf_library")
 
 # main.tf declares `required_providers { random = ... }` but the library has
-# no `providers = [...]`, so the plugin tree materialized for validate lacks
+# no `providers = [...]`, so the plugin tree materialised for validate lacks
 # hashicorp/random. The modules manifest action reads required_providers and
 # fails naming the label to add, before `tofu init -plugin-dir=<empty>` would
-# fail with "Failed to query available provider packages".
+# fail with "Failed to query available provider packages". Do not add
+# providers here.
 tf_library(
     name = "missing",
     srcs = ["main.tf"],
