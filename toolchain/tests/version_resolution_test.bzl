@@ -33,9 +33,9 @@ def _root_tag_wins_test_impl(ctx):
 
     resolved = resolve_version(
         [
-            _request("1.8.5", module_name = "dep_a"),
+            _request("1.12.1", module_name = "dep_a"),
             _request("1.12.0", is_root = True, module_name = "root"),
-            _request("1.8.5", module_name = "dep_b"),
+            _request("1.12.1", module_name = "dep_b"),
         ],
         _DEFAULT,
     )
@@ -52,7 +52,7 @@ def _duplicate_root_tags_fail_test_impl(ctx):
     resolved = resolve_version(
         [
             _request("1.12.0", is_root = True, module_name = "root"),
-            _request("1.8.5", is_root = True, module_name = "root"),
+            _request("1.12.1", is_root = True, module_name = "root"),
         ],
         _DEFAULT,
     )
@@ -66,7 +66,7 @@ def _duplicate_root_tags_fail_test_impl(ctx):
     )
     asserts.true(
         env,
-        "1.12.0" in resolved.error and "1.8.5" in resolved.error,
+        "1.12.0" in resolved.error and "1.12.1" in resolved.error,
         "expected both requested versions to be named, got: {}".format(resolved.error),
     )
     return unittest.end(env)
@@ -78,14 +78,14 @@ def _agreeing_non_root_requests_honoured_test_impl(ctx):
 
     resolved = resolve_version(
         [
-            _request("1.8.5", module_name = "dep_a"),
-            _request("1.8.5", module_name = "dep_b"),
+            _request("1.12.1", module_name = "dep_a"),
+            _request("1.12.1", module_name = "dep_b"),
         ],
         _DEFAULT,
     )
 
     asserts.equals(env, None, resolved.error)
-    asserts.equals(env, "1.8.5", resolved.version)
+    asserts.equals(env, "1.12.1", resolved.version)
     return unittest.end(env)
 
 _agreeing_non_root_requests_honoured_test = unittest.make(
@@ -97,7 +97,7 @@ def _conflicting_non_root_requests_fail_test_impl(ctx):
 
     resolved = resolve_version(
         [
-            _request("1.8.5", module_name = "dep_a"),
+            _request("1.12.1", module_name = "dep_a"),
             _request("1.12.0", module_name = "dep_b"),
         ],
         _DEFAULT,
@@ -109,7 +109,7 @@ def _conflicting_non_root_requests_fail_test_impl(ctx):
         "conflicting OpenTofu versions" in resolved.error,
         "expected the conflict wording, got: {}".format(resolved.error),
     )
-    for named in ["1.8.5", "1.12.0", "dep_a", "dep_b"]:
+    for named in ["1.12.1", "1.12.0", "dep_a", "dep_b"]:
         asserts.true(
             env,
             named in resolved.error,

@@ -91,7 +91,8 @@ and `.tofu` files in subdirectories fail its check, each named, as a
 `tf_test`'s `.tftest.hcl` fails that target's; `.fmt` rewrites exactly those
 and leaves the package's file outside `srcs` byte-identical; and a target
 without `srcs` has neither target. The driver ends by building the whole
-workspace, so the fixture stays a shape the rules accept. Which extensions
+workspace, so the fixture stays a shape the rules accept, and by running
+its test of an empty root module. Which extensions
 `tofu fmt` accepts by name is the binary's to decide, so there is one
 `fmt_<version>_test` per pinned tofu version.
 
