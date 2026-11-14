@@ -1,0 +1,22 @@
+load("@rules_tofu//tf:defs.bzl", "tf_deploy")
+
+# A deploy's root module is its own package, and neither target puts a
+# configuration file there. tofu validates an empty directory and then
+# refuses to plan it, so both must fail at analysis, saying what reaches
+# `deps` and subdirectories: a `module` block in the root's own files.
+
+# The mistake the message is for: `deps` taken for what gets deployed.
+tf_deploy(
+    name = "deps_only",
+    allow_ephemeral_state = True,
+    fmt_test = False,
+    deps = ["//cases/deploy_without_configuration/lib"],
+)
+
+# Configuration, but only in a subdirectory, which nothing calls.
+tf_deploy(
+    name = "subdirectory_only",
+    srcs = ["stack/main.tf"],
+    allow_ephemeral_state = True,
+    fmt_test = False,
+)

@@ -657,6 +657,74 @@ func TestBuildManifest_TestRuns(t *testing.T) {
 	}
 }
 
+// A root module with no file at or below its directory has no directory in
+// the work tree, and one with no files at all has no work tree: an empty
+// module either way, as it is when the directory is there (issue #119).
+func TestBuild_EmptyRoot(t *testing.T) {
+	only := []Record{{Key: "", Source: "", Dir: "."}}
+	tree := writeTree(t, map[string]string{
+		"lib/main.tf":           ``,
+		"present/sub/main.tf":   ``,
+		"external/net+/main.tf": ``,
+	})
+	for name, tc := range map[string]struct{ workTree, root string }{
+		"no directory":            {tree, "absent"},
+		"no directory, nested":    {tree, "absent/deeper"},
+		"no work tree":            {filepath.Join(tree, "nowhere"), "pkg"},
+		"no work tree, root pkg":  {filepath.Join(tree, "nowhere"), ""},
+		"a directory, no config":  {tree, "present"},
+		"an external, empty root": {tree, "external/empty+"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := build(tc.workTree, tc.root, "//x:x", nil, []string{"lib"}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got.Modules, only) {
+				t.Errorf("got %+v, want only the root", got.Modules)
+			}
+		})
+	}
+
+	// An empty root calls nothing, so a dep that must be called is unused.
+	deps := []dep{{Label: "@net//:net", Source: "acme/network/aws", Version: "1.2.3", Dir: "external/net+", Direct: true}}
+	if _, err := build(tree, "absent", "//absent:lib", deps, nil, nil); err == nil || !strings.Contains(err.Error(), "no module call uses @net//:net") {
+		t.Errorf("err = %v, want the unused dep", err)
+	}
+
+	// Something that isn't a directory where the root should be is not an
+	// empty module.
+	if _, err := build(tree, "lib/main.tf", "//x:x", nil, nil, nil); err == nil {
+		t.Error("a file in place of the root module's directory was taken for an empty module")
+	}
+	// Nor is a path through a file, which fails differently: there the
+	// stat itself does, and not because nothing is there.
+	if _, err := build(tree, "lib/main.tf/sub", "//x:x", nil, nil, nil); err == nil {
+		t.Error("a root module's directory below a file was taken for an empty module")
+	}
+}
+
+// A tf_test of an empty root: its directory is there, since the test files
+// are at or below it, and holds no configuration. The runs' modules are
+// still recorded.
+func TestBuildManifest_EmptyRootTestRuns(t *testing.T) {
+	tree := writeTree(t, map[string]string{
+		"lib/main.tf":                 ``,
+		"empty/tests/main.tftest.hcl": "run \"lib\" {\n  module {\n    source = \"../lib\"\n  }\n}\n",
+	})
+	got, err := buildManifest(tree, "empty", "//empty:test", nil, []string{"lib"}, nil, "tests")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Record{
+		{Key: "", Source: "", Dir: "."},
+		{Key: "test.tests.main.lib", Source: "../lib", Dir: "../lib"},
+	}
+	if !reflect.DeepEqual(got.Modules, want) {
+		t.Errorf("got\n%+v\nwant\n%+v", got.Modules, want)
+	}
+}
+
 // Test files in the root module's directory only: "." reads no other.
 func TestBuildManifest_TestRunsRootOnly(t *testing.T) {
 	tree := writeTree(t, map[string]string{

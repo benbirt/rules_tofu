@@ -63,6 +63,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -310,8 +311,19 @@ func buildManifest(workTree, root, label string, deps []dep, packages []string, 
 		}
 		return nil
 	}
-	if err := walk("", root, moduleName(""), true); err != nil {
+	// A root module with no file at or below its directory has no directory
+	// in the work tree (and one with no files at all, no work tree). It is
+	// an empty module, as it would be were the directory there: nothing to
+	// read, and no reason to fail (issue #119). Anything else in the way of
+	// reading it is still an error.
+	switch _, err := os.Stat(filepath.Join(workTree, filepath.FromSlash(root))); {
+	case errors.Is(err, fs.ErrNotExist):
+	case err != nil:
 		return nil, err
+	default:
+		if err := walk("", root, moduleName(""), true); err != nil {
+			return nil, err
+		}
 	}
 	if testDir != "" {
 		runs, err := testRuns(workTree, root, testDir)

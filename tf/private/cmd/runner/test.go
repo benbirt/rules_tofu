@@ -6,6 +6,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+
+	"github.com/benbirt/rules_tofu/tf/private/cmd/internal/tfconfig"
 )
 
 // runTest is `--command=test`: `tofu test` for a tf_test target, run as a
@@ -35,8 +37,11 @@ func runTest(extraArgs []string) error {
 	if err := copyTree(*workTree, copyRoot); err != nil {
 		return fmt.Errorf("copy work tree: %w", err)
 	}
+	// The root module's directory, which the work tree lacks when no file
+	// is at or below it: an empty module, as in the run directory of a
+	// deploy (rundir.go).
 	cwd := filepath.Join(copyRoot, filepath.FromSlash(*packageDir))
-	if _, err := os.Stat(cwd); err != nil {
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
 		return fmt.Errorf("work-tree cwd %s: %w", cwd, err)
 	}
 
@@ -50,7 +55,11 @@ func runTest(extraArgs []string) error {
 			return fmt.Errorf("create plugin dir %s: %w", plugins, err)
 		}
 	}
-	if *lockFile != "" {
+	// Not for a root module without configuration, as in the validate
+	// action: `tofu init` does nothing there, so it installs no provider and
+	// leaves the lock as it is, which tofu then holds against the empty
+	// plugin cache.
+	if *lockFile != "" && tfconfig.HasConfig(cwd) {
 		if err := installLockFile(*lockFile, cwd); err != nil {
 			return err
 		}

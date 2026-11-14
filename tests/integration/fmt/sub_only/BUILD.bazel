@@ -1,9 +1,8 @@
-load("@rules_tofu//tf:defs.bzl", "tf_deploy")
+load("@rules_tofu//tf:defs.bzl", "tf_library")
 
 # Every file in `srcs` is in a subdirectory; the package directory itself
-# holds no configuration.
-tf_deploy(
-    name = "deploy",
+# holds no configuration. A library, since a deploy needs some there.
+tf_library(
+    name = "lib",
     srcs = ["vpc/main.tf"],
-    allow_ephemeral_state = True,
 )

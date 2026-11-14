@@ -8,7 +8,9 @@
 #      which has no package in the hub until it is locked. The package's two
 #      libraries each require the provider, in a file of their own, and the
 #      lock meets both constraints (issue #99).
-#   2. A build records MODULE.bazel.lock.
+#   2. A build records MODULE.bazel.lock. It includes a library with the
+#      locked provider and no files: an empty root module, which validates
+#      because it is not given the lock (issue #119).
 #   3. hashicorp/null is bumped the way Dependabot or Renovate does it: in
 #      versions.tf and .terraform.lock.hcl, and nowhere else.
 #   4. The build passes with --lockfile_mode=error and leaves MODULE.bazel.lock
@@ -62,7 +64,7 @@ constraints="$(grep 'constraints *=' .terraform.lock.hcl)"
   fail "pin didn't lock against both libraries' constraints (versions.tf's 3.2.3 and floor.tf's >= 3.0): ${constraints}"
 
 echo "--- 2. build, recording MODULE.bazel.lock ---" >&2
-"${BAZEL}" build //:versions //:floor >&2 || fail "the build against the first lock failed"
+"${BAZEL}" build //:versions //:floor //empty:lib >&2 || fail "the build against the first lock failed"
 cp MODULE.bazel.lock "${_TMPDIR}/MODULE.bazel.lock.before"
 
 echo "--- 3. bump hashicorp/null as a bot would ---" >&2

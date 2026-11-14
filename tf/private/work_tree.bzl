@@ -88,6 +88,32 @@ def runfiles_path(workspace_name, f):
         return sp[3:]
     return workspace_name + "/" + sp
 
+# What tofu reads as a module's configuration (tfconfig.IsConfigFile).
+_CONFIG_EXTS = (".tf", ".tf.json", ".tofu", ".tofu.json")
+
+def check_has_configuration(ctx, entries):
+    """Fail a deploy whose root module holds no configuration file.
+
+    tofu validates an empty directory and then refuses to plan or apply it,
+    so such a deploy would build and never run. The usual cause is taking
+    `deps` for what gets deployed: they are files in the work tree, which
+    only a `module` block in the root module's own files reaches. A library
+    or a test may have an empty root (a bundle of files; runs that load
+    other modules), so only a deploy is checked.
+    """
+    root = package_dir(ctx.label)
+    for entry in entries:
+        directory, _, name = entry.path.rpartition("/")
+        # tofu passes over a file whose name starts with a dot.
+        if directory == root and name.endswith(_CONFIG_EXTS) and not name.startswith("."):
+            return
+    fail(("`{label}` has no configuration file in its root module's directory, {dir}: there is nothing " +
+          "to deploy, and tofu refuses to plan it. `deps`, and files in subdirectories, are only reached " +
+          "by `module` blocks in files of that directory: add `srcs` there that call them.").format(
+        label = _display_label(ctx.label),
+        dir = "`{}/`".format(root) if root else "the workspace root",
+    ))
+
 def work_tree_path(f):
     """The path at which `f` appears in a work tree.
 

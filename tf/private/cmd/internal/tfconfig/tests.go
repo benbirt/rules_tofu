@@ -32,9 +32,10 @@ func IsTestFile(name string) bool {
 	return testExt(name) != ""
 }
 
-// EffectiveTests drops each `.tftest.hcl` or `.tftest.json` file of files
-// that a `.tofutest.hcl` or `.tofutest.json` file of the same path shadows,
-// as tofu ignores it. The order of the rest is kept.
+// EffectiveTests drops the files of files that tofu doesn't read: each
+// `.tftest.hcl` or `.tftest.json` file that a `.tofutest.hcl` or
+// `.tofutest.json` file of the same path shadows, and each whose name starts
+// with a dot (see ignored). The order of the rest is kept.
 func EffectiveTests(files []string) []string {
 	present := map[string]bool{}
 	for _, f := range files {
@@ -42,6 +43,9 @@ func EffectiveTests(files []string) []string {
 	}
 	var kept []string
 	for _, f := range files {
+		if ignored(filepath.Base(f)) {
+			continue
+		}
 		ext := testExt(f)
 		if ext == ".tftest.hcl" || ext == ".tftest.json" {
 			tofu := strings.TrimSuffix(f, ext) + strings.Replace(ext, ".tftest", ".tofutest", 1)

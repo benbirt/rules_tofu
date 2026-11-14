@@ -38,6 +38,7 @@ load(
     ":work_tree.bzl",
     "ALLOWED_SRC_EXTS",
     "MODULES_BIN",
+    _check_has_configuration = "check_has_configuration",
     _check_no_auto_tfvars = "check_no_auto_tfvars",
     _check_no_test_files = "check_no_test_files",
     _files_entries = "files_entries",
@@ -59,6 +60,7 @@ def _tf_deploy_impl(ctx):
     transitive = [d[TfLibraryInfo].transitive_files for d in ctx.attr.deps]
     files = depset(direct = direct + var_file_entries, transitive = transitive)
     entries = files.to_list()
+    _check_has_configuration(ctx, entries)
 
     tfvars_content = json.encode_indent(
         ctx.attr.vars,
@@ -137,7 +139,9 @@ tf_deploy_rule = rule(
         ),
         "deps": attr.label_list(
             providers = [TfLibraryInfo],
-            doc = "`tf_library` targets this deploy composes.",
+            doc = "`tf_library` targets whose files join the deploy's work tree. Those in the " +
+                  "deploy's own package are part of its root module; others are reached by " +
+                  "`module` blocks in the root module's files.",
         ),
         "vars": attr.string_dict(
             doc = "Variable values bound to this deploy, each a string. Rendered to " +
@@ -218,7 +222,12 @@ def tf_deploy(name, srcs = None, deps = None, vars = None, var_files = None, dat
     Args:
       name: target name.
       srcs: optional deploy-local .tf/.tf.json/.tofu/.tofu.json/.tftpl/.hcl files (e.g. provider/backend config).
-      deps: `tf_library` targets to compose.
+      deps: `tf_library` targets whose files join the deploy's work tree.
+          Those in the deploy's own package are part of its root module;
+          others are reached by `module` blocks in the root module's files.
+          The deploy's package must hold a configuration file, from `srcs`
+          or from a library in that package: `deps` in other packages alone
+          deploy nothing, and fail to build.
       vars: dict of variable name -> string value, rendered to
           rules_tofu.auto.tfvars.json. OpenTofu converts a string to a
           variable's declared `number` or `bool` type; a list, map or object

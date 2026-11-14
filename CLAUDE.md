@@ -332,6 +332,35 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   configuration itself (`tofu test`) are the `tf_test` rule
   (`tf/private/test.bzl`, README "Tests"), a target of its own with its own
   `deps` (helper modules) and `providers`, never a sub-target of a library.
+- A root module without configuration is an empty module, and valid for a
+  `tf_library` (a bundle of files, an aggregate of deps) and a `tf_test`
+  (runs that load other modules), whether or not anything is at or below
+  its package: with nothing there the work tree has no directory for it,
+  or doesn't exist at all, so the manifest tool skips the root walk on
+  `fs.ErrNotExist`, and the validate action creates `$CWD` before it copies
+  anything in (issue #119; the fmt fixture's `empty` package, and
+  lock_update's for the lock). A `tf_test`'s own files are at or below its
+  root, so its directory is always there; the test runner `MkdirAll`s it
+  all the same. `tofu init` does nothing in a directory without
+  configuration files, so neither the validate action nor the test runner
+  gives an empty root the lock (init would leave it unpruned, and tofu then
+  holds it against a plugin cache nothing filled), and a test whose runs
+  load modules that need providers fails there with tofu's "Missing
+  required provider": the validate action adds what to do
+  (`empty_root_test_provider`), since nothing rules_tofu can do makes init
+  install them. "Has configuration" is asked in three places that must
+  agree with tofu and each other: `HAS_CONFIG` in the validate script,
+  `tfconfig.HasConfig`, and `check_has_configuration`. All count files, not
+  directories, with one of the four extensions, and not those whose names
+  start with a dot, which tofu passes over (checked on 1.12.0;
+  `tfconfig.Effective` and `EffectiveTests` drop them for every reader,
+  `pin`'s query results included). Don't make an empty root an error, and
+  don't teach
+  `tfconfig` that a missing directory is empty: `modscan` and `pin` rely on
+  the failure. A `tf_deploy` is the exception, at analysis
+  (`check_has_configuration`; `deploy_deps_only`,
+  `deploy_subdirectory_only`): tofu validates an empty directory and then
+  refuses to plan it, so the deploy would build and never run.
 - Test files (`TEST_SRC_EXTS`) are rejected in `tf_library`/`tf_deploy`
   `srcs` (`check_no_test_files`; `test_file_in_srcs`): tofu reads them from
   the root module's directory, so a test in a library's srcs would ship to

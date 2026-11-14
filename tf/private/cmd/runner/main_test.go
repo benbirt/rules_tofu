@@ -1155,6 +1155,37 @@ func TestRunner_Test_InitsAndTestsACopy(t *testing.T) {
 	}
 }
 
+// The lock goes into the copy of a root module that has configuration, and
+// not into one that has none: `tofu init` does nothing in such a directory,
+// and a lock left there is held against a plugin cache init never filled.
+func TestRunner_Test_LockOnlyWithConfiguration(t *testing.T) {
+	for name, empty := range map[string]bool{"configuration": false, "an empty root": true} {
+		t.Run(name, func(t *testing.T) {
+			cmd, workTree, scratch, _, _ := setupTest(t)
+			if empty {
+				if err := os.Remove(filepath.Join(workTree, "mypkg", "main.tf")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			lock := filepath.Join(t.TempDir(), ".terraform.lock.hcl")
+			if err := os.WriteFile(lock, []byte("# lock\n"), 0o444); err != nil {
+				t.Fatal(err)
+			}
+			cmd.Args = append(cmd.Args, "--lock-file="+lock)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
+			}
+			_, err := os.Stat(filepath.Join(scratch, "rules_tofu.work", "mypkg", ".terraform.lock.hcl"))
+			if empty && !os.IsNotExist(err) {
+				t.Errorf("an empty root module was given the lock: err=%v", err)
+			}
+			if !empty && err != nil {
+				t.Errorf("the root module wasn't given the lock: %v", err)
+			}
+		})
+	}
+}
+
 // With no providers in scope the plugin tree is absent from runfiles: tofu
 // gets an empty directory under TEST_TMPDIR, and nothing is created in the
 // runfiles tree.

@@ -1,0 +1,9 @@
+load("@rules_tofu//tf:defs.bzl", "tf_library")
+
+# A valid library in a package of its own, for `//cases/deploy_without_configuration:deps_only`.
+tf_library(
+    name = "lib",
+    srcs = ["main.tf"],
+    fmt_test = False,
+    visibility = ["//cases/deploy_without_configuration:__pkg__"],
+)

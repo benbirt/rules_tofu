@@ -45,7 +45,9 @@ def tf_init_validate(ctx, work_tree_files, work_tree_root, package_dir, plugin_t
           (see `provider_lock` in work_tree.bzl).
       test_dir: for a `tf_test`, the test files' directory relative to
           `package_dir`, passed to init and validate as `-test-directory` so
-          the test files are checked too; "" or None for tofu's default.
+          the test files are checked too; "" when they are in `package_dir`
+          itself, which tofu reads without being told. None for a rule that
+          has no test files.
 
     Returns:
       File: a stamp file declared as an action output.
@@ -79,11 +81,11 @@ STAMP=$5
 MODULES=$6
 LOCK=${7:-}
 TEST_DIR=${8:-}
-# The test files' directory, for a tf_test. Without it tofu reads the root
-# module's own directory and its default, `tests`. A string, not an array: an
-# empty array fails under `set -u` in bash 3.
+# The test files' directory, for a tf_test: `.` when it is the root module's
+# own, which tofu reads anyway, with its default, `tests`. A string, not an
+# array: an empty array fails under `set -u` in bash 3.
 TEST_FLAG=""
-if [ -n "$TEST_DIR" ]; then
+if [ -n "$TEST_DIR" ] && [ "$TEST_DIR" != "." ]; then
     TEST_FLAG="-test-directory=$TEST_DIR"
 fi
 # Resolve the input plugin tree to an absolute path up front: tofu resolves a
@@ -92,7 +94,11 @@ fi
 PLUGIN_DIR="$PWD/$PLUGIN_TREE_ROOT"
 SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/rules_tofu-validate-XXXXXX")
 trap 'rm -rf "$SCRATCH"' EXIT
-cp -RL "$WORK_TREE_ROOT"/. "$SCRATCH"/
+# A library with no files and no deps declares nothing under its work tree,
+# so there is none to copy: an empty module, valid like any other.
+if [ -d "$WORK_TREE_ROOT" ]; then
+    cp -RL "$WORK_TREE_ROOT"/. "$SCRATCH"/
+fi
 # Zero-providers case: no files are declared under the plugin root, so its
 # input directory is absent from the sandbox. Fall back to an empty dir so
 # init runs offline and installs nothing.
@@ -106,12 +112,28 @@ if [ -e "$CWD/.terraform.lock.hcl" ]; then
          "Lock files are managed implicitly via Bazel's provider pinning; remove it from srcs/data." 1>&2
     exit 1
 fi
-if [ -n "$LOCK" ]; then
+# The root module's directory is in the work tree only if some file is at or
+# below it. One that isn't there is an empty module, which this creates
+# (issue #119), before anything is copied into it.
+mkdir -p "$CWD/.terraform/modules"
+# In a directory without configuration files `tofu init` does nothing
+# ("initialized in an empty directory"): it installs no provider, and leaves
+# a lock as it finds it, which validate then holds against the empty plugin
+# cache. An empty root module requires no provider, so it gets no lock.
+# What tofu counts: files, and not those whose names start with a dot, which
+# these patterns don't match either (tfconfig.ConfigFiles).
+HAS_CONFIG=""
+for f in "$CWD"/*.tf "$CWD"/*.tf.json "$CWD"/*.tofu "$CWD"/*.tofu.json; do
+    if [ -f "$f" ]; then
+        HAS_CONFIG=1
+        break
+    fi
+done
+if [ -n "$LOCK" ] && [ -n "$HAS_CONFIG" ]; then
     cp "$LOCK" "$CWD/.terraform.lock.hcl"
 fi
 # Every module call is already in the work tree; the manifest says where, and
 # -get=false makes init check the calls against it rather than fetch.
-mkdir -p "$CWD/.terraform/modules"
 cp "$MODULES" "$CWD/.terraform/modules/modules.json"
 # Redirect init stdout to suppress "Installing provider" progress spam.
 # Stderr is kept so error messages (e.g. "Failed to query available provider
@@ -131,7 +153,16 @@ if ! "$TOFU" -chdir="$CWD" init -backend=false -input=false -get=false -plugin-d
     fi
     exit 1
 fi
-"$TOFU" -chdir="$CWD" validate ${TEST_FLAG:+"$TEST_FLAG"}
+if ! "$TOFU" -chdir="$CWD" validate ${TEST_FLAG:+"$TEST_FLAG"}; then
+    # The one way an empty root module is not like any other: tofu sets up
+    # no providers for it, whatever the modules its test runs load require.
+    if [ -z "$HAS_CONFIG" ] && [ -n "$TEST_DIR" ]; then
+        echo "rules_tofu: the root module, ${PACKAGE_DIR:-the workspace root}, has no configuration file," \\
+             'and `tofu init` installs no providers for one. If a provider is reported missing, give the' \\
+             'root module a file whose `required_providers` names it.' 1>&2
+    fi
+    exit 1
+fi
 touch "$STAMP"
 """,
         arguments = [
@@ -141,7 +172,7 @@ touch "$STAMP"
             plugin_tree_root,
             stamp.path,
             modules_manifest.path,
-        ] + [lock.path if lock else ""] + ([test_dir] if test_dir else []),
+        ] + [lock.path if lock else ""] + ([test_dir or "."] if test_dir != None else []),
         env = {"TF_IN_AUTOMATION": "1"},
         mnemonic = "TofuValidate",
         progress_message = "TofuValidate %{label}",

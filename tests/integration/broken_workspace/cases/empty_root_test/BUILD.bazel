@@ -1,0 +1,19 @@
+load("@rules_tofu//tf:defs.bzl", "tf_library", "tf_test")
+
+# A test of an empty root module whose run loads a module that needs a
+# provider. `tofu init` does nothing in a directory without configuration
+# files, so it installs no provider, and validation fails with tofu's
+# "Missing required provider". Nothing rules_tofu does can change that; the
+# validate action must add what to do. The test file is in the root module's
+# own directory, where the action is given no test directory to go by.
+tf_library(
+    name = "empty",
+    deps = ["//cases/empty_root_test/lib"],
+)
+
+tf_test(
+    name = "test",
+    srcs = ["main.tftest.hcl"],
+    fmt_test = False,
+    module = ":empty",
+)
