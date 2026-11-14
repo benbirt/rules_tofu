@@ -15,15 +15,18 @@
 #      locked provider and no files: an empty root module, which validates
 #      because it is not given the lock (issue #119).
 #   3. hashicorp/null is bumped the way Dependabot or Renovate does it: in
-#      versions.tf and .terraform.lock.hcl, and nowhere else.
+#      versions.tf and infra/.terraform.lock.hcl, and nowhere else.
 #   4. The build passes with --lockfile_mode=error and leaves MODULE.bazel.lock
 #      byte-identical, so the bot's change is complete on its own.
-#   5. A root `tf_providers.provider` tag for hashicorp/null, still in the
+#   5. Dependabot's `bazel` updater, which has only the files it fetches
+#      rather than a clone, can regenerate MODULE.bazel.lock, and leaves it
+#      and MODULE.bazel unchanged (issue #131).
+#   6. A root `tf_providers.provider` tag for hashicorp/null, still in the
 #      lock, fails the build naming the conflict, in the provider's fetch and
 #      not in the extension.
-#   6. So `pin` still runs: it leaves the tagged provider out, and with
+#   7. So `pin` still runs: it leaves the tagged provider out, and with
 #      nothing else to lock writes an empty lock.
-#   7. The tag alone pins the provider, and the build passes.
+#   8. The tag alone pins the provider, and the build passes.
 
 set -euo pipefail
 
@@ -59,10 +62,10 @@ fail() {
 }
 
 echo "--- 1. first pin, with the provider already named ---" >&2
-[[ ! -e .terraform.lock.hcl ]] || fail "the workspace already has a lock"
+[[ ! -e infra/.terraform.lock.hcl ]] || fail "the workspace already has a lock"
 "${BAZEL}" run @tf_providers//:pin >&2 || fail "the first pin failed"
-grep -q 'version *= "3.2.3"' .terraform.lock.hcl || fail "pin didn't lock hashicorp/null 3.2.3: $(cat .terraform.lock.hcl)"
-constraints="$(grep 'constraints *=' .terraform.lock.hcl)"
+grep -q 'version *= "3.2.3"' infra/.terraform.lock.hcl || fail "pin didn't lock hashicorp/null 3.2.3: $(cat infra/.terraform.lock.hcl)"
+constraints="$(grep 'constraints *=' infra/.terraform.lock.hcl)"
 [[ "${constraints}" == *'3.2.3'* && "${constraints}" == *'>= 3.0'* ]] ||
   fail "pin didn't lock against both libraries' constraints (versions.tf's 3.2.3 and floor.tf's >= 3.0): ${constraints}"
 [[ "${constraints}" == *'>= 3.1'* ]] ||
@@ -75,7 +78,7 @@ cp MODULE.bazel.lock "${_TMPDIR}/MODULE.bazel.lock.before"
 echo "--- 3. bump hashicorp/null as a bot would ---" >&2
 sed -i.bak 's/version = "3.2.3"/version = "3.2.4"/' versions.tf
 rm versions.tf.bak
-cp bumped.lock.hcl .terraform.lock.hcl
+cp bumped.lock.hcl infra/.terraform.lock.hcl
 
 echo "--- 4. build with --lockfile_mode=error ---" >&2
 "${BAZEL}" build --lockfile_mode=error //:versions //:floor >&2 ||
@@ -83,7 +86,45 @@ echo "--- 4. build with --lockfile_mode=error ---" >&2
 cmp MODULE.bazel.lock "${_TMPDIR}/MODULE.bazel.lock.before" >&2 ||
   fail "MODULE.bazel.lock changed after a lock-only bump"
 
-echo "--- 5. a root tag for the locked provider fails the build, not the extension ---" >&2
+echo "--- 5. Dependabot's bazel updater, with only the files it fetches ---" >&2
+# Dependabot doesn't clone the repository. Its bazel file fetcher takes the
+# Bazel files at the root, the files MODULE.bazel names in the attributes it
+# knows (by a text match: lock_file is the one from_lock uses), each with the
+# BUILD file beside it, and the local_path_override directories. Then it runs
+# `bazel mod tidy` to regenerate MODULE.bazel.lock, which runs from_lock, so
+# the lock and its package must be among those files (issue #131).
+DEPENDABOT="${_TMPDIR}/dependabot"
+rm -rf "${DEPENDABOT}"
+mkdir "${DEPENDABOT}"
+for f in MODULE.bazel MODULE.bazel.lock .bazelversion .bazelrc BUILD BUILD.bazel; do
+  [[ ! -e "${f}" ]] || cp "${f}" "${DEPENDABOT}/${f}"
+done
+# The match and the label-to-path conversion are Dependabot's
+# (module_path_extractor.rb and path_converter.rb in dependabot-core).
+labels="$(grep -o -E 'lock_file[[:space:]]*=[[:space:]]*"[^"]+"' MODULE.bazel | sed -E 's/.*"([^"]+)"$/\1/')" ||
+  fail "MODULE.bazel names no lock_file for Dependabot to fetch"
+while IFS= read -r label; do
+  path="$(sed -E -e 's|^@[^/]+//||' -e 's|:|/|g' -e 's|^/+||' <<<"${label}")"
+  dir="$(dirname "${path}")"
+  mkdir -p "${DEPENDABOT}/${dir}"
+  for f in "${path}" "${dir}/BUILD" "${dir}/BUILD.bazel"; do
+    [[ ! -e "${f}" ]] || cp "${f}" "${DEPENDABOT}/${f}"
+  done
+done <<<"${labels}"
+# local_path_override's other path is the absolute one to rules_tofu, which
+# Dependabot leaves out; in a real workspace that is a registry dependency.
+cp -R bundle_module "${DEPENDABOT}/bundle_module"
+(
+  cd "${DEPENDABOT}"
+  "${BIT_BAZEL_BINARY}" --output_user_root="${NESTED_USER_ROOT}" --output_base="${_TMPDIR}/dependabot_output_base" \
+    mod tidy --lockfile_mode=update >&2 || fail "bazel mod tidy failed with only the files Dependabot fetches"
+  "${BIT_BAZEL_BINARY}" --output_user_root="${NESTED_USER_ROOT}" --output_base="${_TMPDIR}/dependabot_output_base" \
+    shutdown
+)
+cmp MODULE.bazel "${DEPENDABOT}/MODULE.bazel" >&2 || fail "bazel mod tidy changed MODULE.bazel"
+cmp MODULE.bazel.lock "${DEPENDABOT}/MODULE.bazel.lock" >&2 || fail "bazel mod tidy changed MODULE.bazel.lock"
+
+echo "--- 6.a root tag for the locked provider fails the build, not the extension ---" >&2
 cat >>MODULE.bazel <<'EOF'
 tf_providers.provider(
     source = "hashicorp/null",
@@ -97,14 +138,14 @@ echo "${out}" >&2
 grep -q -F 'is pinned both by a tf_providers.provider tag' <<<"${out}" ||
   fail "the failure doesn't name the conflict"
 
-echo "--- 6. pin still runs, and leaves the tagged provider out of the lock ---" >&2
+echo "--- 7. pin still runs, and leaves the tagged provider out of the lock ---" >&2
 "${BAZEL}" run @tf_providers//:pin >&2 || fail "pin failed with a provider both tagged and locked"
-cat .terraform.lock.hcl >&2
-if grep -q 'hashicorp/null' .terraform.lock.hcl; then
+cat infra/.terraform.lock.hcl >&2
+if grep -q 'hashicorp/null' infra/.terraform.lock.hcl; then
   fail "the lock still pins hashicorp/null after pin"
 fi
 
-echo "--- 7. the tag alone pins the provider ---" >&2
+echo "--- 8. the tag alone pins the provider ---" >&2
 "${BAZEL}" build //:versions //:floor >&2 || fail "the build with the provider tagged failed"
 
-echo "OK: the first pin worked, a lock-only bump needed no MODULE.bazel.lock change, and a tag conflict left pin runnable" >&2
+echo "OK: the first pin worked, a lock-only bump needed no MODULE.bazel.lock change, Dependabot's files were enough for it, and a tag conflict left pin runnable" >&2

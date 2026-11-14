@@ -5,7 +5,7 @@ Downloads OpenTofu/Terraform provider plugins, pinned by a
 offline:
 
     tf_providers = use_extension("@rules_tofu//tf/providers:extensions.bzl", "tf_providers")
-    tf_providers.from_lock()  # reads //:.terraform.lock.hcl
+    tf_providers.from_lock(lock_file = "//:.terraform.lock.hcl")
     use_repo(tf_providers, "tf_providers")
 
 BUILD files then name each provider as `@tf_providers//<namespace>/<name>`.
@@ -517,11 +517,15 @@ _from_lock_tag = tag_class(
           "targets require. Only the root module's lock is read; a dependency's " +
           "`from_lock` is ignored. Use it at most once.",
     attrs = {
-        "lock": attr.label(
-            doc = "The workspace's `.terraform.lock.hcl`. Defaults to `//:.terraform.lock.hcl`. " +
+        "lock_file": attr.label(
+            mandatory = True,
+            doc = "The workspace's `.terraform.lock.hcl`, such as `//:.terraform.lock.hcl`. " +
+                  "Write it as a string literal: Dependabot doesn't clone the repository, " +
+                  "and fetches only the files MODULE.bazel names in attributes it knows, " +
+                  "`lock_file` among them, and their BUILD files. " +
                   "The file need not exist yet: `bazel run @tf_providers//:pin` writes it. " +
-                  "The label's package must exist, as for any label: for the default, a " +
-                  "`BUILD.bazel` or `BUILD` file at the workspace root, which may be empty.",
+                  "The label's package must exist, as for any label: a `BUILD.bazel` or " +
+                  "`BUILD` file beside the lock, which may be empty.",
         ),
     },
 )
@@ -545,7 +549,7 @@ def _read_lock(module_ctx, mod):
     if len(tags) > 1:
         fail("tf_providers.from_lock is used more than once; the workspace has one lock file")
 
-    label = tags[0].lock or Label("@@//:.terraform.lock.hcl")
+    label = tags[0].lock_file
     if label.repo_name != "":
         fail("tf_providers.from_lock: the lock must be in the main repository, got {}".format(label))
     lock_dir, _, basename = (label.package + "/" + label.name).lstrip("/").rpartition("/")

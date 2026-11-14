@@ -49,9 +49,11 @@ doesn't supply.
 `lock_update/` and its driver `lock_update_test.sh` are a positive
 test: a workspace's first `@tf_providers//:pin`, with the provider already
 named in a BUILD file, then a provider update made the way Dependabot or
-Renovate makes it (`versions.tf` and `.terraform.lock.hcl` only, from
+Renovate makes it (`versions.tf` and `infra/.terraform.lock.hcl` only, from
 `bumped.lock.hcl`), which must build with `--lockfile_mode=error` and leave
-`MODULE.bazel.lock` unchanged.
+`MODULE.bazel.lock` unchanged. `bazel mod tidy` must then also succeed, and
+change nothing, in a copy holding only the files Dependabot's `bazel`
+updater fetches.
 
 `module_dependency/` and its driver `module_dependency_test.sh` are
 another: `//app` calls a `tf_library` from the `network_module` Bazel module

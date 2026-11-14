@@ -39,5 +39,5 @@ local_path_override(
 )
 
 tf_providers = use_extension("@rules_tofu//tf/providers:extensions.bzl", "tf_providers")
-tf_providers.from_lock()
+tf_providers.from_lock(lock_file = "//infra:.terraform.lock.hcl")
 use_repo(tf_providers, "tf_providers")
