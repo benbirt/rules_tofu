@@ -10,7 +10,7 @@ rule are entitled to abort the build.
 
 visibility(["//tf/providers/..."])
 
-# OpenTofu canonicalizes `source = "<ns>/<name>"` in `required_providers` to
+# OpenTofu canonicalises `source = "<ns>/<name>"` in `required_providers` to
 # `registry.opentofu.org/<ns>/<name>` and looks for plugins under
 # `<plugin-dir>/registry.opentofu.org/...`. It is also the registry that says
 # where each provider's zips are and what their SHA256s are, so rules_tofu
@@ -27,15 +27,15 @@ _TEMPLATE_FIELDS = ["namespace", "name", "version", "os", "arch"]
 _HEX = "0123456789abcdef"
 
 def parse_source(source):
-    """Split and normalize a `<namespace>/<name>` provider source.
+    """Split and normalise a `<namespace>/<name>` provider source.
 
-    Provider addresses are case-insensitive and OpenTofu normalizes them to
-    lower case (so `PostHog/posthog` in `required_providers` resolves to
-    `registry.opentofu.org/posthog/posthog`). The vendored plugin tree and the
+    Provider addresses are case-insensitive and OpenTofu normalises them to
+    lower case; `PostHog/posthog` in `required_providers` resolves to
+    `registry.opentofu.org/posthog/posthog`. The vendored plugin tree and the
     repository name therefore use the lower-case form.
 
     Args:
-        source: The `source` attribute of a `tf_providers.provider` tag.
+        source: Provider `<namespace>/<name>` source string.
 
     Returns:
         `struct(namespace, name, error)`; `error` is None on success.
@@ -52,12 +52,12 @@ def parse_source(source):
 def repo_name(namespace, name):
     """The repository a provider is vendored into.
 
-    `hashicorp/aws` → `tf_providers_hashicorp_aws`.
+    For example, `hashicorp` and `aws` give `tf_providers_hashicorp_aws`.
     """
     return "tf_providers_{}_{}".format(namespace, name)
 
 def registry_download_endpoint(namespace, name, version, os, arch):
-    """The OpenTofu registry endpoint describing one platform's zip (URL and SHA256)."""
+    """The OpenTofu registry endpoint giving one platform's zip URL and SHA256."""
     return "https://{host}/v1/providers/{ns}/{name}/{version}/download/{os}/{arch}".format(
         host = DEFAULT_HOST,
         ns = namespace,
@@ -82,8 +82,8 @@ def download_location(namespace, name, version, os, arch, url_template = ""):
     OpenTofu registry's download endpoint says where the zip is.
 
     Args:
-        namespace: Normalized provider namespace (see `parse_source`).
-        name: Normalized provider type name.
+        namespace: Normalised provider namespace (see `parse_source`).
+        name: Normalised provider type name.
         version: Provider version.
         os: Platform OS, e.g. `linux`.
         arch: Platform architecture, e.g. `amd64`.
@@ -91,9 +91,9 @@ def download_location(namespace, name, version, os, arch, url_template = ""):
             `{version}`, `{os}` and `{arch}`.
 
     Returns:
-        `struct(url, registry_url, error)`. Exactly one of `url` (download
-        the zip from here) and `registry_url` (fetch this JSON and read its
-        `download_url`) is set on success; `error` is None.
+        `struct(url, registry_url, error)`. On success `error` is None and
+        either `url` gives the zip URL directly or `registry_url` gives the
+        JSON endpoint whose `download_url` points to it.
     """
     if url_template:
         error = check_url_template(url_template)
@@ -198,14 +198,14 @@ def _numeric_version(version):
     return parts
 
 def highest_version(source, requests):
-    """The version of a provider that modules other than the root tag, and the root doesn't.
+    """Select the provider version when dependencies tag it and the root module does not.
 
-    When every request names the same version, that is the answer, whatever
-    it looks like. Differing versions are ordered numerically, component by
-    component (`5.70` equals `5.70.0`), and the highest wins, the first named
-    of equals. That is all the ordering there is: a prerelease among
-    differing versions is an error, since which of `2.0.0-rc1` and `1.9.0`
-    a build should use is the root module's call, not a guess to make here.
+    When every request names the same version, that string wins whatever its
+    format. Differing versions must be dot-separated digits and are compared
+    numerically component by component, so `5.70` equals `5.70.0`. The highest
+    version wins, breaking ties in favour of the first seen. Any prerelease
+    among differing versions is an error: choosing between `2.0.0-rc1` and
+    `1.9.0` is the root module's call.
 
     Args:
         source: The provider's `<namespace>/<name>`, for the error.
@@ -292,7 +292,7 @@ def registry_download_url(response, pinned_sha256, context):
 
     Args:
         response: The decoded JSON body of the registry's download endpoint.
-        pinned_sha256: The SHA256 declared on the provider tag for this platform.
+        pinned_sha256: Expected SHA256 digest for this platform's zip.
         context: A description of the provider and platform, for messages.
 
     Returns:
@@ -318,16 +318,16 @@ def registry_download_url(response, pinned_sha256, context):
 def is_provider_binary(filename, name, version, exe_suffix):
     """Whether `filename`, from a provider zip, is the provider binary.
 
-    HashiCorp-style builds (and most publishers') name it
+    HashiCorp-style builds and most publishers name it
     `terraform-provider-<name>_v<version>` with an optional `_x5` protocol
     suffix; OpenTofu's own builds of the `hashicorp/` providers name it plain
     `terraform-provider-<name>`. OpenTofu accepts either in a plugin
-    directory. Anything else in the zip (LICENSE, README.md, CHANGELOG.md) is
-    not the binary.
+    directory. Other files in the zip, such as `LICENSE`, `README.md` and
+    `CHANGELOG.md`, are not the binary.
 
     Args:
         filename: A file name from the extracted zip.
-        name: Normalized provider type name.
+        name: Normalised provider type name.
         version: Provider version.
         exe_suffix: `.exe` on Windows, else empty.
 

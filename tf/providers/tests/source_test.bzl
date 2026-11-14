@@ -1,7 +1,7 @@
 """Unit tests for //tf/providers:source.bzl.
 
-These live in a subpackage so the `@bazel_skylib` load -- a dev-only
-dependency of rules_tofu -- stays out of //tf/providers:BUILD.bazel, which
+These live in a subpackage because `@bazel_skylib` is a dev-only dependency
+of rules_tofu and must stay out of //tf/providers:BUILD.bazel, which
 downstream modules load.
 """
 
@@ -269,8 +269,8 @@ def _highest_version_unorderable_test_impl(ctx):
     env = unittest.begin(ctx)
 
     # A prerelease among differing versions can't be ordered. The error names
-    # the provider, each version with the modules that ask for it (once
-    # each), and the way out.
+    # the provider, each requested version with its distinct requesting
+    # modules and how to resolve the conflict.
     resolved = highest_version("acme/thing", [
         _request("1.9.0", "net"),
         _request("2.0.0-rc1", "dns"),

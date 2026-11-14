@@ -1,27 +1,26 @@
 """Pinned OpenTofu release metadata.
 
-To pin a new release, run `bazel run //tools:update_versions -- <version>`
-(add `--default` to make it DEFAULT_VERSION too). It verifies the release's
-SHA256SUMS against its cosign signature before copying the digests here.
+To pin a new release, run `bazel run //tools:update_versions -- <version>`, or
+pass `--default` to update `DEFAULT_VERSION` as well. The script verifies the
+cosign signature on `SHA256SUMS` before copying the digests here.
 
-rules_tofu downloads OpenTofu's release binaries rather than building them
-from source, and that is deliberate. The pinned download is already hermetic:
-content-addressed, cached by Bazel and offline after the first fetch. A source
-build would pull OpenTofu's ~300 Go modules into every downstream module graph
-through `go_deps`, where rules_tofu, never the root module, could not apply
-OpenTofu's `replace` of hashicorp/hcl. A root module that wants a source build
-can register its own toolchain; the README's "The tofu binary" section shows
-how.
+`rules_tofu` downloads OpenTofu release binaries by design rather than building
+them from source. The pinned download is already hermetic: content-addressed,
+cached by Bazel and offline after the first fetch. A source build would pull
+roughly 300 Go modules into every downstream module graph through `go_deps`, and
+as a non-root module `rules_tofu` could not apply OpenTofu's `replace` of
+`hashicorp/hcl`. A root module that wants a source build can register its own
+toolchain; see "The `tofu` binary" in `README.md`.
 """
 
-# OpenTofu 1.12 is the oldest release rules_tofu supports: the rules pass
-# flags that older ones lack (`tofu test -json-into` arrived in 1.12.0). Pin
-# nothing older here.
+# OpenTofu 1.12 is the oldest release rules_tofu supports because the rules pass
+# flags that older releases lack, such as `tofu test -json-into` from 1.12.0.
+# Pin nothing older here.
 DEFAULT_VERSION = "1.12.0"
 
-# Map of version -> { "<os>_<arch>": "<sha256>" }
-# Keys use Bazel-style os/cpu names (see PLATFORMS below for the mapping to the
-# OpenTofu release asset naming, which differs only in not having a separator).
+# Version -> { "<os>_<arch>": "<sha256>" }. Keys match the <os>_<arch> suffix
+# of OpenTofu's release archives, tofu_<version>_<os>_<arch>.zip; PLATFORMS
+# maps each key to Bazel's OS and CPU constraints.
 KNOWN_VERSIONS = {
     "1.12.0": {
         "linux_amd64": "8d7650fd42b6d790f9f747604393ccd0a9035376bccc4f1688b905d7c5bb1137",

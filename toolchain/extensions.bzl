@@ -101,12 +101,11 @@ def _tofu_hub_impl(repository_ctx):
     repository_ctx.file("WORKSPACE", "")
     lines = ["package(default_visibility = [\"//visibility:public\"])", ""]
 
-    # `tofu` runs only on the execution platform (the validate action, the
-    # launcher, the test runner, fmt), and the provider binaries are picked
-    # for it too, so the toolchains are constrained on the exec platform
-    # alone: a `target_compatible_with` would only make `tf_*` targets fail
-    # to resolve a toolchain under a `--platforms` other than the host's
-    # (issue #105).
+    # tofu runs only on the execution platform across validation, launchers,
+    # tests, fmt and pin, and provider binaries are selected for that platform
+    # too. Set exec_compatible_with alone: setting target_compatible_with makes
+    # tf_* targets fail toolchain resolution when --platforms differs from the
+    # host (issue #105).
     for platform_key, os_constraint, cpu_constraint, _ in PLATFORMS:
         lines.extend([
             "toolchain(",
