@@ -10,7 +10,7 @@
 #      root modules in their own repositories.
 #   3. `bazel run //app:app.plan` plans offline against the generated module
 #      manifest and checks the module chain's output.
-#   4. The toolchain's `tofu` reports TOFU_VERSION, catching a version override
+#   4. The toolchain's tofu reports TOFU_VERSION, catching a version override
 #      that did not take effect.
 #   5. `bazel test //app:app_test` runs the deploy's tf_test, whose run block
 #      loads a module from the manifest, and checks that tofu-test.json is
@@ -18,8 +18,8 @@
 #      (-json-into) that OpenTofu before 1.12 lacks, and tf_test once ran on no
 #      version except the default (issue #125).
 #
-# Runs once per `tofu` version rules_tofu pins because the module manifest is
-# `tofu`'s internal format.
+# Runs once per tofu version rules_tofu pins because the module manifest is
+# tofu's internal format.
 
 set -euo pipefail
 
@@ -61,7 +61,7 @@ echo "${out}" >&2
 grep -q -F 'www.app.example.com' <<<"${out}" || fail "the plan doesn't show the module chain's output"
 
 echo "--- 4. check the tofu version ---" >&2
-# Only the exec platform's `tofu` repository has been fetched.
+# Only the exec platform's tofu repository has been fetched.
 versions="$(for t in "$(bazel info output_base)"/external/rules_tofu++tofu+tofu_*/tofu; do "$t" version; done)"
 grep -q -F "v${TOFU_VERSION}" <<<"${versions}" || fail "expected tofu ${TOFU_VERSION}, got: ${versions}"
 

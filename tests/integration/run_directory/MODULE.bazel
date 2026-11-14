@@ -1,7 +1,7 @@
 """Module declaration for the nested Bazel invocation that runs a
-`tf_deploy`'s launchers for real: `.apply` under `bazel run`, the built
-`.destroy` launcher directly, and `.plan` under `bazel run`, all in the
-deploy's one run directory.
+tf_deploy's launchers for real: .apply under `bazel run`, the built .destroy
+launcher directly, and .plan under `bazel run`, all in the deploy's one run
+directory.
 """
 
 module(

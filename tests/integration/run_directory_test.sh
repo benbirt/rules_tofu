@@ -5,11 +5,11 @@
 #
 # Steps:
 #   1. `bazel run //app:deploy.apply` creates a resource and reads greeting.txt
-#      through path.module. The deploy's `backend "local"` has a relative path,
-#      which `tofu` resolves inside deploy.rules_tofu-state under bazel-bin,
+#      through path.module. The deploy's backend "local" has a relative path,
+#      which tofu resolves inside deploy.rules_tofu-state under bazel-bin,
 #      leaving no .tfstate, .terraform or .terraform.lock.hcl elsewhere under
 #      bazel-bin/app.
-#   2. Building //app:deploy.destroy and running the `.destroy` launcher
+#   2. Building //app:deploy.destroy and running the .destroy launcher
 #      directly by relative path from bazel-bin (without the variables
 #      `bazel run` sets) finds that state and destroys the resource: the
 #      launchers are ordinary executables sharing one run directory.

@@ -5,12 +5,11 @@
 #
 # Steps:
 #   1. `bazel run @tf_providers//:pin` writes the initial .terraform.lock.hcl
-#      although the libraries already name `@tf_providers//hashicorp/null`,
+#      although the libraries already name @tf_providers//hashicorp/null,
 #      which has no package in the hub until it is locked. The lock meets the
 #      constraints of both root-package libraries (versions.tf and floor.tf,
-#      issue #99) and of a submodule in @bundle_module//bundle, a
-#      `module_source` bundle with no configuration in its own directory
-#      (issue #123).
+#      issue #99) and of a submodule in @bundle_module//bundle, a module_source
+#      bundle with no configuration in its own directory (issue #123).
 #   2. Building //:versions, //:floor and //empty:lib writes MODULE.bazel.lock.
 #      //empty:lib lists the locked provider and has no files; it validates
 #      because an empty root module is not given the lock (issue #119).
@@ -21,7 +20,7 @@
 #   5. Adding a root tf_providers.provider tag for hashicorp/null while it is
 #      still in .terraform.lock.hcl fails `bazel build //:versions` in the
 #      provider's fetch (not in the extension), naming the conflict.
-#   6. Because the extension still evaluates, `pin` remains runnable: it omits
+#   6. Because the extension still evaluates, pin remains runnable: it omits
 #      the tagged provider and writes an empty lock.
 #   7. Building //:versions and //:floor passes with the root tag alone.
 

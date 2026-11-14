@@ -2,11 +2,11 @@
 integration tests.
 
 The sub-workspace packages are excluded from the parent Bazel via the
-`--deleted_packages` flag in `.bazelrc` (the "deleted packages" trick
-recommended by rules_bazel_integration_test), which prevents the outer Bazel
-from analysing the intentionally-failing case targets when expanding `//...`.
-The nested Bazel consumes rules_tofu via `local_path_override` exactly as a
-downstream user would.
+--deleted_packages flag in .bazelrc (the "deleted packages" trick recommended
+by rules_bazel_integration_test), which prevents the outer Bazel from
+analysing the intentionally-failing case targets when expanding //... at the
+root. The nested Bazel consumes rules_tofu via local_path_override exactly as
+a downstream user would.
 """
 
 module(
@@ -33,11 +33,11 @@ use_repo(tofu, "tofu_toolchains")
 
 register_toolchains("@tofu_toolchains//:all")
 
-# Brought in so the missing-provider case has a provider it could reference.
-# The case fails because the deploy does not pass `providers = [...]`, not
-# because the provider itself is unknown. hashicorp/random because it is small
-# (~6 MB a platform): every platform pinned here is downloaded on every host,
-# and this is only a fixture.
+# Brought in so missing_provider has a provider it could reference. The case
+# fails because the library omits providers = [...], not because the provider
+# itself is unknown. hashicorp/random because it is small (~6 MB a platform):
+# every platform pinned here is downloaded on every host, and this is only a
+# fixture.
 tf_providers = use_extension("@rules_tofu//tf/providers:extensions.bzl", "tf_providers")
 tf_providers.provider(
     sha256 = {

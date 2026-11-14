@@ -4,12 +4,12 @@
 # sub-workspace).
 #
 # Steps:
-#   1. Turn fixtures/network into a git repository tagged v1.0.0 and
-#      fixtures/dns into dns.tar.gz, then fill in @FIXTURES@ and @DNS_SHA256@.
-#      In network.git:
+#   1. Turn fixtures/network into a git repository with an annotated tag v1.0.0
+#      and fixtures/dns into dns.tar.gz, then fill in @FIXTURES@ and
+#      @DNS_SHA256@. In network.git:
 #      - vpc calls its own //vpc/tags submodule by its full git URL, which the
 #        module provides itself (issue #95).
-#      - Files named `files` at the root and `module` in vpc/ check against
+#      - Files named "files" at the root and "module" in vpc/ check against
 #        target-name collisions (issue #61), and vpc/examples/BUILD.bazel
 #        checks that upstream BUILD files are removed.
 #      - Symlinks cover every kind: to a file the module needs
@@ -25,17 +25,18 @@
 #        not fetched (issue #94).
 #   2. //app plans offline across the git module (which calls a registry module
 #      and requires a provider only the module names), a submodule under
-#      modules/, one outside modules/ via `//<subdir>`, the archive, and the
+#      modules/, one outside modules/ via //<subdir>, the archive, and the
 #      registry module directly. Checks the fetched network repository: the
-#      file symlink and the files named `files` and `module` remain, while
-#      .bazelignore, BUILD.bazel and all other symlinks were removed.
+#      file symlink and the files named "files" and "module" remain, while
+#      .bazelignore, vpc/examples/BUILD.bazel and all other symlinks were
+#      removed.
 #   3. Removing hashicorp/time from //app's providers fails `bazel build //app`
 #      naming the label to add: network's main library cannot carry providers
 #      of submodules outside modules/ that only callers reach (issue #76).
 #   4. MODULE.bazel.lock records the git commit and registry module metadata.
-#      Replacing the git module's fact with an archive-style fact, shutting
-#      down Bazel and removing the output base's lockfile makes the next build
-#      resolve and record the commit again (issue #96).
+#      Replacing the git module's fact with a registry-module fact (location
+#      and sha256), shutting down Bazel and removing the output base's lockfile
+#      makes the next build resolve and record the commit again (issue #96).
 #   5. Moving v1.0.0 to a new commit and running `bazel clean --expunge` still
 #      plans the old commit's content and passes with --lockfile_mode=error.
 #   6. Switching from provider tags to tf_providers.from_lock() and running
@@ -44,9 +45,9 @@
 #      only under examples/), and re-plans //app.
 #   7. Building //bad, which calls a fetched module that calls an undeclared
 #      one, fails during fetch naming the tf_modules.module tag to add.
-#   8. Declaring a module by a `//<subdir>` (peering_link) that is a symlink
+#   8. Declaring a module by a //<subdir> (peering_link) that is a symlink
 #      fails during fetch naming the directory the link points to.
-#   9. Declaring a module by a `//<subdir>` (vendor/shared) inside a git
+#   9. Declaring a module by a //<subdir> (vendor/shared) inside a git
 #      submodule fails during fetch naming the submodule.
 
 set -euo pipefail
@@ -93,7 +94,7 @@ ln -s ../.. "${FIXTURES}/network.git/vpc/examples/complete/parent"
 ln -s ../../../missing.tf "${FIXTURES}/network.git/vpc/examples/complete/missing.tf"
 ln -s /dev/null "${FIXTURES}/network.git/vpc/examples/complete/outside"
 ln -s vpc/peering "${FIXTURES}/network.git/peering_link"
-# Variables files that `tofu` loads by itself, as a module's root and its
+# Variables files that tofu loads by itself, as a module's root and its
 # examples often carry. No rule accepts one as data, so the generated
 # libraries must leave them out: every build below would fail otherwise.
 echo 'name = "upstream"' >"${FIXTURES}/network.git/terraform.tfvars"

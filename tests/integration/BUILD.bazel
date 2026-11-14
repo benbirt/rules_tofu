@@ -1,20 +1,21 @@
 """Bazel-in-Bazel integration tests for rules_tofu.
 
-`_CASES` (`bazel build`) and `_RUN_CASES` (`bazel run`) drive
-assert_bazel_fails: each entry names a sub-workspace, a target inside it, and a
-stderr fragment expected when the nested Bazel fails. Most negative cases live
-in `broken_workspace`, sharing its MODULE.bazel and one nested Bazel server so
-every case after the first is an incremental build. Cases that test the module
-graph or toolchain registration (broken_module, lock_dependency,
-custom_toolchain) each have their own sub-workspace and test target.
+_CASES (`bazel build`) and _RUN_CASES (`bazel run`) drive assert_bazel_fails:
+each entry gives a case name, a sub-workspace, a target inside it, and a stderr
+fragment expected when the nested Bazel fails. Most of those cases live in
+broken_workspace, sharing its MODULE.bazel and one nested Bazel server so every
+case after the first is an incremental build. Cases that test the module graph
+or toolchain registration live outside broken_workspace (in broken_module,
+custom_toolchain, and lock_dependency, which two cases share), with one
+<case_name>_test target per case.
 
-Multi-step positive tests (lock_update_test, module_dependency_*_test,
-run_directory_test, tf_modules_test, fmt_*_test) each have their own driver
-script and sub-workspace below.
+Multi-step tests (lock_update_test, module_dependency_*_test,
+run_directory_test, tf_modules_test, fmt_*_test) have their own driver scripts
+and sub-workspaces below.
 
 The sub-workspace packages are excluded from the outer Bazel via
 --deleted_packages in .bazelrc (as recommended by
-rules_bazel_integration_test), so expanding `//...` at the root never analyses
+rules_bazel_integration_test), so expanding //... at the root never analyses
 them directly.
 """
 
@@ -35,8 +36,8 @@ sh_binary(
     data = ["nested_bazel.sh"],
 )
 
-# Each sub-workspace is a single Bazel module, so every case ships the whole
-# thing; glob once per workspace and share the lists.
+# Every case in _CASES and _RUN_CASES ships its whole sub-workspace; glob each
+# sub-workspace once and share the lists across cases.
 _WORKSPACE_FILES = {
     "broken_module": integration_test_utils.glob_workspace_files("broken_module") + [
         "//:local_repository_files",
@@ -53,7 +54,7 @@ _WORKSPACE_FILES = {
 }
 
 # Failures raised during `bazel build` in the nested Bazel: module resolution,
-# loading, analysis, or an action the rules emit.
+# repository fetch, loading, analysis, or an action the rules emit.
 _CASES = [
     # (case_name, workspace_path, target inside that workspace, stderr fragment)
     ("duplicate_vars", "broken_workspace", "//cases/duplicate_vars:dup", "declared in both"),
@@ -146,7 +147,7 @@ bazel_integration_test(
     workspace_path = _BUNDLED_WORKSPACE,
 )
 
-# The cases with a sub-workspace of their own, one test each.
+# The cases outside broken_workspace, one test target per case.
 [
     bazel_integration_test(
         name = case_name + "_test",
@@ -164,10 +165,10 @@ bazel_integration_test(
     if workspace != _BUNDLED_WORKSPACE
 ]
 
-# Provider lock workflow: a workspace's first `pin`, a Dependabot/Renovate
+# Provider lock workflow: a workspace's first pin, a Dependabot/Renovate
 # update (versions.tf and .terraform.lock.hcl only) that must leave
 # MODULE.bazel.lock untouched, and a root tag for the locked provider that
-# fails the build while leaving `pin` runnable. See lock_update_test.sh.
+# fails the build while leaving pin runnable. See lock_update_test.sh.
 sh_binary(
     name = "lock_update_driver",
     srcs = ["lock_update_test.sh"],
@@ -190,8 +191,8 @@ bazel_integration_test(
 
 # Cross-module module_source dependencies: a root module calls a tf_library
 # from another Bazel module by its module_source, which calls one from a third,
-# then builds, plans, and runs tf_test offline. Runs on every `tofu` version
-# rules_tofu pins because the module manifest is `tofu`'s internal format and
+# then builds, plans, and runs tf_test offline. Runs on every tofu version
+# rules_tofu pins because the module manifest is tofu's internal format and
 # tf_test passes flags that older OpenTofu releases lack. See
 # module_dependency_test.sh.
 sh_binary(
@@ -217,10 +218,10 @@ sh_binary(
     for version in KNOWN_VERSIONS
 ]
 
-# The launchers a `tf_deploy` generates, run for real: `.apply` under
-# `bazel run`, the built `.destroy` launcher directly from another directory,
-# and `.plan` under `bazel run`, sharing the state of a `backend "local"` with
-# a relative path in the deploy's run directory. See run_directory_test.sh.
+# The launchers a tf_deploy generates, run for real: .apply under `bazel run`,
+# the built .destroy launcher directly from another directory, and .plan under
+# `bazel run`, sharing the state of a backend "local" with a relative path in
+# the deploy's run directory. See run_directory_test.sh.
 sh_binary(
     name = "run_directory_driver",
     srcs = ["run_directory_test.sh"],
@@ -267,7 +268,7 @@ bazel_integration_test(
 # `.fmt` and `.fmt_check` act on the files in `srcs` by name, in
 # subdirectories too, and on nothing else in the package; a target without
 # `srcs` has neither. Which extensions `tofu fmt` accepts by name is the
-# binary's to decide, so this runs with every `tofu` version rules_tofu pins.
+# binary's to decide, so this runs with every tofu version rules_tofu pins.
 # See fmt_test.sh.
 sh_binary(
     name = "fmt_driver",

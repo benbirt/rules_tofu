@@ -4,20 +4,20 @@
 # test sets TOFU_VERSION.
 #
 # Steps:
-#   1. //sub_only:lib.fmt_check passes when all `srcs` live in a subdirectory.
+#   1. //sub_only:lib.fmt_check passes when all srcs live in a subdirectory.
 #   2. //nested:lib.fmt_check and //nested:tests.fmt_check fail on unformatted
 #      .tf, .tofu and .tftest.hcl files in subdirectories, naming only their
-#      own `srcs` and ignoring nested/not_src.tf.
-#   3. `.fmt` reformats those `srcs` in place; `.fmt_check` then passes while
+#      own srcs and ignoring nested/not_src.tf.
+#   3. .fmt reformats those srcs in place; .fmt_check then passes while
 #      nested/not_src.tf stays byte-identical.
-#   4. Targets without `srcs` (no_srcs_lib, no_srcs_deploy) have no `.fmt` or
-#      `.fmt_check` targets.
-#   5. The toolchain's `tofu` reports TOFU_VERSION, catching a version override
+#   4. Targets without srcs (no_srcs_lib, no_srcs_deploy) have no .fmt or
+#      .fmt_check targets.
+#   5. The toolchain's tofu reports TOFU_VERSION, catching a version override
 #      that did not take effect: which extensions `tofu fmt` accepts by name is
 #      the binary's to decide.
 #   6. `bazel build //...` builds every target in the sub-workspace (catching
 #      invalid fixtures that format and query steps alone would miss, such as a
-#      test file in a library's `srcs`), and `bazel test //empty:test` runs a
+#      test file in a library's srcs), and `bazel test //empty:test` runs a
 #      tf_test of an empty root module (issue #119).
 
 set -euo pipefail
@@ -87,7 +87,7 @@ grep -q -x -F '//nested:no_srcs_deploy.plan' <<<"${targets}" || fail "the deploy
 grep -q '^//nested:no_srcs_.*\.fmt' <<<"${targets}" && fail "a target without srcs has fmt targets"
 
 echo "--- 5. check the tofu version ---" >&2
-# Only the exec platform's `tofu` repository has been fetched.
+# Only the exec platform's tofu repository has been fetched.
 versions="$(for t in "$(bazel info output_base)"/external/rules_tofu++tofu+tofu_*/tofu; do "$t" version; done)"
 grep -q -F "v${TOFU_VERSION}" <<<"${versions}" || fail "expected tofu ${TOFU_VERSION}, got: ${versions}"
 

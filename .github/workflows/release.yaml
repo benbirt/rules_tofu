@@ -1,10 +1,10 @@
 name: Release
 
-# Cut a release by pushing a SemVer tag (e.g. `v0.1.0`). The `release` job
+# Cut a release by pushing a SemVer tag (e.g. v0.1.0). The release job
 # builds the source and docs archives via .github/workflows/release_prep.sh,
 # attaches build attestations, and publishes a GitHub Release.
 #
-# The `publish` job opens a Bazel Central Registry PR when opted in via the
+# The publish job opens a Bazel Central Registry PR when opted in via the
 # repository variable PUBLISH_TO_BCR=true. Enabling it also requires a
 # BCR_PUBLISH_TOKEN secret (a classic PAT with repo and workflow scopes, because
 # fine-grained PATs cannot open PRs against public repos) and a fork of

@@ -9,7 +9,7 @@
 # cache are then shared with the outer Bazel and across tests, while
 # --output_base below stays per-test.
 #
-# The nested `bazel` binary is a bazelisk wrapper that caches its Bazel
+# The nested bazel binary is a bazelisk wrapper that caches its Bazel
 # download under $PWD unless told otherwise. Point BAZELISK_HOME at its
 # per-user cache, which setup-bazel saves on CI.
 _user="${USER:-$(id -un)}"

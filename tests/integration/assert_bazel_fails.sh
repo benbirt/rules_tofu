@@ -2,11 +2,11 @@
 # Driver for the negative //tests/integration:*_test targets (and
 # custom_toolchain_test). The bazel_integration_test rule sets BIT_BAZEL_BINARY
 # and BIT_WORKSPACE_DIR; the test's env sets:
-#   CASES      - one case per line, `name|command|target|fragment`: the nested
+#   CASES      - one case per line, name|command|target|fragment: the nested
 #                Bazel command (build or run), the target inside the
 #                sub-workspace, and a substring expected in its stderr
 #   ONLY_CASES - optional, comma-separated names: run only these cases
-#                (e.g. `--test_env=ONLY_CASES=stale_lock` from the outer Bazel)
+#                (e.g. --test_env=ONLY_CASES=stale_lock from the outer Bazel)
 # Every case must fail with its fragment in the output; anything else fails
 # the test. A sub-workspace's cases all run against one nested Bazel, so after
 # the first they are incremental builds; every case runs even after a failure,
@@ -60,7 +60,7 @@ while IFS='|' read -r name command target pattern; do
   echo "--- ${name}: bazel ${command} ${target}, expecting '${pattern}' ---" >&2
   start=${SECONDS}
   # Not the loop's stdin, which is CASES: a `run` case whose program reads
-  # its input (`tofu` asking for a variable, or for approval) would consume
+  # its input (tofu asking for a variable, or for approval) would consume
   # the remaining cases, and the loop would end early with nothing failed.
   bazel "${command}" "${target}" >"${LOG}" 2>&1 </dev/null
   rc=$?

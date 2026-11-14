@@ -55,10 +55,11 @@ jobs:
       #
       # A cache is saved only while its key is new, so repository-cache is
       # keyed on every file that decides what gets downloaded: root and nested
-      # MODULE.bazel files, MODULE.bazel.lock (extension facts), pinned `tofu`
-      # releases, OpenTofu lock files, and lock_update/versions.tf. With the
-      # default key (MODULE.bazel alone), a lockfile-only update or a provider
-      # fetched by the integration tests was never saved.
+      # MODULE.bazel files, MODULE.bazel.lock (extension facts), pinned tofu
+      # releases, OpenTofu lock files, and
+      # tests/integration/lock_update/versions.tf (which lock_update_test pins
+      # from). With the default key (MODULE.bazel alone), a lockfile-only
+      # update or a provider fetched by the integration tests was never saved.
       - name: Set up Bazel
         uses: bazel-contrib/setup-bazel@0.19.1
         with:
@@ -128,9 +129,10 @@ jobs:
       - uses: actions/checkout@v7
 
       # Nested Bazel modules (e2e/smoke and the tests/integration
-      # sub-workspaces) each carry their own .bazelversion: bazelisk resolves
-      # the version from the nearest MODULE.bazel boundary and never sees the
-      # root pin. Keep every copy identical to the root file.
+      # sub-workspaces) each carry their own .bazelversion:
+      # bazelisk resolves the version from the nearest MODULE.bazel boundary
+      # and never sees the root pin. Keep every copy identical to the root
+      # file.
       - name: Check .bazelversion files are in sync
         run: |
           # Integration tests run each sub-workspace on the outer Bazel
