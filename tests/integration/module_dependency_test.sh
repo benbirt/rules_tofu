@@ -11,6 +11,11 @@
 #   3. `bazel run //app:app.plan` plans against the same manifest, offline.
 #   4. The toolchain's tofu reports TOFU_VERSION, so a version that didn't
 #      take is caught.
+#   5. `bazel test //app:app_test` runs the deploy's tf_test, whose run block
+#      loads a module from the manifest. It passes on every pinned tofu and
+#      leaves the JSON log in its outputs: the runner passes `tofu test` a
+#      flag for it that OpenTofu before 1.12 lacks, and a tf_test was once
+#      run on no version but the default (issue #125).
 #
 # The module manifest is tofu's internal format, so there is one test per tofu
 # version rules_tofu pins.
@@ -58,5 +63,17 @@ echo "--- 4. check the tofu version ---" >&2
 # Only the exec platform's tofu repository has been fetched.
 versions="$(for t in "$(bazel info output_base)"/external/rules_tofu++tofu+tofu_*/tofu; do "$t" version; done)"
 grep -q -F "v${TOFU_VERSION}" <<<"${versions}" || fail "expected tofu ${TOFU_VERSION}, got: ${versions}"
+
+echo "--- 5. run the tf_test ---" >&2
+bazel test //app:app_test --test_output=all >&2 || fail "the tf_test failed"
+outputs_dir="$(bazel info bazel-testlogs)/app/app_test/test.outputs"
+# Bazel zips a test's undeclared outputs unless told not to.
+json_log=""
+if [[ -f "${outputs_dir}/tofu-test.json" ]]; then
+  json_log="$(cat "${outputs_dir}/tofu-test.json")"
+elif [[ -f "${outputs_dir}/outputs.zip" ]]; then
+  json_log="$(unzip -p "${outputs_dir}/outputs.zip" tofu-test.json 2>/dev/null || true)"
+fi
+grep -q -F '"@message"' <<<"${json_log}" || fail "the test left no JSON log (tofu-test.json) in ${outputs_dir}"
 
 echo "OK: with tofu ${TOFU_VERSION}, modules from other Bazel modules were called by module_source" >&2

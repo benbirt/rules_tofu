@@ -60,10 +60,14 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
 - `bazel build //examples/hello:hello //examples/aws:s3_bucket //examples/gcp:storage_bucket`
 - `bazel build //examples/hello:greet_lib //examples/aws:s3_bucket_lib //examples/gcp:storage_bucket_lib`
 - `bazel test //examples/...:all` (fmt_check tests only)
-- Runner unit tests outside Bazel: copy `main.go` + `main_test.go` to a
-  scratch dir with a trivial `go.mod` and `go test ./...` (the canonical
-  Bazel run is `bazel test //tf/private/cmd/runner:runner_test`,
-  which needs network).
+- Go unit tests outside Bazel: `go test ./tf/private/cmd/...`. That skips
+  the tests of `runner` and `dupcheck`, which drive the built binaries
+  (`-runner=<path>`, `-dupcheck=<path>`) and still report `ok` without
+  them. Build each binary to run its tests:
+  - `go build -o /tmp/runner ./tf/private/cmd/runner && go test ./tf/private/cmd/runner -runner=/tmp/runner`
+  - `go build -o /tmp/dupcheck ./tf/private/cmd/dupcheck && go test ./tf/private/cmd/dupcheck -dupcheck=/tmp/dupcheck`
+
+  (In Bazel: `bazel test //tf/private/cmd/...`, which needs network.)
 
 ## Where things are documented
 
@@ -405,7 +409,20 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   (an absent plugin tree gets an empty directory under `$TEST_TMPDIR`), and
   fails on `errored_test.tfstate`, which tofu writes with exit 0 when a
   run's destroy fails. Don't route tests through the plan/apply path or its
-  ephemeral-state gate. The copy keeps a file's executable bit and nothing
+  ephemeral-state gate. The JSON log goes to `-json-into`, which OpenTofu
+  1.12.0 introduced; that makes 1.12 the oldest release rules_tofu supports
+  (README, "Quick start" and "Bringing your own binary"; the note in
+  `toolchain/versions.bzl`). 1.8.5 was pinned beside the default until no
+  tf_test turned out to run on it (issue #125): don't pin anything older
+  than the floor, don't probe the binary for the flag or fall back to
+  `-json` (it replaces the readable log) to accommodate one, and if the
+  rules come to need a flag newer than the floor, raise the floor in
+  `toolchain/` (`versions.bzl`, and `opentofu_toolchain`'s doc in
+  `toolchain.bzl`), the README and here together. Nothing checks a root
+  module's own binary: `opentofu_toolchain.version` is whatever its author
+  wrote (the `custom_toolchain` fixture's is `0.0.0`).
+  `module_dependency_<version>_test` runs a tf_test on every pinned tofu;
+  keep one that does. The copy keeps a file's executable bit and nothing
   else of its mode (`copyFile`: `0o755` or `0o644`, never `Perm()`): Bazel's
   outputs are read-only, and tofu must be able to write the copy. Both walks
   of a work tree (`copyTree`, and `linkTree` for the run directory) refuse a

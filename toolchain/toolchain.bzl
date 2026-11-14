@@ -11,7 +11,7 @@ TofuInfo = provider(
     doc = "Information about a resolved OpenTofu binary.",
     fields = {
         "binary": "File: the `tofu` executable.",
-        "version": "string: the OpenTofu version, e.g. \"1.8.5\".",
+        "version": "string: the OpenTofu version, e.g. \"1.12.0\".",
         "platform_key": "string: the `<os>_<arch>` platform key the toolchain was built for. " +
                         "Build-time `tofu init` symlinks the matching `tf_provider` " +
                         "binary into the work tree's plugin dir using this key.",
@@ -38,7 +38,8 @@ opentofu_toolchain = rule(
         ),
         "version": attr.string(
             mandatory = True,
-            doc = "OpenTofu version this toolchain wraps, e.g. \"1.8.5\".",
+            doc = "OpenTofu version this toolchain wraps, e.g. \"1.12.0\". Nothing reads it " +
+                  "to decide anything: it is for people.",
         ),
         "platform_key": attr.string(
             mandatory = True,
@@ -50,7 +51,8 @@ opentofu_toolchain = rule(
     doc = """Bundles an OpenTofu binary for use by rules_tofu rules.
 
 The `tofu` module extension declares one per downloaded release. A root module
-may declare its own, wrapping any `tofu` executable, and `register_toolchains`
-it to take the place of the download; see "The `tofu` binary" in the README.
+may declare its own, wrapping any `tofu` executable of OpenTofu 1.12 or later
+(the oldest release rules_tofu supports), and `register_toolchains` it to take
+the place of the download; see "The `tofu` binary" in the README.
 """,
 )

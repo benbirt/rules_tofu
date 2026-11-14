@@ -29,10 +29,11 @@ go_sdk.download(version = "1.26.3")
 
 # Two `tofu.version` tags in the root module. rules_tofu registers a single
 # global toolchain, so the extension fails rather than letting the last tag
-# silently win.
+# silently win. It fails on the second tag before it looks either version
+# up, so that one needn't be a release rules_tofu pins.
 tofu = use_extension("@rules_tofu//toolchain:extensions.bzl", "tofu")
 tofu.version(version = "1.12.0")
-tofu.version(version = "1.8.5")
+tofu.version(version = "1.12.1")
 use_repo(tofu, "tofu_toolchains")
 
 register_toolchains("@tofu_toolchains//:all")

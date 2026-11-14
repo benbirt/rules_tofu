@@ -14,7 +14,8 @@ tf_library(
 )
 
 # A test of an empty root module, whose run loads the module it is really
-# about. The driver builds it, which validates it with its test file.
+# about. The driver builds it, which validates it with its test file, and
+# runs it.
 tf_test(
     name = "test",
     srcs = ["tests/main.tftest.hcl"],

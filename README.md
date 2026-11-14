@@ -41,14 +41,15 @@ or the [release notes](https://github.com/benbirt/rules_tofu/releases).
 bazel_dep(name = "rules_tofu", version = "X.Y.Z")
 
 tofu = use_extension("@rules_tofu//toolchain:extensions.bzl", "tofu")
-# tofu.version(version = "1.8.5")  # optional; a default is pinned
+# tofu.version(version = "1.12.0")  # optional; a default is pinned
 use_repo(tofu, "tofu_toolchains")
 ```
 
 One `tofu` version serves the whole build. A `tofu.version` tag in the root
 module wins; otherwise your dependencies must agree on one, and with no tags
 at all the version pinned in [`toolchain/versions.bzl`](toolchain/versions.bzl)
-is used.
+is used. Bazel downloads it: nothing needs installing. rules_tofu supports
+OpenTofu 1.12 and later.
 
 **2. Declare targets.**
 
@@ -365,8 +366,11 @@ open a PR that runs it, or bring your own binary.
 
 ### Bringing your own binary
 
-`opentofu_toolchain` wraps any `tofu` executable: one you vendor, one you
-patched, or one built from source with `rules_go`. Bazel consults the root
+`opentofu_toolchain` wraps any `tofu` executable of OpenTofu 1.12 or later:
+one you vendor, one you patched, or one built from source with `rules_go`.
+An older one is not supported: the rules pass flags it lacks, `tofu test
+-json-into` for one, and nothing checks the binary's version first, so the
+failure is tofu's own. Bazel consults the root
 module's `register_toolchains` before those of its dependencies, so a
 toolchain registered there is the one every rule uses:
 
