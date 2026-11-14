@@ -11,7 +11,7 @@ jobs:
     # Linux + macOS mirrors the BCR presubmit platforms. "pinned" is
     # .bazelversion; 8.5.0 is the oldest supported Bazel (bazel_compatibility
     # in MODULE.bazel), since it is the first with extension facts. BCR
-    # presubmit covers the latest 8.x.
+    # presubmit covers the latest 8.x and 9.x.
     strategy:
       fail-fast: false
       matrix:
@@ -34,7 +34,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # Keyed on go.sum, so a run with unchanged Go modules downloads none.
+      # Backs GO_REPOSITORY_USE_HOST_CACHE across runs so a run with unchanged
+      # Go modules downloads none.
       - name: Restore the Go module cache
         uses: actions/cache@v6
         with:
@@ -47,17 +48,18 @@ jobs:
       # job finished first saved them, and the other version's dependencies
       # (Bazel itself, protobuf, rules_java, ...) were fetched from GitHub
       # releases on every run, failing whenever GitHub did.
-      # Only pushes to main save caches: pull requests restore from them
-      # (via the key prefix) without adding a set per commit, which kept the
+      #
+      # Only pushes to main save caches. Pull requests restore from them via
+      # the key prefix without adding a set per commit, which kept the
       # repository at the Actions cache limit and evicted what main had saved.
-      # A cache is saved only while its key is new, so the repository cache
-      # is keyed on every file that decides what gets downloaded: the
-      # nested workspaces' modules and the lockfile (module facts) as well as
-      # the root MODULE.bazel, the pinned tofu releases, and the OpenTofu
-      # locks (and the one versions.tf a test pins from) that name the
-      # providers locked repos fetch. With the default key (MODULE.bazel
-      # alone) a dependency bump through the lockfile, or a provider the
-      # integration tests fetch, was never saved.
+      #
+      # A cache is saved only while its key is new, so repository-cache is
+      # keyed on every file that decides what gets downloaded: root and nested
+      # MODULE.bazel files, MODULE.bazel.lock (extension facts), pinned tofu
+      # releases, OpenTofu lock files, and
+      # tests/integration/lock_update/versions.tf (which lock_update_test pins
+      # from). With the default key (MODULE.bazel alone), a lockfile-only
+      # update or a provider fetched by the integration tests was never saved.
       - name: Set up Bazel
         uses: bazel-contrib/setup-bazel@0.19.1
         with:
@@ -101,7 +103,8 @@ jobs:
 
       # e2e/smoke is the BCR presubmit test module and models the README-shaped
       # consumer path. It's excluded from //... via --deleted_packages, so build
-      # it explicitly here to catch consumer-facing breakage before a release.
+      # and test it explicitly here to catch consumer-facing breakage before a
+      # release.
       - name: Build and test e2e/smoke consumer module
         run: |
           cd e2e/smoke
@@ -132,10 +135,10 @@ jobs:
       # file.
       - name: Check .bazelversion files are in sync
         run: |
-          # The integration tests run a nested workspace on the Bazel that
-          # runs them, whatever its .bazelversion says, so a workspace
-          # without the file passes them, and the checks below, which find
-          # workspaces by it, would not see it at all.
+          # Integration tests run each sub-workspace on the outer Bazel
+          # regardless of its .bazelversion, so a sub-workspace without the
+          # file still passes them. The checks below find sub-workspaces by
+          # .bazelversion and would miss it too.
           for m in $(git ls-files ':(glob)e2e/*/MODULE.bazel' ':(glob)tests/integration/*/MODULE.bazel'); do
             if [ ! -f "$(dirname "$m")/.bazelversion" ]; then
               echo "::error::$(dirname "$m") has a MODULE.bazel but no .bazelversion. Copy the root file."

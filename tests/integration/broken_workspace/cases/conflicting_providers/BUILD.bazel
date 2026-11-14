@@ -1,13 +1,12 @@
 load("@rules_tofu//tf:defs.bzl", "tf_library")
 load("@rules_tofu//tf/private:provider.bzl", "tf_provider")
 
-# Stand-in provider binaries, one per supported exec platform. A tf_provider
-# only materializes the binary for the *exec* platform, so every platform must
-# be present here: otherwise on a host whose platform is missing, the build
-# fails first with a "no <plat> entry" error instead of reaching the aggregate
-# version-conflict check this case is asserting (which is platform-independent).
-# The file contents are irrelevant — analysis fails at that check before any
-# action runs.
+# Stand-in provider binaries, one per supported exec platform. Analysing :lib
+# checks the first provider for an exec-platform binary before reaching the
+# second provider where the version conflict is caught. Every host platform
+# must therefore be present here, or the build fails first with a
+# missing-platform error. The placeholder files' contents are irrelevant
+# because analysis fails before any action runs.
 _BINARIES = {
     "binary_linux_amd64": "linux_amd64",
     "binary_linux_arm64": "linux_arm64",
@@ -15,8 +14,8 @@ _BINARIES = {
     "binary_darwin_arm64": "darwin_arm64",
 }
 
-# Manually declaring two tf_provider targets with the same address but different versions
-# must fail during the aggregate provider check when building a tf_library/tf_deploy that depends on both.
+# Two tf_provider targets with the same address at different versions must
+# fail the aggregate provider check when :lib depends on both.
 tf_provider(
     name = "prov1",
     address = "registry.opentofu.org/hashicorp/aws",

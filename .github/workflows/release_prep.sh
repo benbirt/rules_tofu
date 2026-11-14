@@ -1,23 +1,22 @@
 #!/usr/bin/env bash
 #
-# Builds the release tarball and prints release notes to stdout. Invoked by the
-# bazel-contrib/.github release_ruleset reusable workflow with the tag as $1.
+# Builds the release source and docs archives and prints release notes to
+# stdout. Invoked by the bazel-contrib/.github release_ruleset reusable
+# workflow with the tag as $1.
 #
-# Archive exclusions live HERE (not in .gitattributes) so that ordinary
-# `git archive` runs are unaffected. We drop `examples/`, `tests/`, `tools/`,
-# `toolchain/tests/`, `tf/providers/tests/` and `tf/modules/tests/`: they are
-# not needed by consumers and reference repos that are dev-only or otherwise
-# unavailable when rules_tofu is consumed as a dependency. `docs/` only feeds
-# the docs archive below. Note the pathspecs are prefix-anchored, so a tests package
-# nested under a shipped directory needs its own exclusion. Everything
-# else is kept -- crucially `e2e/` and `.bcr/`, which BCR reads from the
-# extracted archive (the test module at e2e/smoke and the source/metadata
-# templates).
+# Archive exclusions live here rather than in .gitattributes so ordinary
+# `git archive` runs are unaffected. Drop examples/, tests/, tools/,
+# toolchain/tests/, tf/providers/tests/ and tf/modules/tests/: consumers do not
+# need them and they reference dev-only repos unavailable to downstream
+# modules. Drop docs/ because it feeds the docs archive below. Git pathspecs
+# are prefix-anchored, so a tests package nested under a shipped directory
+# needs its own exclusion. Keep e2e/ and .bcr/, which BCR reads from the
+# extracted archive (e2e/smoke and the .bcr/ templates).
 set -o errexit -o nounset -o pipefail
 
-# Tag, e.g. v0.1.0. The prefix strips the leading 'v' so it matches
-# strip_prefix ("{REPO}-{VERSION}") in .bcr/source.template.json, and mirrors
-# the layout GitHub uses for source archives.
+# Tag, e.g. v0.1.0. Strip the leading 'v' to match strip_prefix
+# ("{REPO}-{VERSION}") in .bcr/source.template.json and mirror the layout
+# GitHub uses for source archives.
 TAG=$1
 PREFIX="rules_tofu-${TAG:1}"
 ARCHIVE="rules_tofu-$TAG.tar.gz"

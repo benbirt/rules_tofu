@@ -1,8 +1,8 @@
 # BCR presubmit: validate each published version against a real downstream
 # module (e2e/smoke) consuming rules_tofu via bazel_dep.
 #
-# Linux + macOS only — Windows host support is a known gap (the runtime
-# launcher is bash-only; see README "Known gaps").
+# Linux and macOS only: Windows host support is a known gap because the runtime
+# launcher is bash-only (see README.md, "Known gaps").
 #
 # Bazel 8.5.0 is the oldest supported version (bazel_compatibility in
 # MODULE.bazel; it is the first with extension facts). Repo CI tests that floor

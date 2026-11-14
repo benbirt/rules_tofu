@@ -3,7 +3,7 @@ load("@gazelle//:def.bzl", "gazelle")
 # gazelle:prefix github.com/benbirt/rules_tofu
 gazelle(name = "gazelle")
 
-# This target collects all of the parent workspace files needed by the broken_workspace child workspace.
+# Collects the workspace files mapped into the //tests/integration sub-workspaces.
 filegroup(
     name = "local_repository_files",
     srcs = [

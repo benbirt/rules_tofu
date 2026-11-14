@@ -1,8 +1,8 @@
 load("@rules_tofu//tf:defs.bzl", "tf_library")
 
-# A dep with module_source left in deps after its module call was removed.
-# (A call naming a different address fails earlier, as in
-# module_source_missing.)
+# A dep with module_source left in deps after its module call was removed;
+# keep main.tf empty. A call naming a different address fails earlier, as in
+# module_source_missing.
 tf_library(
     name = "lib",
     srcs = ["main.tf"],

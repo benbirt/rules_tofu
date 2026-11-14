@@ -1,7 +1,7 @@
 load("@rules_tofu//tf:defs.bzl", "tf_library")
 
-# .terraform.lock.hcl is included in srcs. init_action.bzl detects it
-# in the materialized work tree and refuses to validate.
+# .terraform.lock.hcl is included in srcs. Validation detects it in the
+# materialised work tree and refuses to run.
 tf_library(
     name = "smuggled",
     srcs = [

@@ -1,3 +1,4 @@
+# Loads ./helper, which is deliberately absent from BUILD.bazel deps.
 run "setup" {
   module {
     source = "./helper"

@@ -1,44 +1,55 @@
 #!/usr/bin/env bash
 # Driver for //tests/integration:tf_modules_test. The bazel_integration_test
-# rule sets BIT_BAZEL_BINARY and BIT_WORKSPACE_DIR (the tf_modules workspace).
-# Every step must succeed, the last by seeing the build fail as it should:
+# rule sets BIT_BAZEL_BINARY and BIT_WORKSPACE_DIR (the tf_modules
+# sub-workspace).
 #
-#   1. fixtures/network becomes a git repository with an annotated tag v1.0.0,
-#      and fixtures/dns an archive; @FIXTURES@ and @DNS_SHA256@ are filled in.
-#      The git module calls a submodule of its own by its own address, which
-#      it provides itself (issue #95).
-#      The git repository also gets what a real one may hold: a BUILD file, a
-#      file named `files` at its root and one named `module` in the module's
-#      directory (the names of the generated targets once collided with
-#      them, issue #61), and symlinks of every kind: to a file the module
-#      needs, to a directory, to an ancestor (which Bazel's glob can't
-#      follow), to nothing, and out of the repository; a `.bazelignore`
-#      naming a directory the plan needs, which Bazel would otherwise obey
-#      (issue #102); and a git submodule that nothing calls, which is not
-#      fetched and must not matter (issue #94).
-#   2. //app plans: it calls a git module (which calls a registry module and
-#      requires a provider that only the module names), a submodule of it
-#      under modules/ and one outside modules/ by `//<subdir>`, the archive,
-#      and the registry module directly. The fetched git module holds the
-#      symlink to a file and none of the others, nor the BUILD file.
-#   3. Without hashicorp/time in //app's providers, the build fails naming the
-#      label to add: the network module's library can't carry the providers of
-#      a submodule outside modules/ that only its callers reach (#76).
-#   4. MODULE.bazel.lock records the commits of the git and registry modules.
-#      With the git module's record replaced by one of the kind a registry
-#      module has, the build resolves it again and puts it right (#96).
-#   5. v1.0.0 is moved to a new commit. After `bazel clean --expunge`, //app
-#      still plans the old commit's content, and the build passes with
-#      --lockfile_mode=error.
-#   6. With the providers locked rather than tagged, `@tf_providers//:pin`
-#      covers what the git module and the submodule //app calls require, but
-#      not what its examples do.
-#   7. A module that calls an undeclared one fails when fetched, naming the
-#      tag to add.
-#   8. A module declared by a `//<subdir>` that is a symlink fails when
-#      fetched, naming the directory the link leads to.
-#   9. A module declared by a `//<subdir>` inside a git submodule fails when
-#      fetched, naming the submodule.
+# Steps:
+#   1. Turn fixtures/network into a git repository with an annotated tag v1.0.0
+#      and fixtures/dns into dns.tar.gz, then fill in @FIXTURES@ and
+#      @DNS_SHA256@. In network.git:
+#      - vpc calls its own //vpc/tags submodule by its full git URL, which the
+#        module provides itself (issue #95).
+#      - Files named "files" at the root and "module" in vpc/ check against
+#        target-name collisions (issue #61), and vpc/examples/BUILD.bazel
+#        checks that upstream BUILD files are removed.
+#      - Symlinks cover every kind: to a file the module needs
+#        (vpc/modules/subnet/outputs.tf), to a directory, to an ancestor
+#        (which Bazel's glob cannot follow), to nothing, out of the repository,
+#        and peering_link at the root pointing to vpc/peering.
+#      - terraform.tfvars and vpc/examples/complete/demo.auto.tfvars would fail
+#        every build if generated libraries included auto-loaded variable files
+#        in data.
+#      - .bazelignore naming vpc/modules would hide the subnet submodule if
+#        left in the fetched repository (issue #102).
+#      - An uninitialised git submodule entry at vendor/shared is unused and
+#        not fetched (issue #94).
+#   2. //app plans offline across the git module (which calls a registry module
+#      and requires a provider only the module names), a submodule under
+#      modules/, one outside modules/ via //<subdir>, the archive, and the
+#      registry module directly. Checks the fetched network repository: the
+#      file symlink and the files named "files" and "module" remain, while
+#      .bazelignore, vpc/examples/BUILD.bazel and all other symlinks were
+#      removed.
+#   3. Removing hashicorp/time from //app's providers fails `bazel build //app`
+#      naming the label to add: network's main library cannot carry providers
+#      of submodules outside modules/ that only callers reach (issue #76).
+#   4. MODULE.bazel.lock records the git commit and registry module metadata.
+#      Replacing the git module's fact with a registry-module fact (location
+#      and sha256), shutting down Bazel and removing the output base's lockfile
+#      makes the next build resolve and record the commit again (issue #96).
+#   5. Moving v1.0.0 to a new commit and running `bazel clean --expunge` still
+#      plans the old commit's content and passes with --lockfile_mode=error.
+#   6. Switching from provider tags to
+#      tf_providers.from_lock(lock_file = "//:.terraform.lock.hcl") and running
+#      @tf_providers//:pin locks hashicorp/null (from the git module) and
+#      hashicorp/time (from //vpc/peering), leaves out hashicorp/random (used
+#      only under examples/), and re-plans //app.
+#   7. Building //bad, which calls a fetched module that calls an undeclared
+#      one, fails during fetch naming the tf_modules.module tag to add.
+#   8. Declaring a module by a //<subdir> (peering_link) that is a symlink
+#      fails during fetch naming the directory the link points to.
+#   9. Declaring a module by a //<subdir> (vendor/shared) inside a git
+#      submodule fails during fetch naming the submodule.
 
 set -euo pipefail
 
@@ -89,7 +100,7 @@ ln -s vpc/peering "${FIXTURES}/network.git/peering_link"
 # libraries must leave them out: every build below would fail otherwise.
 echo 'name = "upstream"' >"${FIXTURES}/network.git/terraform.tfvars"
 echo 'name = "example"' >"${FIXTURES}/network.git/vpc/examples/complete/demo.auto.tfvars"
-# Bazel reads a `.bazelignore` at the root of any repository: left in the
+# Bazel reads a .bazelignore at the root of any repository: left in the
 # fetched module, this one would hide the subnet submodule from its library.
 echo "vpc/modules" >"${FIXTURES}/network.git/.bazelignore"
 git_ init -q
