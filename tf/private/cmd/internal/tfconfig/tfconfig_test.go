@@ -1,6 +1,8 @@
 package tfconfig
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -351,14 +353,68 @@ func TestModuleDirs(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %v, want %v", got, want)
 	}
-	// Called directories are followed too; one without configuration is skipped.
-	got, err = ModuleDirs(repo, "", "tools/", "docs", "examples/called")
+	// Called directories are followed too; one without configuration is
+	// skipped, and the module's own among them changes nothing.
+	got, err = ModuleDirs(repo, "", "", "tools/", "docs", "examples/called")
 	if err != nil {
 		t.Fatal(err)
 	}
 	want = []string{"", "examples/called", "lib/a", "modules/sub", "tools", "tools/deep"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("with called dirs: got %v, want %v", got, want)
+	}
+}
+
+// A module whose own directory holds no configuration, a bundle, still
+// serves its `modules/` and the directories calls reach (issue #123); with
+// neither it serves nothing, and that is no error.
+func TestModuleDirs_NoRootConfiguration(t *testing.T) {
+	repo := t.TempDir()
+	for name, content := range map[string]string{
+		"bundle/README.md":           ``,
+		"bundle/modules/dns/main.tf": `module "shared" { source = "../../shared" }`,
+		"bundle/shared/main.tf":      ``,
+		"bundle/vpc/main.tf":         `module "peer" { source = "../peering" }`,
+		"bundle/peering/main.tf":     ``,
+		"bundle/examples/main.tf":    ``,
+		"bare/BUILD.bazel":           ``,
+	} {
+		p := filepath.Join(repo, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, tc := range map[string]struct {
+		moduleDir string
+		called    []string
+		want      []string
+	}{
+		"modules/ alone":         {"bundle", nil, []string{"bundle/modules/dns", "bundle/shared"}},
+		"and a called directory": {"bundle", []string{"bundle/vpc"}, []string{"bundle/modules/dns", "bundle/peering", "bundle/shared", "bundle/vpc"}},
+		"its own root, called":   {"bundle", []string{"bundle"}, []string{"bundle/modules/dns", "bundle/shared"}},
+		"nothing at all":         {"bare", nil, []string{}},
+
+		"called alone":            {"bare", []string{"bundle/peering"}, []string{"bundle/peering"}},
+		"the repository's root":   {"", []string{"bundle/vpc"}, []string{"bundle/peering", "bundle/vpc"}},
+		"called, no config there": {"bare", []string{"bundle/examples/none"}, []string{}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := ModuleDirs(repo, tc.moduleDir, tc.called...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != len(tc.want) || (len(got) > 0 && !reflect.DeepEqual(got, tc.want)) {
+				t.Errorf("got %v, want %v", got, tc.want)
+			}
+		})
+	}
+
+	// A module directory that isn't there is not a bundle: that is an error.
+	if got, err := ModuleDirs(repo, "nowhere", "bundle/vpc"); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("ModuleDirs of a missing directory = %v, %v, want a not-exist error", got, err)
 	}
 }
 

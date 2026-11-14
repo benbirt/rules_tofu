@@ -1,0 +1,12 @@
+"""A dependency module with a bundle library: a `module_source`, and
+configuration only in a subdirectory. See ../MODULE.bazel."""
+
+module(
+    name = "bundle_module",
+    version = "0.0.0",
+)
+
+bazel_dep(name = "rules_tofu", version = "0.0.0")
+
+tf_providers = use_extension("@rules_tofu//tf/providers:extensions.bzl", "tf_providers")
+use_repo(tf_providers, "tf_providers")

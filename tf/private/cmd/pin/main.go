@@ -429,11 +429,21 @@ func newLibrary(t target) *library {
 }
 
 // serves lists the directories, relative to the repository, whose files the
-// library serves (tfconfig.ModuleDirs). A library of deps alone, with no
-// configuration in its own directory, serves none: its deps serve theirs.
+// library serves (tfconfig.ModuleDirs).
+//
+// A library with no configuration in its own directory and no module_source
+// serves none. It is an aggregate of deps, which serve theirs: nothing
+// outside its repository can call into it, and a `modules/` directory below
+// its package is other libraries', whose examples must not reach the lock
+// through it. With a module_source it is a bundle: callers reach its
+// subdirectories with `//<subdir>`, which the manifest tool resolves, so
+// those and its `modules/` are served like any module's (issue #123).
 func (l *library) serves() ([]string, error) {
-	if !tfconfig.HasConfig(filepath.Join(l.root, filepath.FromSlash(l.Package))) {
-		return nil, nil
+	if l.ModuleSource == "" {
+		own, err := tfconfig.ConfigFiles(filepath.Join(l.root, filepath.FromSlash(l.Package)))
+		if err != nil || len(own) == 0 {
+			return nil, err
+		}
 	}
 	called := make([]string, 0, len(l.called))
 	for subdir := range l.called {

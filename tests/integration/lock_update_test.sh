@@ -7,7 +7,10 @@
 #      workspace's libraries already name `@tf_providers//hashicorp/null`,
 #      which has no package in the hub until it is locked. The package's two
 #      libraries each require the provider, in a file of their own, and the
-#      lock meets both constraints (issue #99).
+#      lock meets both constraints (issue #99). One of them calls a
+#      submodule of a library in another Bazel module that has a
+#      `module_source` and no configuration in its own directory, a bundle,
+#      and the lock meets that submodule's constraint too (issue #123).
 #   2. A build records MODULE.bazel.lock. It includes a library with the
 #      locked provider and no files: an empty root module, which validates
 #      because it is not given the lock (issue #119).
@@ -62,6 +65,8 @@ grep -q 'version *= "3.2.3"' .terraform.lock.hcl || fail "pin didn't lock hashic
 constraints="$(grep 'constraints *=' .terraform.lock.hcl)"
 [[ "${constraints}" == *'3.2.3'* && "${constraints}" == *'>= 3.0'* ]] ||
   fail "pin didn't lock against both libraries' constraints (versions.tf's 3.2.3 and floor.tf's >= 3.0): ${constraints}"
+[[ "${constraints}" == *'>= 3.1'* ]] ||
+  fail "pin left out the constraint of the bundle library's submodule that floor.tf calls (>= 3.1): ${constraints}"
 
 echo "--- 2. build, recording MODULE.bazel.lock ---" >&2
 "${BAZEL}" build //:versions //:floor //empty:lib >&2 || fail "the build against the first lock failed"

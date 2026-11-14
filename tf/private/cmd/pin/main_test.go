@@ -519,7 +519,9 @@ module "x" {
 
 // A library from another Bazel module needs no module_source for its files
 // to count: it serves its own directory, and what that calls locally. One
-// with no configuration of its own, deps alone, serves nothing.
+// with no configuration of its own, deps alone, serves nothing: not even
+// what lies under a `modules/` directory below its package, which a library
+// with configuration or a module_source would serve.
 func TestRun_ExternalLibraryWithoutModuleSource(t *testing.T) {
 	ws := t.TempDir()
 	writeFile(t, filepath.Join(ws, "app/main.tf"), nullFloor)
@@ -544,8 +546,17 @@ terraform {
 }
 `)
 	writeFile(t, filepath.Join(ext, "all/BUILD.bazel"), "")
+	writeFile(t, filepath.Join(ext, "BUILD.bazel"), "")
+	writeFile(t, filepath.Join(ext, "modules/orphan/main.tf"), `terraform {
+  required_providers {
+    http = { source = "hashicorp/http" }
+  }
+}
+`)
 	bazel := fakeBazelOutput(t,
 		sourceFile("//app:main.tf", filepath.Join(ws, "app/main.tf")),
+		sourceFile("@@acme+//:modules/orphan/main.tf", filepath.Join(ext, "modules/orphan/main.tf")),
+		libraryRule("@@acme+//:top", filepath.Join(ext, "BUILD.bazel"), ""),
 		sourceFile("@@acme+//lib:main.tf", filepath.Join(ext, "lib/main.tf")),
 		sourceFile("@@acme+//lib:util/main.tf", filepath.Join(ext, "lib/util/main.tf")),
 		sourceFile("@@acme+//lib:examples/main.tf", filepath.Join(ext, "lib/examples/main.tf")),
@@ -569,6 +580,55 @@ terraform {
 		}
 	}
 	want := map[string]bool{"null": true, "tls": true, "time": true}
+	if !reflect.DeepEqual(locked, want) {
+		t.Errorf("locked %v, want %v", locked, want)
+	}
+}
+
+// A library from another repository that is a bundle: a module_source, and
+// configuration only in subdirectories, which callers reach with
+// `//<subdir>`. The manifest tool resolves such calls, so the directories
+// they reach, and the bundle's `modules/`, are served and their providers
+// locked; what nothing calls is not (issue #123).
+func TestRun_ExternalBundleLibrary(t *testing.T) {
+	ws := t.TempDir()
+	writeFile(t, filepath.Join(ws, "app/main.tf"), nullFloor+`module "vpc" { source = "github.com/acme/infra//vpc" }
+`)
+	ext := filepath.Join(t.TempDir(), "acme+")
+	requires := func(name string) string {
+		return fmt.Sprintf("terraform {\n  required_providers {\n    %s = { source = \"hashicorp/%s\" }\n  }\n}\n", name, name)
+	}
+	writeFile(t, filepath.Join(ext, "bundle/vpc/main.tf"), requires("tls")+`module "peer" { source = "../peering" }
+`)
+	writeFile(t, filepath.Join(ext, "bundle/peering/main.tf"), requires("time"))
+	writeFile(t, filepath.Join(ext, "bundle/modules/dns/main.tf"), requires("local"))
+	writeFile(t, filepath.Join(ext, "bundle/examples/main.tf"), requires("random"))
+	writeFile(t, filepath.Join(ext, "bundle/BUILD.bazel"), "")
+	bazel := fakeBazelOutput(t,
+		sourceFile("//app:main.tf", filepath.Join(ws, "app/main.tf")),
+		sourceFile("@@acme+//bundle:vpc/main.tf", filepath.Join(ext, "bundle/vpc/main.tf")),
+		sourceFile("@@acme+//bundle:peering/main.tf", filepath.Join(ext, "bundle/peering/main.tf")),
+		sourceFile("@@acme+//bundle:modules/dns/main.tf", filepath.Join(ext, "bundle/modules/dns/main.tf")),
+		sourceFile("@@acme+//bundle:examples/main.tf", filepath.Join(ext, "bundle/examples/main.tf")),
+		libraryRule("@@acme+//bundle:bundle", filepath.Join(ext, "bundle/BUILD.bazel"), "github.com/acme/infra"))
+	tofu, _ := fakeTofu(t)
+
+	var log strings.Builder
+	if err := run(ws, "", tofu, bazel, nil, nil, nil, &log); err != nil {
+		t.Fatalf("run: %v\n%s", err, log.String())
+	}
+	lock, err := os.ReadFile(filepath.Join(ws, ".terraform.lock.hcl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, children := lockedModules(t, lock)
+	locked := map[string]bool{}
+	for _, c := range children {
+		for name := range c {
+			locked[name] = true
+		}
+	}
+	want := map[string]bool{"null": true, "tls": true, "time": true, "local": true}
 	if !reflect.DeepEqual(locked, want) {
 		t.Errorf("locked %v, want %v", locked, want)
 	}
