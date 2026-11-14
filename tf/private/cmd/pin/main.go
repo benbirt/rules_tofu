@@ -1,40 +1,59 @@
-// Command pin is `bazel run @tf_providers//:pin`: it rewrites the workspace's
-// .terraform.lock.hcl (tf_providers.from_lock) with `tofu providers lock`.
+// Command pin implements `bazel run @tf_providers//:pin`, rewriting the
+// workspace's .terraform.lock.hcl for tf_providers.from_lock with
+// `tofu providers lock`.
 //
-// The lock serves every tf_library and tf_deploy in the workspace, so it is
-// locked against all of their version constraints:
+// Flags and environment:
+//   - --tofu=<path>: path to the tofu binary.
+//   - --lock-dir=<dir>: workspace-relative directory of .terraform.lock.hcl,
+//     or "" for the workspace root.
+//   - --platform=<os>_<arch>: default platform passed as -platform= to
+//     `tofu providers lock`, repeatable. Ignored when trailing arguments
+//     already include -platform= or --platform=.
+//   - --exclude-source=<source>: <namespace>/<name> or full provider address
+//     pinned by a tf_providers.provider tag and left out of the lock,
+//     repeatable.
+//   - Trailing arguments after flags are forwarded to `tofu providers lock`.
+//   - BUILD_WORKSPACE_DIRECTORY: workspace root set by `bazel run`, required.
+//   - BAZEL: Bazel binary to run `bazel query` with, defaulting to bazel or
+//     bazelisk on PATH.
 //
-//   - `bazel query` lists the .tf/.tf.json/.tofu/.tofu.json source files of every tf_library
-//     and tf_deploy in the main repository (with their dependencies). Bazel
-//     already knows which packages exist, so .bazelignore, deleted packages
-//     and nested workspaces need no handling here. A .tf file outside every
-//     rule, a versions.tf included, is not locked against. Libraries from
-//     other repositories (tf_modules' or another Bazel module's) count too,
-//     but only in the directories they serve: a fetched module's examples
-//     don't, a submodule called with `//<subdir>` does.
-//   - Each file's `terraform { required_providers { ... } }` entries are
-//     extracted, and nothing else, so resources, variables and module calls
-//     that only make sense in place never need to load.
-//   - A directory's entries are combined by provider source, never by local
-//     name: every version constraint its files put on a provider applies.
-//     Two tf_deploys of one package, each with its own srcs, may each
-//     require the same provider, and pin can't tell (and needn't) which
-//     file is whose. One module requiring a name twice is the build's error
-//     to report, not pin's.
-//   - Providers the root module pins with tf_providers.provider tags
-//     (--exclude-source) are left out: the lock mustn't pin them too. When
-//     that leaves nothing, the lock is written empty (header only), so a
-//     provider moved from the lock to a tag stops conflicting with it.
-//   - A scratch configuration is generated with one child module per
-//     directory, so tofu combines the constraints exactly as it would for
-//     nested modules: a versions.tf's exact pins decide the versions, and
-//     without one tofu picks the newest version every constraint accepts.
-//   - `tofu get` + `tofu providers lock` run there, from scratch: `providers
-//     lock` keeps an existing lock's versions and has no -upgrade. The new
-//     lock is copied over the old one.
+// Locking proceeds in order:
+//   - `bazel query` lists the .tf, .tf.json, .tofu and .tofu.json files of
+//     every tf_library, tf_deploy and tf_test in the main repository and their
+//     transitive tf_library deps. Bazel's package graph handles .bazelignore,
+//     deleted packages and nested workspaces automatically. Any .tf file
+//     outside Bazel rules, including a top-level versions.tf that no target
+//     lists, is ignored. Libraries from external repositories count only in
+//     the directories they serve (see library.serves), leaving uncalled
+//     examples out.
+//   - Only `terraform { required_providers { ... } }` blocks are extracted, so
+//     resources, variables and module calls never need to evaluate out of
+//     context.
+//   - Within each directory, entries are combined by canonical provider
+//     source rather than local name. Separate root modules in one package,
+//     such as two tf_deploy targets with distinct srcs, each contribute all of
+//     their constraints. Duplicate local names within one module are caught at
+//     build time instead.
+//   - Providers excluded via --exclude-source are dropped. When that leaves
+//     nothing, pin writes an empty lock containing only tofu's header comment
+//     without running tofu, so a provider moved from the lock to a tag stops
+//     conflicting with it.
+//   - Otherwise pin writes a scratch configuration in a temporary directory
+//     with one child module per directory. OpenTofu combines the constraints
+//     as it would for nested modules: exact pins in a versions.tf decide the
+//     versions, and without one OpenTofu picks the newest version every
+//     constraint accepts.
+//   - `tofu get` and `tofu providers lock` run in that scratch directory with
+//     no existing lock, since `tofu providers lock` keeps versions from an
+//     existing lock and has no -upgrade flag. The resulting lock replaces
+//     <workspace>/<lock-dir>/.terraform.lock.hcl.
 //
-// When the constraints can't all be met, tofu's error doesn't say where they
-// came from, so pin lists them by provider and directory.
+// Progress and errors go to stderr. When `tofu providers lock` fails, OpenTofu
+// does not report which module contributed each constraint, so pin prints
+// every directory's constraints by provider. When `bazel query` fails other
+// than with partial-result exit code 3, or when `tofu get` or
+// `tofu providers lock` exits non-zero, pin exits with that subprocess's exit
+// code. Unrecognised or malformed flags exit 2, and other errors exit 1.
 package main
 
 import (
@@ -81,15 +100,15 @@ func main() {
 	}
 }
 
-// emptyLock is a .terraform.lock.hcl that pins nothing, as tofu writes one:
-// its header comment and no provider blocks.
+// emptyLock is the header-only .terraform.lock.hcl tofu writes when nothing is
+// locked.
 const emptyLock = "# This file is maintained automatically by \"tofu init\".\n" +
 	"# Manual edits may be lost in future updates.\n"
 
-// module is the requirements found in one directory: one per provider
-// source, in source order (see requirements).
+// module holds one directory's merged provider requirements, sorted by source
+// (see requirements).
 type module struct {
-	Dir  string // workspace-relative ("" for the workspace root), or `@<repo>//<dir>`
+	Dir  string // workspace-relative with "" for the workspace root, or @<repo>//<dir>
 	Reqs []tfconfig.Requirement
 }
 
@@ -140,9 +159,9 @@ func run(workspace, lockDir, tofu, bazel string, defaultPlatforms, excludedSourc
 		}
 		// Every requirement is on a provider the root module tags: the lock
 		// has nothing to pin, and a stale entry left in it would conflict
-		// with the tag (the extension fails that provider's fetch until the
-		// lock no longer names it). Write the lock tofu would: its header
-		// and no providers.
+		// with the tag because the extension fails that provider's fetch
+		// until the lock no longer names it. Write tofu's header with no
+		// providers.
 		if err := os.WriteFile(dst, []byte(emptyLock), 0o644); err != nil {
 			return err
 		}
@@ -188,7 +207,7 @@ func run(workspace, lockDir, tofu, bazel string, defaultPlatforms, excludedSourc
 	return nil
 }
 
-// withoutSources drops the requirements on the given `<namespace>/<name>`
+// withoutSources drops the requirements on the given <namespace>/<name>
 // sources. Sources compare as tofu does: case-insensitively, with the default
 // registry host optional.
 func withoutSources(reqs []tfconfig.Requirement, sources []string) []tfconfig.Requirement {
@@ -207,15 +226,15 @@ func withoutSources(reqs []tfconfig.Requirement, sources []string) []tfconfig.Re
 	return kept
 }
 
-// requirements is what the files of one directory require: one requirement
-// per provider source, sorted by source, carrying every distinct version
-// constraint the files put on that provider, joined with ", " (tofu's "and").
+// requirements returns what one directory's files require: one Requirement per
+// provider source, sorted by source, joining distinct version constraints with
+// ", ", OpenTofu's AND operator.
 //
-// The files needn't be one module: two tf_deploys of a package, each with
-// its own srcs, may both require a provider under one local name, with the
-// same source or with different ones (issue #99). So nothing is keyed by
-// local name here. What a local name does decide is what an `_override`
-// file's entry replaces: every earlier entry of its name, as in a module.
+// The files need not belong to one module: two tf_deploy targets in a package,
+// each with its own srcs, may require providers under the same local name with
+// the same or different sources (issue #99). Entries are therefore grouped by
+// source rather than local name. Local names matter only for _override
+// files, where an override entry replaces every earlier entry of its name.
 func requirements(files []string) ([]tfconfig.Requirement, error) {
 	declared, err := tfconfig.ReadRequirements(files)
 	if err != nil {
@@ -251,11 +270,12 @@ func requirements(files []string) ([]tfconfig.Requirement, error) {
 	return reqs, nil
 }
 
-// localNames gives each of a scratch module's requirements a local name of
-// its own: the provider's type (`null` for `registry.opentofu.org/hashicorp/null`),
-// numbered when two sources share one (`aws`, `aws-2`). The names only have
-// to be unique, and ones tofu accepts (letters, digits and dashes, so no
-// underscore): a lock records sources.
+// localNames gives each requirement in a scratch module a unique local name
+// derived from the provider type, such as null for
+// registry.opentofu.org/hashicorp/null, numbering collisions as aws-2 and so
+// on. OpenTofu accepts only letters, digits and non-leading, non-trailing
+// dashes in local names, so underscores are invalid; the lock file itself
+// records provider sources rather than local names.
 func localNames(reqs []tfconfig.Requirement) []string {
 	names := make([]string, len(reqs))
 	used := map[string]bool{}
@@ -288,8 +308,9 @@ func hasPlatformArg(args []string) bool {
 	return false
 }
 
-// rootRules is every tf_library, tf_deploy and tf_test in the main repository
-// (their underlying rules are `_tf_library`, `tf_deploy_rule` and `_tf_test`).
+// rootRules matches every tf_library, tf_deploy and tf_test in the main
+// repository via their underlying rules _tf_library, tf_deploy_rule and
+// _tf_test.
 const rootRules = `kind("^(_tf_library|tf_deploy_rule|_tf_test) rule$", //...)`
 
 // configQuery lists the configuration files of those rules, including those
@@ -309,28 +330,24 @@ const testQuery = `filter("\.(tftest|tofutest)\.(hcl|json)$", kind("source file"
 // produced results despite errors.
 const queryPartialExitCode = 3
 
-// queryConfigFiles asks Bazel for the configuration files of every tf_library
-// and tf_deploy in the main repository, and of the libraries they depend on,
-// grouped by directory: workspace-relative ("" for the workspace root) in the
-// main repository, `@<repo>//<dir>` in others. The paths are absolute.
+// queryConfigFiles asks Bazel for the configuration files of every tf_library,
+// tf_deploy and tf_test in the main repository and their transitive tf_library
+// deps. It returns absolute file paths grouped by directory:
+// workspace-relative with "" for the workspace root in the main repository,
+// and @<repo>//<dir> in external repositories.
 //
-// Every file in the main repository counts. A library from another
-// repository may hold files it doesn't serve: a module tf_modules fetched has
-// every file of its repository as data, examples requiring providers of
-// their own included. Its files count only in the directories
-// tfconfig.ModuleDirs gives for it: its own, those under its `modules/`, and
-// the submodules outside `modules/` that the files counted so far call with
-// `//<subdir>` (resolved as the modules manifest resolves a call: the dep
-// whose module_source matches, the most specific winning), which may call
-// others.
-// A module that a `run` block of a tf_test's test file loads counts as such a
-// call from the root module; the tests themselves hold no required_providers.
+// Every file in the main repository counts. A library from another repository
+// may include unserved files in its data, such as examples in a fetched
+// module. Its files count only in the directories it serves (see
+// library.serves), expanding iteratively as counted files and tf_test `run`
+// blocks call external submodules with //<subdir> (see lookup). Test files
+// hold no required_providers themselves.
 //
-// The query runs with --keep_going because `deps()` also follows each
-// rule's `providers` into @tf_providers, which can't load before they are
-// locked: before the first pin, `@tf_providers//<ns>/<name>` has no package,
-// and a lock entry that can't be used makes its provider's repo fail when
-// fetched. Neither has .tf files to find, and pin is how both are fixed.
+// The query runs with --keep_going because deps() also follows each rule's
+// providers into @tf_providers, which cannot load before providers are locked:
+// before the first pin @tf_providers//<ns>/<name> has no package, and an
+// unusable lock entry makes its provider's repo fail when fetched. Neither has
+// .tf files to find, and pin is how both are fixed.
 func queryConfigFiles(bazel, workspace string, log io.Writer) (map[string][]string, error) {
 	targets, err := query(bazel, workspace, configQuery+" + "+libraryQuery+" + "+testQuery, log)
 	if err != nil {
@@ -429,15 +446,15 @@ func newLibrary(t target) *library {
 }
 
 // serves lists the directories, relative to the repository, whose files the
-// library serves (tfconfig.ModuleDirs).
+// library serves (see tfconfig.ModuleDirs).
 //
 // A library with no configuration in its own directory and no module_source
 // serves none. It is an aggregate of deps, which serve theirs: nothing
-// outside its repository can call into it, and a `modules/` directory below
-// its package is other libraries', whose examples must not reach the lock
-// through it. With a module_source it is a bundle: callers reach its
-// subdirectories with `//<subdir>`, which the manifest tool resolves, so
-// those and its `modules/` are served like any module's (issue #123).
+// outside its repository can call into it, and a modules/ directory below its
+// package is other libraries', whose examples must not reach the lock through
+// it. With a module_source it is a bundle: callers reach its subdirectories
+// with //<subdir>, which the manifest tool resolves, so those and its
+// modules/ are served like any module's (issue #123).
 func (l *library) serves() ([]string, error) {
 	if l.ModuleSource == "" {
 		own, err := tfconfig.ConfigFiles(filepath.Join(l.root, filepath.FromSlash(l.Package)))
@@ -453,10 +470,10 @@ func (l *library) serves() ([]string, error) {
 }
 
 // lookup finds the library whose module_source provides a call to source and
-// the subdirectory of the library's own that the call uses ("" for the
-// library's own). When several match, the most specific wins
-// (tfconfig.BestMatch), as in the modules manifest: a submodule's own
-// library beats its parent's.
+// the subdirectory of the library's own that the call uses, or "" for the
+// library's own directory; it returns (nil, "") when none matches. When
+// several match, the most specific wins (see tfconfig.BestMatch), as in the
+// modules manifest, so a submodule's own library beats its parent's.
 func lookup(libraries []*library, source string) (*library, string) {
 	var candidates []*library
 	var sources []string
@@ -504,8 +521,8 @@ func query(bazel, workspace, expr string, log io.Writer) ([]target, error) {
 	return parseTargets(out)
 }
 
-// queryTarget is a target as `--output=streamed_jsonproto` prints it (a
-// `Target` of Bazel's query protocol, in JSON): the fields pin reads.
+// queryTarget holds the fields pin reads from a `bazel query
+// --output=streamed_jsonproto` Target JSON object.
 type queryTarget struct {
 	Type string `json:"type"`
 	Rule *struct {
@@ -600,7 +617,7 @@ func moduleNames(children []module) []string {
 // writeScratch writes the configuration that `providers lock` runs against:
 // each directory's requirements in a child module of its own, so tofu
 // combines them exactly as it would for nested modules. A child's local
-// names are made up (localNames).
+// names are made up (see localNames).
 func writeScratch(scratch string, children []module) error {
 	rootDoc := map[string]any{}
 	calls := map[string]any{}

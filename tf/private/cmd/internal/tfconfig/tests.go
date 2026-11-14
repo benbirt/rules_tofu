@@ -12,8 +12,8 @@ import (
 )
 
 // testExts are the extensions of the files `tofu test` reads. Since OpenTofu
-// 1.8, a `.tofutest.hcl` (or `.tofutest.json`) file shadows the `.tftest.hcl`
-// (`.tftest.json`) file of the same name, as `.tofu` shadows `.tf`.
+// 1.8, a .tofutest.hcl or .tofutest.json file shadows the .tftest.hcl or
+// .tftest.json file of the same name, as .tofu shadows .tf.
 var testExts = []string{".tofutest.hcl", ".tftest.hcl", ".tofutest.json", ".tftest.json"}
 
 // testExt returns name's test file extension, or "" if it isn't a test file.
@@ -79,13 +79,13 @@ func TestFiles(dir string) ([]string, error) {
 }
 
 // TestRunKey is the key under which `tofu init` records the module a `run`
-// block loads in `.terraform/modules/modules.json`: `test.`, then the test
-// file's path relative to the root module with `/` as `.`, then the run's
-// name. Only a `.tftest.hcl` extension is dropped, as tofu's buildTestModules
-// (internal/configs/config_build.go) drops only that one; the other test
-// extensions stay in the key. `tests/helper.tftest.hcl` with `run "setup"`
-// gives `test.tests.helper.setup`; `tests/helper.tofutest.hcl` gives
-// `test.tests.helper.tofutest.hcl.setup`.
+// block loads in .terraform/modules/modules.json: "test.", then the test
+// file's path relative to the root module with "/" as ".", then the run's
+// name. Only a .tftest.hcl extension is dropped, as tofu's buildTestModules
+// in internal/configs/config_build.go drops only that one; the other test
+// extensions stay in the key. tests/helper.tftest.hcl with `run "setup"`
+// gives test.tests.helper.setup; tests/helper.tofutest.hcl gives
+// test.tests.helper.tofutest.hcl.setup.
 func TestRunKey(relFile, run string) string {
 	stem := strings.TrimSuffix(filepath.ToSlash(relFile), ".tftest.hcl")
 	return "test." + strings.ReplaceAll(stem, "/", ".") + "." + run
@@ -99,8 +99,9 @@ var (
 // ReadTestCalls parses the `module` block of each `run` block of files, test
 // files that `tofu test` reads (see EffectiveTests). Each is returned as a
 // Call named after its run, whose Source is the module the run loads in
-// place of the configuration under test and whose Range names the test file.
-// Two runs of one name in a file are an error, as in tofu.
+// place of the configuration under test and whose Range locates the source
+// attribute, sorted by file name and byte offset. Two runs of one name in a
+// file, or a `module` block without a literal source, return an error.
 func ReadTestCalls(files []string) ([]Call, error) {
 	parser := hclparse.NewParser()
 	var calls []Call

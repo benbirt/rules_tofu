@@ -1,61 +1,69 @@
-// Command modules writes the `.terraform/modules/modules.json` manifest for a
-// materialized work tree: the record `tofu init` keeps of every module call it
-// has installed. With the manifest in place, `tofu init -get=false` installs
-// nothing and fetches nothing, and still checks each call's `source` and
-// `version` against it.
+// Command modules writes the .terraform/modules/modules.json manifest for a
+// materialised work tree, the record `tofu init` keeps of installed module
+// calls. With the manifest in place, `tofu init -get=false` fetches and
+// installs nothing and still checks each call's source and version against it.
 //
-// It is invoked from a Bazel build action by tf_library and tf_deploy.
-// Inputs:
-//   - --work-tree=<path>: the work tree root.
-//   - --root=<dir>: the root module's work-tree-relative directory.
-//   - --modules=<path>: a JSON object {modules, packages}. `modules` lists
-//     the tf_library deps that set `module_source`, each {label, source,
-//     version, dir, direct}, where `dir` is the library's work-tree-relative
-//     directory, and the library being built itself when it sets one (never
-//     `direct`), since a module may call its own address with `//<subdir>`;
-//     `packages` is the work-tree-relative directory of every tf_library
-//     package in deps, transitively.
-//   - --provider=<address>: the canonical address of a provider in the rule's
-//     plugin tree (`registry.opentofu.org/hashicorp/aws`), repeatable.
-//   - --test-dir=<dir>: for tf_test, the test files' directory relative to the
-//     root module ("." for the root module's own). The module each `run`
-//     block of the test files there, and in the root module's directory,
-//     loads is recorded under the key tofu gives it (`test.<file>.<run>`)
-//     and walked like a call from the root module.
-//   - --label=<label>: the target being built, for error messages.
-//   - --out=<path>: the manifest to write.
+// It runs as a Bazel build action for tf_library, tf_deploy and tf_test.
 //
-// Starting at the root module, it reads every `module` block. A local source
-// (`./` or `../`) is a directory of the work tree. Any other source must be
-// the `module_source` of one of the deps, or that plus `//<subdir>`. Every
-// call is recorded, local ones included, since -get=false installs none, and
-// the walk continues into the called module.
+// Flags:
+//   - --work-tree=<path>: work tree root, required.
+//   - --root=<dir>: root module directory relative to --work-tree, or "" for
+//     the workspace root package.
+//   - --modules=<path>: required JSON file with fields modules and packages.
+//     modules lists tf_library deps that set module_source, each with label,
+//     source, version, work-tree-relative dir and direct. When the library
+//     being built sets module_source, it appears too with direct false so its
+//     files can call its own address with //<subdir>. packages lists the
+//     work-tree-relative directory of every transitive tf_library package in
+//     deps.
+//   - --provider=<address>: canonical <host>/<namespace>/<name> address of a
+//     provider in the rule's plugin tree, repeatable.
+//   - --test-dir=<dir>: for tf_test, the test directory relative to --root, or
+//     "." for --root itself. Each `run` block's module in test files in --root
+//     and in --test-dir is recorded under tfconfig.TestRunKey and walked like
+//     a call from the root module.
+//   - --label=<label>: target label for diagnostics, required.
+//   - --out=<path>: manifest path to write, required.
 //
-// It fails when a call's source is provided by no dep, when a direct dep is
-// used by no call, when two deps claim the same source, when a module_source
-// call lands in a directory with no configuration files, and when module
-// calls form a cycle.
+// Starting at --root, modules walks every `module` block and any test `run`
+// modules and writes {"Modules":[...]} sorted by Key to --out. Local calls are
+// recorded too, since `tofu init -get=false` installs none.
 //
-// It also reads each module's `required_providers` and fails when one names a
-// provider that no --provider supplies, since `tofu init -plugin-dir` would
-// fail to find it, naming the `@tf_providers//<namespace>/<name>` to add to
-// the rule's `providers`. A tf_library carries the providers its own
-// `required_providers` name, but a submodule that callers reach with
-// `//<subdir>` outside `modules/` is read only by them: its library is
-// generated when the module is fetched, which can't know which `//<subdir>`
-// callers will use, so its providers are the callers' to list. Built-in
-// providers (`terraform.io/builtin/`) need no plugin and are skipped.
+// It rejects the build when:
+//   - a local source starting with ./, ../, .\ or ..\ leaves the work tree,
+//     crosses into or out of external/<repo> or names a directory absent from
+//     the work tree;
+//   - a non-local source matches no dep (see tfconfig.BestMatch), matches a
+//     registry dep that omits module_version or lands in a directory with no
+//     configuration files;
+//   - two deps claim the same normalised module_source;
+//   - module calls form a cycle;
+//   - a direct dep is used by no call;
+//   - a walked module's required_providers names a provider that no
+//     --provider supplies, since `tofu init -plugin-dir` would fail to find
+//     it.
 //
-// A direct dep counts as used only when the root's own configuration calls
-// it: the root module, or a local module in the root's own package. A
-// directory belongs to the package nearest above it, as in Bazel, so a local
-// call into another library's package leaves the root's configuration; calls
-// from there are that library's business and use none of the root's direct
-// deps. A local call into a package uses the deps with module_source there,
-// and the deps in the root's own package are used, since their files are part
-// of the root module. A call by module_source that lands in the root's own
-// package (the library calling a submodule of its own by address) stays in
-// the root's configuration like a local one.
+// Missing-provider errors name the @tf_providers//<namespace>/<name> label to
+// add to the rule's providers. Built-in providers under terraform.io/builtin/
+// and opentofu.org/builtin/ need no plugin and are skipped. A tf_library
+// carries the providers listed on it and its deps, checked from its own root
+// module; for a fetched module, modscan populates that list from its served
+// directories. Neither reads //<subdir> paths outside modules/ that only
+// callers reach (issue #76), so callers must list those providers themselves.
+//
+// A direct dep counts as used only when the root's own configuration calls it:
+// the root module, or a local module in the root's own package. Deps in the
+// root's own package are always used, since their files are part of the root
+// module. Each directory belongs to the deepest entry of packages or --root at
+// or above it, matching Bazel's package boundaries. A local call into another
+// library's package marks any module_source deps in that package used and
+// leaves the root's configuration, since calls from there belong to that
+// library's own deps. A module_source call that lands in the root's own
+// package stays in the root's configuration like a local call.
+//
+// Unrecognised or malformed flags exit 2. Missing required flags, unreadable
+// or invalid JSON or HCL, I/O errors or any failed check print
+// rules_tofu: <error> to stderr and exit 1.
 package main
 
 import (
@@ -144,7 +152,8 @@ type Manifest struct {
 }
 
 // Record is one installed module call. Key is the dot-separated path of call
-// names from the root (which is ""), Dir is relative to the root module.
+// names from the root, or "" for the root itself; Dir is slash-separated and
+// relative to the root module.
 type Record struct {
 	Key     string `json:"Key"`
 	Source  string `json:"Source"`
@@ -165,12 +174,11 @@ func build(workTree, root, label string, deps []dep, packages []string, provided
 	return buildManifest(workTree, root, label, deps, packages, provided, "")
 }
 
-// buildManifest writes the manifest for the root module at root. testDir is
-// "" for a rule with no test files, else the directory of the test files
-// relative to the root module ("." for the root module's own directory): the
-// module each `run` block of the test files there, and of those in the root
-// module's directory, loads is recorded too, as `tofu init` records it, and
-// walked like any other call made from the root module.
+// buildManifest constructs the manifest for the root module at root in
+// workTree. testDir is "" for a rule with no test files, or the test
+// directory relative to root, with "." meaning root itself. When testDir is
+// non-empty, each `run` block's module in test files in root and in testDir
+// is recorded as `tofu init` records it and walked like a call from root.
 func buildManifest(workTree, root, label string, deps []dep, packages []string, provided []string, testDir string) (*Manifest, error) {
 	bySource := map[string]*dep{}
 	var all []*dep
@@ -312,10 +320,9 @@ func buildManifest(workTree, root, label string, deps []dep, packages []string, 
 		return nil
 	}
 	// A root module with no file at or below its directory has no directory
-	// in the work tree (and one with no files at all, no work tree). It is
-	// an empty module, as it would be were the directory there: nothing to
-	// read, and no reason to fail (issue #119). Anything else in the way of
-	// reading it is still an error.
+	// in the work tree, and one with no files at all has no work tree. Treat
+	// it as an empty module, as when the directory exists (issue #119); any
+	// other stat error is still reported.
 	switch _, err := os.Stat(filepath.Join(workTree, filepath.FromSlash(root))); {
 	case errors.Is(err, fs.ErrNotExist):
 	case err != nil:
@@ -363,7 +370,7 @@ func buildManifest(workTree, root, label string, deps []dep, packages []string, 
 }
 
 // testRun is the module a test file's `run` block loads, under the key tofu
-// records it by (tfconfig.TestRunKey).
+// records it by (see tfconfig.TestRunKey).
 type testRun struct {
 	key string
 	tfconfig.Call
@@ -434,7 +441,7 @@ func missingProviders(label string, missing []requirement) error {
 // which a provider address may leave out.
 var defaultProviderHost = regaddr.DefaultProviderRegistryHost.String()
 
-// isBuiltin reports whether a provider (by canonical address) is built into
+// isBuiltin reports whether canonical provider address provider is built into
 // tofu, so that it needs no plugin.
 func isBuiltin(provider string) bool {
 	p, err := regaddr.ParseProviderSource(provider)
@@ -476,7 +483,7 @@ func within(dir, ancestor string) bool {
 	return ancestor == "" || dir == ancestor || strings.HasPrefix(dir, ancestor+"/")
 }
 
-// rootDir maps the work tree root ("") to ".", for filepath.Rel.
+// rootDir maps the work tree root "" to ".", for filepath.Rel.
 func rootDir(dir string) string {
 	if dir == "" {
 		return "."
@@ -497,12 +504,12 @@ func moduleName(key string) string {
 	return fmt.Sprintf("module %q", key)
 }
 
-// checkProvided checks the directory a module_source call lands in: dir, the
-// subdirectory subdir ("" for the dep's own) of the dep's directory. It must
-// hold configuration files, as tofu requires of a module it installs from a
-// remote source: a dep's data brings directories with none along (a
-// glob(["**"]) includes docs), and a dep with none in its own directory has
-// no directory in the work tree at all.
+// checkProvided checks dir, which is subdir within a dep's directory, or ""
+// for the dep's own directory. It must hold configuration files, as tofu
+// requires of a module installed from a remote source. A dep's data can bring
+// directories without configuration along, since a glob(["**"]) includes
+// docs, and a dep with no files in its own directory has no directory in the
+// work tree at all.
 func checkProvided(workTree, dir, subdir string) error {
 	if tfconfig.HasConfig(filepath.Join(workTree, filepath.FromSlash(dir))) {
 		return nil
@@ -536,7 +543,8 @@ func checkLocal(workTree, parent, child string) error {
 }
 
 // repoOf is the Bazel repository a work-tree directory belongs to: "" for the
-// main repository, else the name under `external/`.
+// main repository, the name under external/ for external repositories or "/"
+// for external itself so ../external never matches the main repository.
 func repoOf(dir string) string {
 	rest, ok := strings.CutPrefix(dir, "external/")
 	if !ok {
@@ -551,8 +559,8 @@ func repoOf(dir string) string {
 
 // lookup finds the dep providing source and the subdirectory of the dep's
 // directory that the call uses. When several deps match, the most specific
-// wins (tfconfig.BestMatch), so a submodule's own library takes precedence
-// over the module containing it.
+// wins (see tfconfig.BestMatch), so a submodule's own library takes
+// precedence over the module containing it.
 func lookup(deps []*dep, source string) (*dep, string) {
 	sources := make([]string, len(deps))
 	for i, d := range deps {

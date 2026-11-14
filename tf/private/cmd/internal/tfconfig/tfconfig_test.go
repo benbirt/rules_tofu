@@ -99,8 +99,8 @@ resource "null_resource" "x" {
 }
 
 // ReadRequirements is ReadRequiredProviders without the merging: every entry
-// as written, primary files first, with what pin needs to combine them
-// itself (two root modules may share a directory, issue #99).
+// as written, primary files first, with what pin needs to combine them itself
+// when two root modules share a directory (issue #99).
 func TestReadRequirements(t *testing.T) {
 	dir := t.TempDir()
 	for name, content := range map[string]string{
@@ -209,10 +209,10 @@ func TestConfigFiles_TofuShadowsTf(t *testing.T) {
 	}
 }
 
-// tofu passes over a file whose name starts with a dot (checked on 1.12.0: a
-// directory holding only `.hidden.tf` is "an empty directory" to init, and
-// validates whatever the file says), so such a file is no configuration, and
-// a directory named like one never was.
+// OpenTofu ignores dotfiles and directories whose names end in configuration
+// or test extensions. Checked on OpenTofu 1.12.0: `tofu init` treats a
+// directory holding only .hidden.tf as "an empty directory", and
+// `tofu validate` ignores the file's contents.
 func TestConfigFiles_IgnoresDotfilesAndDirectories(t *testing.T) {
 	dir := t.TempDir()
 	writeFiles(t, dir, map[string]string{
@@ -298,8 +298,8 @@ func TestReadCalls_Tofu(t *testing.T) {
 	}
 }
 
-// pin hands ReadRequirements (which ReadRequiredProviders reads through) the
-// files Bazel lists, both halves of a shadowed pair included; the `.tf` one
+// pin hands ReadRequirements, which ReadRequiredProviders reads through, the
+// files Bazel lists, both halves of a shadowed pair included; the .tf one
 // must not count.
 func TestReadRequiredProviders_TofuShadowsTf(t *testing.T) {
 	dir := t.TempDir()
@@ -321,9 +321,9 @@ func TestReadRequiredProviders_TofuShadowsTf(t *testing.T) {
 }
 
 // ModuleDirs lists the module's directory, the configured directories under
-// its modules/, the called directories that hold configuration, and what
-// local calls reach, backslash paths included; a call out of the repository
-// is ignored, and examples count only when called.
+// its modules/, the called directories that hold configuration and what local
+// calls reach, backslash paths included; a call out of the repository is
+// ignored, and examples count only when called.
 func TestModuleDirs(t *testing.T) {
 	repo := t.TempDir()
 	for name, content := range map[string]string{

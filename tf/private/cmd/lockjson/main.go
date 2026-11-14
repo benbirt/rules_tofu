@@ -1,23 +1,29 @@
-// Command lockjson reads a .terraform.lock.hcl and prints its provider
-// entries as JSON, for the tf_providers module extension (from_lock).
+// Command lockjson reads a .terraform.lock.hcl file and prints its provider
+// entries as JSON for the tf_providers module extension's from_lock tag.
 //
-// A module extension can't run anything Bazel builds, so this is compiled
-// with rules_go's host Go SDK by the repository rule in
+// A module extension cannot run anything Bazel builds, so this tool is
+// compiled with rules_go's host Go SDK by the repository rule in
 // //tf/private:host_tools.bzl, as Gazelle builds its own helpers. It parses
-// the file, and checks each entry's address the way tofu does when it reads
-// a lock (OpenTofu's depsfile package, with its registry-address library):
-// the address must be a full `hostname/namespace/name`, lockable (not a
-// built-in or legacy provider) and written in its canonical, normalised
-// form. What else an entry must contain to be usable is decided by
-// //tf/providers:lock.bzl, where it can be unit-tested.
+// the file and checks each entry's address the way tofu does when reading a
+// lock in OpenTofu's depsfile package: the address must be a full
+// hostname/namespace/name, must not be a built-in or legacy provider and
+// must be written in its canonical normalised form. What else an entry must
+// contain to be usable is decided by //tf/providers:lock.bzl, where it can be
+// unit-tested.
 //
-// Usage: lockjson <path>. On success it prints
+// Usage:
+//
+//	lockjson <.terraform.lock.hcl>
+//
+// On success it prints:
 //
 //	{"providers": [{"address": "...", "host": "...", "namespace": "...",
 //	                "name": "...", "version": "...", "hashes": ["..."]}, ...]}
 //
-// On a syntax error or an invalid address it prints the diagnostics to
-// stderr and exits 1.
+// The providers slice and each hashes slice encode as [], never null, and
+// constraints and unknown HCL attributes or blocks are omitted. It exits 2
+// unless given a single argument. On an I/O error, invalid HCL or an invalid
+// provider address it writes the error to stderr and exits 1.
 package main
 
 import (
@@ -40,6 +46,7 @@ type lockFile struct {
 	Remain    hcl.Body   `hcl:",remain"`
 }
 
+// provider is a single provider block in .terraform.lock.hcl.
 type provider struct {
 	Address     string    `hcl:"address,label" json:"address"`
 	Version     string    `hcl:"version,optional" json:"version"`
@@ -70,8 +77,8 @@ func main() {
 	}
 }
 
-// convert parses src (named filename in messages) and writes its providers
-// to w as JSON.
+// convert parses src, using filename in messages, and writes its providers to
+// w as JSON.
 func convert(src []byte, filename string, w io.Writer) error {
 	file, diags := hclparse.NewParser().ParseHCL(src, filename)
 	if diags.HasErrors() {
@@ -97,9 +104,9 @@ func convert(src []byte, filename string, w io.Writer) error {
 }
 
 // parseAddress checks p.Address as OpenTofu's lock reader does and fills in
-// its parts. The rules, and the messages, are OpenTofu's
-// (decodeProviderLockFromHCL in internal/depsfile): a lock is written by
-// tofu, so an address it would refuse is an error here too.
+// its parts. The rules and messages match decodeProviderLockFromHCL in
+// OpenTofu's internal/depsfile: a lock is written by tofu, so an address it
+// would refuse is an error here too.
 func (p *provider) parseAddress() hcl.Diagnostics {
 	invalid := func(summary, detail string) hcl.Diagnostics {
 		return hcl.Diagnostics{{

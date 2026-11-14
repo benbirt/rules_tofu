@@ -10,16 +10,17 @@ import (
 	"github.com/benbirt/rules_tofu/tf/private/cmd/internal/tfconfig"
 )
 
-// runTest is `--command=test`: `tofu test` for a tf_test target, run as a
-// Bazel test, so --state-dir and --output-root play no part.
+// runTest implements --command=test: `tofu test` for a tf_test target, run as
+// a Bazel test, so --state-dir and --output-root play no part.
 //
-// The work tree is copied into $TEST_TMPDIR first: the runfiles tree is
-// Bazel's, and tofu writes `.terraform/` and the lock beside the
-// configuration. The provider plugin tree is read in place. Init runs with
-// -backend=false: `tofu test` keeps state in memory and ignores backend and
-// cloud blocks, so a backend is never contacted. When a run's destroy fails,
-// tofu writes the resources it couldn't remove to `errored_test.tfstate` and
-// still exits 0, so that file fails the test and is kept with its outputs.
+// The work tree is copied into TEST_TMPDIR, or a temporary directory when
+// unset, because the runfiles tree is Bazel's and tofu writes .terraform/ and
+// the lock beside the configuration. The provider plugin tree is read in
+// place when present. Init runs with -backend=false: `tofu test` keeps state
+// in memory and ignores backend and cloud blocks, so no backend is contacted.
+// When a run's destroy fails, tofu writes the resources it could not remove to
+// errored_test.tfstate and still exits 0; runTest fails the test on that file
+// and copies it to TEST_UNDECLARED_OUTPUTS_DIR when set.
 func runTest(extraArgs []string) error {
 	scratch := os.Getenv("TEST_TMPDIR")
 	if scratch == "" {
@@ -39,7 +40,7 @@ func runTest(extraArgs []string) error {
 	}
 	// The root module's directory, which the work tree lacks when no file
 	// is at or below it: an empty module, as in the run directory of a
-	// deploy (rundir.go).
+	// deploy (see rundir.go).
 	cwd := filepath.Join(copyRoot, filepath.FromSlash(*packageDir))
 	if err := os.MkdirAll(cwd, 0o755); err != nil {
 		return fmt.Errorf("work-tree cwd %s: %w", cwd, err)
@@ -118,7 +119,7 @@ func runTest(extraArgs []string) error {
 
 // copyTree copies the directory src to dst, following symlinks to files: a
 // work tree is a tree of symlinks to the sources, and the copy is what tofu
-// writes in. A symlink to a directory is an error (errDirectoryLink).
+// writes in. A symlink to a directory is an error (see errDirectoryLink).
 func copyTree(src, dst string) error {
 	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
