@@ -108,12 +108,13 @@ Then `bazel shutdown` so the new startup flags take effect.
   graph, watched lock file, `versions.bzl` table and recorded facts, so copying
   repo specs into `MODULE.bazel.lock` pins nothing extra, and returning only
   active facts lets stale entries drop out.
-- Validate extension facts on read (`valid_cached_sha256s`, `valid_fact` and
-  `_cached_registry`), treating any bad fact as a cache miss to re-resolve and
-  never calling `fail()` (issue #96). `MODULE.bazel.lock` is a checked-in file
-  that can outlive the code that wrote it or be mis-merged. `_cached_registry`
-  rejects both a registry fact whose pin doesn't match its location and a
-  well-formed fact stored under a key of the other kind.
+- Validate extension facts on read (`valid_cached_sha256s`, `valid_fact`,
+  `_cached` and `_cached_registry`), treating any bad fact as a cache miss to
+  re-resolve and never calling `fail()` (issue #96). `MODULE.bazel.lock` is a
+  checked-in file that can outlive the code that wrote it or be mis-merged.
+  `valid_fact` rejects a well-formed fact stored under a key of the other kind.
+  `_cached_registry` also rejects a registry fact whose `location` fails to
+  parse or doesn't match its `commit` or `sha256` pin.
 - End download repository rules (`_tofu_download`, `_tf_provider_download`,
   `_tf_module_repo`) with `return reproducible(repository_ctx)`
   (`tf/private/repo_metadata.bzl`). Bazel 9's repository contents cache then
@@ -130,11 +131,13 @@ Then `bazel shutdown` so the new startup flags take effect.
 - Always create the `@tf_providers` hub so dependencies' `use_repo` calls
   resolve even when the root declares no providers.
 - Treat a missing lock file as empty so `pin` can write the first one.
-- Turn an unusable lock entry into a `_tf_provider_download` with `error` set
-  so it fails on fetch, never a `fail()` in the extension. Failing the
-  extension would also break `@tf_providers//:pin`. Only a malformed lock file
-  fails the extension: bad HCL, an invalid provider address, a duplicate
-  provider block, or an entry missing `version`.
+- Turn an unusable lock entry or a root `provider` tag conflicting with a lock
+  entry (`_lock_provider_repo`, issue #85) into a `_tf_provider_download` with
+  `error` set so it fails on fetch, never a `fail()` in the extension. Failing
+  the extension would also break `@tf_providers//:pin`. When reading an
+  existing lock file, only a malformed file fails `_read_lock`: bad HCL, an
+  invalid provider address, a duplicate provider block, or an entry missing
+  `version`.
 - Parse lock files with `lockjson` (`tf/private/cmd/lockjson`, `gohcl`) and
   OpenTofu's registry-address library, and validate entry fields in
   `lock_entries` (`tf/providers/lock.bzl`). Don't write Starlark HCL or
@@ -238,11 +241,14 @@ Then `bazel shutdown` so the new startup flags take effect.
   external libraries build standalone.
 - Reject relative `source` paths that cross repository boundaries, because
   canonical repository names belong to Bazel.
-- In `tf_modules` (`tf/modules/extensions.bzl`; `README.md`, "Modules"),
-  generate `:_rules_tofu_module` with `//:_rules_tofu_files` in `data`, aliased
-  at `@tf_modules//<path>`, and keep per-module repositories private. Those
-  target names avoid colliding with upstream files named `files` or `module`
-  (issue #61).
+- In `tf_modules` (`tf/modules/extensions.bzl`; `README.md`, "Modules"):
+  - Generate `:_rules_tofu_module` aliased at `@tf_modules//<path>`, and keep
+    per-module repositories private.
+  - When `subdir` is non-empty, generate a root `//:_rules_tofu_files`
+    filegroup and add it to `data` so relative paths leading outside `subdir`
+    resolve.
+  - Keep the `_rules_tofu_` prefix on both target names so they never collide
+    with upstream files named `files` or `module` (issue #61).
 - Reach submodules via `//<subdir>` rather than separate hub targets: listing
   submodule targets on the hub would require fetching every module up front.
 - Pin every `tf_modules` fetch so bumping a module updates `MODULE.bazel.lock`
@@ -380,16 +386,18 @@ Then `bazel shutdown` so the new startup flags take effect.
   `auto_tfvars_in_data`). Any library directory is a root when validated or
   tested by `tf_test`, where auto-loaded files bypass duplicate-key checks and
   can override `vars` (issue #93). Keep `_EXCLUDED` in `tf_modules`, which
-  strips upstream `terraform.tfvars` and `*.auto.tfvars` files, in step.
+  strips those files from upstream modules, in step.
 - Pass `var_files` explicitly with `-var-file`, rejecting only the reserved
   `rules_tofu.auto.tfvars.json` (`auto_tfvars_conflict`).
 - Read a `tf_test`'s root module directory from `TfLibraryInfo.package_dir` or
   `TfDeployInfo.package_dir`, never `ctx.attr.module.label`. That allows tests
   to live in a `tests/` sub-package and works when `module` is an `alias`
   (issue #87; `examples/hello/tests:greet_alias_test`).
-- Require all `tf_test` `srcs` to share one directory at or below that root,
-  and pass `-test-directory` to `tofu init -get=false`, validate and test alike
-  (`test_dirs_split`).
+- Require all `tf_test` `srcs` to share one directory at or below that root
+  (`test_dirs_split`), because `tofu test` reads the root directory and at most
+  one test directory. When `srcs` sit in a subdirectory, pass `-test-directory`
+  to `tofu init -get=false`, validate and test alike; omit it when they sit in
+  the root directory, which `tofu` reads anyway.
 - Keep `--command=test` (`tf/private/cmd/runner/test.go`) separate from the
   deploy runner path and ephemeral-state gate:
   - Copy the work tree into `$TEST_TMPDIR` and take neither `--state-dir` nor

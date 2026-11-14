@@ -191,7 +191,7 @@ version source, and BCR patches the release version into the published
 Published BCR versions are immutable; to retract one, yank it via
 `.bcr/metadata.template.json`.
 
-`release_prep.sh` excludes everything that loads a `dev_dependency` from the
-source archive: `examples/`, `tests/`, `tools/`, `docs/`, `toolchain/tests/`,
-`tf/providers/tests/` and `tf/modules/tests/`. It keeps `e2e/` and `.bcr/` for
-BCR presubmit.
+`release_prep.sh` excludes `docs/`, which only feeds the docs archive, and
+every package that references a `dev_dependency`: `examples/`, `tests/`,
+`tools/`, `toolchain/tests/`, `tf/providers/tests/` and `tf/modules/tests/`.
+It keeps `e2e/` and `.bcr/` for BCR presubmit.
