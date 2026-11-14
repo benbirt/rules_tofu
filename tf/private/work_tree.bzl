@@ -2,10 +2,10 @@
 
 A work tree is the directory under `bazel-bin/<pkg>/<name>.work/` into which a
 rule symlinks its configuration, data, test and `var_files` inputs at their
-`work_tree_path`, plus `rules_tofu.auto.tfvars.json` when `vars` are present.
-Main-repository files keep their workspace-relative path and external files go
-under `external/<repo>/...`. The vendored provider packages live in a sibling
-directory, `bazel-bin/<pkg>/<name>.plugins/`, so
+`work_tree_path`, plus `rules_tofu.auto.tfvars.json` for a `tf_deploy` or a
+`tf_test` of one. Main-repository files keep their workspace-relative path and
+external files go under `external/<repo>/...`. The vendored provider packages
+live in a sibling directory, `bazel-bin/<pkg>/<name>.plugins/`, so
 `tofu init -plugin-dir=<plugin_tree>` reads them in place without copying large
 provider packages into the work tree.
 
@@ -57,8 +57,10 @@ def check_no_auto_tfvars(ctx, files):
     OpenTofu automatically reads `terraform.tfvars[.json]` and
     `*.auto.tfvars[.json]` from the root module's directory, and `tofu test`
     reads them from the test directory too. One in `data` would set variables
-    alongside `vars` and `var_files`, overriding `vars` if its name sorts after
-    `rules_tofu.auto.tfvars.json`, and the duplicate-key check never reads it.
+    alongside `vars` and `var_files` without being read by the duplicate-key
+    check. An `*.auto.tfvars[.json]` sorting after
+    `rules_tofu.auto.tfvars.json` or an auto-loaded file in a test
+    subdirectory would also override `vars`.
     `var_files` are not checked here: `tofu` loads them via `-var-file` in the
     order the rule chooses, and a deploy's are checked against `vars` and each
     other.
@@ -154,7 +156,8 @@ def materialize(ctx, entries, tfvars_content = None, tfvars_dir = None):
     Args:
       ctx: rule ctx.
       entries: list[struct(path, file)] of work-tree paths (`work_tree_path`) and Files.
-      tfvars_content: optional string; None for work trees with no `vars`.
+      tfvars_content: optional string; None for a `tf_library` or a `tf_test`
+          of one.
       tfvars_dir: work-tree directory for `rules_tofu.auto.tfvars.json`,
           defaulting to the rule's own package. A `tf_test` passes the tested
           deploy's package directory.

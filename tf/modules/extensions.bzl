@@ -87,10 +87,10 @@ _MODULE_TARGET = "_rules_tofu_module"
 _FILES_TARGET = "_rules_tofu_files"
 
 # Files excluded from the module's globs: VCS metadata, any committed
-# .terraform directory or .terraform.lock.hcl, the generated root BUILD.bazel
-# and auto-loaded variable files, which a module's root or examples often
-# carry and tf_library rejects in data. tofu reads none of them from a called
-# module.
+# .terraform directory or .terraform.lock.hcl, each package's generated
+# BUILD.bazel and auto-loaded variable files, which a module's root or
+# examples often carry and tf_library rejects in data. tofu reads none of
+# them from a called module.
 _EXCLUDED = [
     "**/.git/**",
     "**/.terraform/**",

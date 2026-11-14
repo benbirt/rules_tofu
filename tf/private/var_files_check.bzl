@@ -2,8 +2,8 @@
 
 `tf_deploy` calls `tf_check_var_files` and attaches its stamp to the target's
 outputs, so any duplicate key across `vars` and `var_files` or between two
-`var_files` entries fails in a cached `bazel build` action rather than at
-`bazel run` time.
+`var_files` entries fails in a cached `bazel build` action rather than silently
+overriding earlier values at `bazel run` time.
 """
 
 DUPCHECK_BIN = "//tf/private/cmd/dupcheck:dupcheck"
