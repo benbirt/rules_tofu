@@ -30,6 +30,14 @@ use_repo(tofu, "tofu_toolchains")
 
 register_toolchains("@tofu_toolchains//:all")
 
+# A dependency whose library is a bundle: a `module_source`, and
+# configuration only in a subdirectory that `//:floor` calls.
+bazel_dep(name = "bundle_module", version = "0.0.0")
+local_path_override(
+    module_name = "bundle_module",
+    path = "bundle_module",
+)
+
 tf_providers = use_extension("@rules_tofu//tf/providers:extensions.bzl", "tf_providers")
 tf_providers.from_lock()
 use_repo(tf_providers, "tf_providers")

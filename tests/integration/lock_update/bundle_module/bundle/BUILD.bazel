@@ -1,0 +1,13 @@
+load("@rules_tofu//tf:defs.bzl", "tf_library")
+
+# A bundle: nothing in the package's own directory, and a submodule that
+# callers reach with `//sub`. `pin` must lock what `sub` requires although
+# the library's own directory holds no configuration (issue #123).
+tf_library(
+    name = "bundle",
+    srcs = ["sub/main.tf"],
+    fmt_test = False,
+    module_source = "github.com/acme/bundle",
+    providers = ["@tf_providers//hashicorp/null"],
+    visibility = ["//visibility:public"],
+)

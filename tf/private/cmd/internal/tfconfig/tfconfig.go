@@ -430,20 +430,31 @@ func LiteralString(expr hcl.Expression) (string, bool) {
 }
 
 // ModuleDirs lists the directories that a module's library serves, relative
-// to repo: the module's own (moduleDir, relative to repo, "" for its root),
-// every directory below its `modules/` (the standard place for submodules)
-// that holds configuration, each directory of called (relative to repo) that
-// holds configuration, and every directory those reach with local `source`
-// paths that stay inside repo. Examples and tests are left out unless
-// something calls them: called is for the submodules outside `modules/` that
-// callers reach with `//<subdir>`, which only the callers know. The result is
-// sorted.
+// to repo: the module's own (moduleDir, relative to repo, "" for its root)
+// if it holds configuration, every directory below its `modules/` (the
+// standard place for submodules) that holds configuration, each directory of
+// called (relative to repo) that holds configuration, and every directory
+// those reach with local `source` paths that stay inside repo. Examples and
+// tests are left out unless something calls them: called is for the
+// submodules outside `modules/` that callers reach with `//<subdir>`, which
+// only the callers know. The result is sorted.
+//
+// A module whose own directory holds no configuration is a bundle of
+// submodules, and serves the rest all the same (issue #123). Whether such a
+// module is acceptable is the caller's to say: modscan refuses a fetched
+// one, pin locks what a library in another repository serves.
 func ModuleDirs(repo, moduleDir string, called ...string) ([]string, error) {
 	moduleDir = strings.Trim(moduleDir, "/")
-	if !HasConfig(filepath.Join(repo, filepath.FromSlash(moduleDir))) {
-		return nil, fmt.Errorf("%q holds no .tf, .tf.json, .tofu or .tofu.json files", "/"+moduleDir)
+	// The directory itself must be there and readable: a module that isn't
+	// is an error, not a bundle.
+	own, err := ConfigFiles(filepath.Join(repo, filepath.FromSlash(moduleDir)))
+	if err != nil {
+		return nil, err
 	}
-	pending := []string{moduleDir}
+	var pending []string
+	if len(own) > 0 {
+		pending = append(pending, moduleDir)
+	}
 	for _, dir := range called {
 		dir = strings.Trim(dir, "/")
 		// A called directory without configuration fails the caller's build,
@@ -453,7 +464,7 @@ func ModuleDirs(repo, moduleDir string, called ...string) ([]string, error) {
 		}
 	}
 	submodules := filepath.Join(repo, filepath.FromSlash(path.Join(moduleDir, "modules")))
-	err := filepath.WalkDir(submodules, func(p string, d fs.DirEntry, err error) error {
+	err = filepath.WalkDir(submodules, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			if os.IsNotExist(err) {
 				return filepath.SkipAll

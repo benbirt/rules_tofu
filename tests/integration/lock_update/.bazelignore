@@ -1,0 +1,5 @@
+# The dependency module below is a repository of its own (MODULE.bazel names
+# it with local_path_override). Without this its packages would also be
+# packages of this workspace, and `pin` would count the bundle's files as
+# the root module's own rather than as a library's from another repository.
+bundle_module
