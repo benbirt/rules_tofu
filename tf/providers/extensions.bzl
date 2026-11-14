@@ -498,9 +498,9 @@ _provider_tag = tag_class(
                   "`<os>_<arch>`: `linux_amd64`, `linux_arm64`, `linux_386`, `darwin_amd64`, " +
                   "`darwin_arm64`, `windows_amd64` or `windows_386`. When set, every listed " +
                   "platform is downloaded when the provider repository is fetched, so list " +
-                  "every platform you build on. A digest that differs from " +
-                  "`registry.opentofu.org` fails the fetch and reports the registry's value. " +
-                  "When unset, the registry's digests for whichever of `linux_amd64`, " +
+                  "every platform you build on. Without `url_template`, a digest that differs " +
+                  "from `registry.opentofu.org` fails the fetch and reports the registry's " +
+                  "value. When unset, the registry's digests for whichever of `linux_amd64`, " +
                   "`linux_arm64`, `darwin_amd64`, `darwin_arm64` and `windows_amd64` are " +
                   "published are recorded in `MODULE.bazel.lock`.",
         ),
@@ -508,8 +508,8 @@ _provider_tag = tag_class(
             doc = "Optional mirror URL template for provider zips, using `{namespace}`, " +
                   "`{name}`, `{version}`, `{os}` and `{arch}` placeholders, e.g. " +
                   "`\"https://github.com/PostHog/terraform-provider-posthog/releases/download/v{version}/terraform-provider-{name}_{version}_{os}_{arch}.zip\"`. " +
-                  "Requires `sha256`; the provider is still addressed under " +
-                  "`registry.opentofu.org`.",
+                  "Requires `sha256` and skips querying `registry.opentofu.org`, though the " +
+                  "provider is still addressed under `registry.opentofu.org`.",
         ),
     },
 )
@@ -530,10 +530,10 @@ _from_lock_tag = tag_class(
           "ignored.",
     attrs = {
         "lock": attr.label(
-            doc = "Label of `.terraform.lock.hcl` in the main repository; defaults to " +
-                  "`//:.terraform.lock.hcl`. The file need not exist before the first `pin` " +
-                  "run, but its directory must be a Bazel package with a `BUILD.bazel` or " +
-                  "`BUILD` file.",
+            doc = "Label of a file named `.terraform.lock.hcl` in the main repository, e.g. " +
+                  "`\"//infra:.terraform.lock.hcl\"`; defaults to `//:.terraform.lock.hcl`. " +
+                  "The file need not exist before the first `pin` run, but its package must " +
+                  "have a `BUILD.bazel` or `BUILD` file.",
         ),
     },
 )
@@ -797,11 +797,12 @@ recorded in `MODULE.bazel.lock`.
 
 Each provider resolves to one version across the module graph. The root module's
 lock or tag wins; otherwise an agreed version or the highest plain numeric
-`X.Y.Z` version is selected. For the winning version, `sha256` maps are merged
-across modules, and conflicting digests or `url_template` values fail analysis.
-If dependencies request different versions and any is a prerelease such as
-`2.0.0-rc1`, fetching that provider fails until the root module selects a
-version via a tag or `pin`.
+version is selected, comparing dot-separated digit components so `5.70` equals
+`5.70.0`. If dependencies request different versions and any is not plain
+numeric, such as `2.0.0-rc1` or `v1.2.3`, fetching that provider fails until
+the root module selects a version via a tag or `pin`. For the winning version,
+`sha256` maps are merged across modules, and conflicting digests or
+`url_template` values fail analysis.
 
 `from_lock` parses the lock with a Go helper compiled by `rules_go`'s host Go
 SDK, honouring `GOPROXY`, `GONOSUMDB`, `GOPRIVATE`, `GONOPROXY` and `GOSUMDB`;

@@ -141,20 +141,53 @@ def tf_library(name, srcs = None, deps = None, data = None, providers = None, mo
     workspace packages by relative paths starting with `./` or `../`, such as
     `../../infra/dns`.
 
-    Libraries in other Bazel repositories are called by literal `source`
-    strings matching `module_source`, or matching a prefix that leaves the
-    shortest `//<subdir>` suffix. Registry, `github.com/<owner>/<repo>` and
-    `git@<host>:<path>` addresses are normalised as OpenTofu parses them, query
-    parameters such as `?ref=` must match, and a library satisfies calls to its
-    own `//<subdir>`. `rules_tofu` writes `.terraform/modules/modules.json` at
-    build time and runs `tofu init -get=false`. `bazel build` fails on:
-      - a `module` call that no `tf_library` in `deps` matches;
-      - a direct `module_source` dependency that nothing calls;
-      - two libraries in `deps` with the same `module_source`;
-      - a registry `module_source` with an empty or incompatible `module_version`;
-      - a called directory with no configuration files;
-      - a module call cycle;
-      - a `required_providers` entry missing from `providers`.
+    Module calls are resolved offline at build time:
+      - Every `module` block's `source` must be a literal string; `_override`
+        files replace `source` on matching `module` blocks as OpenTofu merges
+        them.
+      - Relative paths starting with `./` or `../` resolve within the caller's
+        own Bazel repository in the work tree and cannot cross into another
+        Bazel repository.
+      - Other `source` strings match the `tf_library` in `deps` whose
+        normalised `module_source` equals the address or leaves the shortest
+        `//<subdir>` suffix, so a submodule's own library takes precedence over
+        its parent module's library.
+      - Registry addresses normalise to lower-case
+        `<host>/<namespace>/<name>/<system>`, defaulting `<host>` to
+        `registry.opentofu.org`.
+      - Git shorthands normalise as OpenTofu parses them:
+        `github.com/<owner>/<repo>[/<subdir>]` becomes
+        `git::https://github.com/<owner>/<repo>.git[//<subdir>]`, and
+        `git@<host>:<path>` becomes `git::ssh://git@<host>/<path>`. `?ref=`
+        must match, while `?depth=` is ignored.
+      - Archive URLs match by archive format and URL after stripping
+        `?archive=`, so `.tgz` and `?archive=tar.gz` share `tar.gz`; any other
+        query parameters must match.
+      - A library with `module_source` also satisfies calls from its own files
+        to that `module_source` with `//<subdir>`.
+
+    `rules_tofu` writes `<name>.modules.json` at build time, copies it to
+    `.terraform/modules/modules.json`, and runs `tofu init -get=false`.
+    `bazel build` fails on:
+      - A `module` block whose `source` is not a literal string or uses an
+        unsupported source type.
+      - A local `./` or `../` call to a directory outside the work tree, in
+        another Bazel repository, or absent from `deps`.
+      - A non-local `module` call that no `tf_library` in `deps` matches.
+      - A direct `module_source` dependency unused by this target's own
+        configuration. Calls inside other libraries' packages in `deps` do not
+        count, whereas a `module_source` library in this target's own package
+        or reached from it by `./` or `../` counts as used.
+      - Two libraries in `deps` with the same normalised `module_source`.
+      - A registry `module` call whose library has an empty `module_version` or
+        fails the caller's `version` constraint.
+      - A `module_source` call landing in a directory with no `.tf`,
+        `.tf.json`, `.tofu` or `.tofu.json` files. Local `./` or `../` calls
+        may target directories in the work tree that hold no configuration
+        files.
+      - A module call cycle.
+      - A `required_providers` entry missing from `providers` or `deps`, or
+        outside `registry.opentofu.org`.
     See [Modules](https://github.com/benbirt/rules_tofu#modules).
 
     Generated targets:

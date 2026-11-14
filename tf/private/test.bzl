@@ -257,7 +257,8 @@ def tf_test(name, srcs, module, deps = None, data = None, providers = None, var_
     Test files are materialised at their workspace-relative paths alongside
     `module`; directories other than `module`'s root are passed via
     `-test-directory`. Helper modules loaded by `run` blocks are recorded in
-    `.terraform/modules/modules.json` so `tofu` fetches nothing.
+    `<name>.modules.json` and installed at `.terraform/modules/modules.json` so
+    `tofu` fetches nothing.
 
     `tofu test`'s JSON event log is written to Bazel's undeclared test outputs
     as `tofu-test.json`. If a `run` block's destroy fails, `tofu test` writes
