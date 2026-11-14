@@ -102,7 +102,7 @@ tf_providers.provider(
 
 # examples/lock takes its providers from a .terraform.lock.hcl instead, which
 # Renovate and Dependabot can update. `@tf_providers//:pin` regenerates it.
-tf_providers.from_lock(lock = "//examples/lock:.terraform.lock.hcl")
+tf_providers.from_lock(lock_file = "//examples/lock:.terraform.lock.hcl")
 
 # Real modules for the examples under examples/modules:
 # - label calls cloudposse/label/null from the OpenTofu registry;

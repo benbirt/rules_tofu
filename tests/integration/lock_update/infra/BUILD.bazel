@@ -1,0 +1,3 @@
+# Holds the workspace's .terraform.lock.hcl, which `pin` writes and
+# `tf_providers.from_lock` in MODULE.bazel reads. In a package of its own, as
+# in most workspaces, so the test's Dependabot step also needs this BUILD file.

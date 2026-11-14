@@ -72,7 +72,7 @@ tf_providers.provider(
 )
 
 # The workspace lock, pinning hashicorp/null 3.2.4, for the stale_lock case.
-tf_providers.from_lock(lock = "//lock:.terraform.lock.hcl")
+tf_providers.from_lock(lock_file = "//lock:.terraform.lock.hcl")
 
 # Every provider, tagged or locked, is named through the hub.
 use_repo(tf_providers, "tf_providers")

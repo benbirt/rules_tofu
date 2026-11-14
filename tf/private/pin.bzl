@@ -21,7 +21,8 @@ def _tf_pin_impl(ctx):
             content = """\
 #!/usr/bin/env bash
 echo 'rules_tofu: the root module has no lock file to pin. Add' \\
-     '`tf_providers.from_lock()` to MODULE.bazel, then run this again.' 1>&2
+     '`tf_providers.from_lock(lock_file = "//:.terraform.lock.hcl")` to' \\
+     'MODULE.bazel, then run this again.' 1>&2
 exit 1
 """,
         )
