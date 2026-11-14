@@ -1,20 +1,18 @@
-"""OpenTofu toolchain definition.
+"""OpenTofu toolchain type, provider and rule.
 
-A `tf_deploy.<plan|apply>` runner resolves the active toolchain via
-`ctx.toolchains[TOOLCHAIN_TYPE]` and reads `TofuInfo.binary` to find the
-`tofu` executable to invoke at runtime.
+Every `rules_tofu` rule resolves `@rules_tofu//toolchain:toolchain_type` to
+obtain `TofuInfo` for the execution platform.
 """
 
 TOOLCHAIN_TYPE = "@rules_tofu//toolchain:toolchain_type"
 
 TofuInfo = provider(
-    doc = "Information about a resolved OpenTofu binary.",
+    doc = "Information about a resolved OpenTofu toolchain.",
     fields = {
         "binary": "File: the `tofu` executable.",
-        "version": "string: the OpenTofu version, e.g. \"1.12.0\".",
-        "platform_key": "string: the `<os>_<arch>` platform key the toolchain was built for. " +
-                        "Build-time `tofu init` symlinks the matching `tf_provider` " +
-                        "binary into the work tree's plugin dir using this key.",
+        "version": "string: OpenTofu version string, e.g. `\"1.12.0\"`.",
+        "platform_key": "string: `<os>_<arch>` key, e.g. `\"linux_amd64\"`, used to select " +
+                        "matching provider packages in each target's plugin tree.",
     },
 )
 
@@ -34,25 +32,24 @@ opentofu_toolchain = rule(
         "binary": attr.label(
             allow_single_file = True,
             mandatory = True,
-            doc = "The `tofu` executable.",
+            doc = "The `tofu` executable; OpenTofu 1.12 or later is required.",
         ),
         "version": attr.string(
             mandatory = True,
-            doc = "OpenTofu version this toolchain wraps, e.g. \"1.12.0\". Nothing reads it " +
-                  "to decide anything: it is for people.",
+            doc = "OpenTofu version string, e.g. `\"1.12.0\"`. Recorded on `TofuInfo` and not " +
+                  "checked by `rules_tofu`.",
         ),
         "platform_key": attr.string(
             mandatory = True,
-            doc = "The `<os>_<arch>` platform key this toolchain targets " +
-                  "(e.g. `linux_amd64`). Used by build-time `tofu init` to " +
-                  "pick the matching `tf_provider` binary.",
+            doc = "`<os>_<arch>` key, e.g. `\"linux_amd64\"`, used to select matching provider " +
+                  "packages in each target's plugin tree.",
         ),
     },
-    doc = """Bundles an OpenTofu binary for use by rules_tofu rules.
+    doc = """Wraps an OpenTofu executable as a `rules_tofu` toolchain.
 
 The `tofu` module extension declares one per downloaded release. A root module
-may declare its own, wrapping any `tofu` executable of OpenTofu 1.12 or later
-(the oldest release rules_tofu supports), and `register_toolchains` it to take
-the place of the download; see "The `tofu` binary" in the README.
+may declare its own around any OpenTofu 1.12+ executable and register it with
+`register_toolchains` to override the default download; see
+[Bringing your own binary](https://github.com/benbirt/rules_tofu#bringing-your-own-binary).
 """,
 )

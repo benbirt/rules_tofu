@@ -1,6 +1,6 @@
 load("@rules_tofu//tf:defs.bzl", "tf_deploy", "tf_library")
 
-# Both targets' `tofu test` tests are in tests/ (see tests/BUILD.bazel).
+# OpenTofu tests for both targets are in tests/BUILD.bazel.
 package(default_visibility = ["//visibility:public"])
 
 tf_library(
@@ -8,8 +8,8 @@ tf_library(
     srcs = ["main.tf"],
 )
 
-# A demo deploy: its state is disposable, so it opts in to local state under
-# bazel-bin rather than declaring a remote backend.
+# This is a demo, so it keeps disposable state under bazel-bin; a real deploy
+# declares a remote backend instead.
 tf_deploy(
     name = "hello",
     allow_ephemeral_state = True,

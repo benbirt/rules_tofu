@@ -1,21 +1,4 @@
-"""`tf_test` rule + macro: a module's OpenTofu tests (`tofu test`) as a
-Bazel test.
-
-The macro emits:
-  - `:<name>`           — the test. Building it materialises a work tree of
-                          the module under test, the test files and the
-                          helper libraries in `deps`, writes the module
-                          manifest (the module each `run` block loads
-                          included) and runs
-                          `tofu init -backend=false && tofu validate` over
-                          it with the test directory, so `bazel build`
-                          checks the test files too. Running it copies the
-                          work tree into `$TEST_TMPDIR` and runs `tofu test`
-                          there, offline, against the vendored providers.
-  - `:<name>.fmt`       — `bazel run` to reformat the test files in place.
-  - `:<name>.fmt_check` — `bazel test` that fails if they are not formatted
-                          (when `fmt_test = True`).
-"""
+"""The tf_test macro and its underlying rule."""
 
 load("//toolchain:toolchain.bzl", "TOOLCHAIN_TYPE")
 load(":fmt.bzl", _tf_fmt = "tf_fmt", _tf_fmt_check = "tf_fmt_check_test")
@@ -221,38 +204,37 @@ _tf_test = rule(
             allow_files = TEST_SRC_EXTS,
             allow_empty = False,
             mandatory = True,
-            doc = "The test files: `.tftest.hcl`, `.tofutest.hcl`, `.tftest.json` and `.tofutest.json` files, " +
-                  "all in one directory, the module's own or one below it. A `.tofutest.hcl` is read in place " +
-                  "of the `.tftest.hcl` of the same name.",
+            doc = "`.tftest.hcl`, `.tofutest.hcl`, `.tftest.json` and `.tofutest.json` files, " +
+                  "all in one directory at or below `module`'s package directory. `.tofutest.hcl` " +
+                  "and `.tofutest.json` shadow `.tftest.hcl` and `.tftest.json` of the same name.",
         ),
         "module": attr.label(
             mandatory = True,
             providers = [[TfLibraryInfo], [TfDeployInfo]],
-            doc = "The `tf_library` or `tf_deploy` under test. Its package directory is the root module " +
-                  "`tofu test` runs against; a deploy's `vars` and `var_files` are in force.",
+            doc = "The `tf_library` or `tf_deploy` under test. Its package directory is the root " +
+                  "module `tofu test` runs against; a deploy's `vars` and `var_files` apply.",
         ),
         "deps": attr.label_list(
             providers = [TfLibraryInfo],
-            doc = "Helper `tf_library` targets the test files load with `run { module { source = ... } }`, " +
-                  "by a path relative to the module's directory or by their `module_source`. Their providers " +
-                  "join the test's plugin tree.",
+            doc = "Helper `tf_library` targets loaded by `run { module { source = ... } }` blocks, " +
+                  "by a path relative to `module`'s package directory or by `module_source`.",
         ),
         "data": attr.label_list(
             allow_files = True,
-            doc = "Arbitrary files to include in the work tree, for `file()` calls in the test files or helpers. " +
-                  "Variables files that OpenTofu loads by itself (`terraform.tfvars[.json]`, " +
-                  "`*.auto.tfvars[.json]`) are rejected: list the file in `var_files`.",
+            doc = "Files placed in the work tree for `file()` and `templatefile()`. " +
+                  "`terraform.tfvars`, `terraform.tfvars.json`, `*.auto.tfvars` and " +
+                  "`*.auto.tfvars.json` are rejected; use `var_files`.",
         ),
         "providers": attr.label_list(
             providers = [TfProviderInfo],
-            doc = "Providers the test needs beyond the module's and the helpers' own, as " +
-                  "`@tf_providers//<namespace>/<name>`. A `mock_provider` still needs the provider's " +
-                  "package, for its schema.",
+            doc = "Providers needed beyond those of `module` and `deps`, as " +
+                  "`@tf_providers//<namespace>/<name>`. `mock_provider` still requires the " +
+                  "provider package for its schema.",
         ),
         "var_files": attr.label_list(
             allow_files = [".tfvars.json", ".tfvars"],
-            doc = "Variable-value files passed to `tofu test` with `-var-file`, after a deploy's own. " +
-                  "Values in the test files' `variables` blocks still win.",
+            doc = "`.tfvars` and `.tfvars.json` files passed via `-var-file` after a deploy's own " +
+                  "`vars` and `var_files`; `variables` blocks in the test files take precedence.",
         ),
         "_modules_bin": attr.label(
             default = MODULES_BIN,
@@ -266,64 +248,69 @@ _tf_test = rule(
         ),
     },
     toolchains = [TOOLCHAIN_TYPE],
-    doc = """Runs a module's OpenTofu tests (`tofu test`) as a Bazel test.
-
-The test files in `srcs` are materialised beside the module under test, at
-their workspace-relative paths, so a file in `tests/` of the module's package
-is in tofu's default test directory and a file in another subdirectory is
-passed as `-test-directory`. The module each `run` block loads is recorded
-in the module manifest, as `tofu init` records it, so nothing is fetched:
-a helper module is a `tf_library` in `deps`, reached by a path relative to
-the module's directory or by its `module_source`.
-
-Building the target runs `tofu init -backend=false && tofu validate` with
-the test directory, so a broken test file fails `bazel build`. Running it
-copies the work tree into `$TEST_TMPDIR`, runs the same offline init and
-then `tofu test`, with its JSON log in the test's undeclared outputs
-(`tofu-test.json`). A run's destroy that fails leaves `errored_test.tfstate`
-behind and tofu still exits 0; the test fails and keeps the file with its
-outputs.
-
-Use the `tf_test` macro, which adds the `block-network` tag unless
-`allow_network = True`, and the `.fmt` and `.fmt_check` targets.
-""",
+    doc = "Underlying rule for `tf_test`. Use the macro.",
 )
 
 def tf_test(name, srcs, module, deps = None, data = None, providers = None, var_files = None, allow_network = False, fmt_test = True, **kwargs):
-    """A module's OpenTofu tests (`tofu test`) as a Bazel test.
+    """Runs `tofu test` over a module's test files as a Bazel test.
 
-    Always generates:
-      - `:<name>`     — the test. Building it validates the module with the
-                        test files; `bazel test` runs `tofu test` offline
-                        against the vendored providers.
-      - `:<name>.fmt` — `bazel run` to reformat the test files in place.
+    Test files are materialised at their workspace-relative paths alongside
+    `module`; directories other than `module`'s root are passed via
+    `-test-directory`. Helper modules loaded by `run` blocks are recorded in
+    `.terraform/modules/modules.json` so `tofu` fetches nothing.
 
-    When `fmt_test=True` (the default):
-      - `:<name>.fmt_check` — `bazel test` that fails if the test files are
-                              not formatted.
+    `tofu test`'s JSON event log is written to Bazel's undeclared test outputs
+    as `tofu-test.json`. If a `run` block's destroy fails, `tofu test` writes
+    `errored_test.tfstate` and exits 0; `tf_test` fails the test and copies
+    that file into undeclared outputs. Pass extra CLI flags via `--test_arg`.
+    See [Tests](https://github.com/benbirt/rules_tofu#tests).
+
+    Generated targets:
+      - `:<name>`: `bazel build` validates `module` and `srcs`; `bazel test`
+        copies the work tree into `$TEST_TMPDIR` and runs
+        `tofu init -backend=false` and `tofu test` offline against the vendored
+        providers.
+      - `:<name>.fmt`: `bazel run` target that reformats main-repository
+        `.tftest.hcl` and `.tofutest.hcl` source files in `srcs` in place.
+      - `:<name>.fmt_check`: `bazel test` target, emitted when
+        `fmt_test = True`, that checks formatting of `.tftest.hcl` and
+        `.tofutest.hcl` files in `srcs`, including generated and external
+        files.
 
     Args:
-      name: target name.
-      srcs: the `.tftest.hcl`, `.tofutest.hcl`, `.tftest.json` and
-          `.tofutest.json` files, all in one directory: the module's own or
-          one below it (`tests/` is tofu's default).
-      module: the `tf_library` or `tf_deploy` under test.
-      deps: helper `tf_library` targets that `run { module { ... } }` blocks
-          load.
-      data: arbitrary files to include in the work tree. Variables files
-          that OpenTofu loads by itself (`terraform.tfvars[.json]`,
-          `*.auto.tfvars[.json]`) are rejected: list the file in `var_files`.
-      providers: providers the test needs beyond the module's and helpers'
-          own (`@tf_providers//<namespace>/<name>`).
-      var_files: `.tfvars` or `.tfvars.json` files passed with `-var-file`.
-      allow_network: whether the tests may reach the network. By default the
-          test carries Bazel's `block-network` tag, so a `run` that applies
-          real infrastructure fails fast in the sandbox while plans and
-          mocked applies run offline; with True it carries `external` and
-          `requires-network` instead, so it is never cached.
-      fmt_test: whether to emit a `:<name>.fmt_check` test target.
-      **kwargs: forwarded to the underlying rule (visibility, tags, testonly,
-          size, timeout, ...).
+      name: Target name.
+      srcs: `.tftest.hcl`, `.tofutest.hcl`, `.tftest.json` and
+          `.tofutest.json` files, all in one directory at or below `module`'s
+          package directory, such as `module`'s own directory, `tests/` or
+          `tests/unit`. `.tofutest.hcl` and `.tofutest.json` shadow
+          `.tftest.hcl` and `.tftest.json` of the same name.
+      module: The `tf_library` or `tf_deploy` under test; may be an `alias`.
+      deps: Helper `tf_library` targets loaded by
+          `run { module { source = ... } }` blocks, reached by a path relative
+          to `module`'s package directory or by `module_source`.
+      data: Files placed in the work tree at their workspace-relative paths for
+          `file()` and `templatefile()`. `terraform.tfvars`,
+          `terraform.tfvars.json`, `*.auto.tfvars` and `*.auto.tfvars.json` are
+          rejected; use `var_files`.
+      providers: `@tf_providers//<namespace>/<name>` targets needed beyond
+          those of `module` and `deps`. `mock_provider` still needs the
+          provider package for its schema. If `module`'s root directory has no
+          configuration files, `tofu init` installs no providers; add a file
+          declaring `required_providers` there when helper modules require
+          providers.
+      var_files: `.tfvars` or `.tfvars.json` files passed via `-var-file` after
+          a tested `tf_deploy`'s `vars` and `var_files`. Entries here may
+          override keys from the deploy, and `variables` blocks in test files
+          take precedence over both.
+      allow_network: Allow tests to access the network. Defaults to `False`,
+          adding Bazel's `block-network` tag so accidental cloud calls fail in
+          the sandbox while plans and mocked applies run offline. When `True`,
+          the target carries `external` and `requires-network` and is never
+          cached.
+      fmt_test: Emit `:<name>.fmt_check` when `True`; defaults to `True`.
+      **kwargs: Forwarded to the underlying rules. `visibility` and `testonly`
+          apply to all generated targets; other test attributes such as `tags`,
+          `size` and `timeout` apply to `:<name>`.
     """
     common_kwargs = {}
     for forwarded in ("visibility", "testonly"):

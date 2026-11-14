@@ -20,9 +20,8 @@ variable "bucket_name" {
 provider "aws" {
   region = var.region
 
-  # Real credentials are resolved at plan/apply time via the usual AWS
-  # provider lookup (env vars, shared credentials file, etc.). `tofu validate`
-  # — which rules_tofu runs at `bazel build` time — does not contact AWS.
+  # AWS credentials are read at plan and apply time from the usual provider
+  # sources. `bazel build` runs `tofu validate` offline without contacting AWS.
 }
 
 resource "aws_s3_bucket" "example" {
