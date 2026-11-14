@@ -85,9 +85,10 @@ if grep -q -F -- '-json-into' <<<"${help}"; then
 else
   # Not even an empty file: the runner must not have passed the flag.
   [[ ! -e "${outputs_dir}/tofu-test.json" ]] || fail "tofu ${TOFU_VERSION} has no -json-into, yet the test left a tofu-test.json"
+  # A zip that can't be listed must not read as one without the log.
   zipped=""
   if [[ -f "${outputs_dir}/outputs.zip" ]]; then
-    zipped="$(unzip -Z1 "${outputs_dir}/outputs.zip" 2>/dev/null || true)"
+    zipped="$(unzip -Z1 "${outputs_dir}/outputs.zip")" || fail "couldn't list ${outputs_dir}/outputs.zip"
   fi
   if grep -q -x -F 'tofu-test.json' <<<"${zipped}"; then
     fail "tofu ${TOFU_VERSION} has no -json-into, yet the test's outputs.zip holds a tofu-test.json"

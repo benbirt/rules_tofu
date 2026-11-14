@@ -60,10 +60,14 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
 - `bazel build //examples/hello:hello //examples/aws:s3_bucket //examples/gcp:storage_bucket`
 - `bazel build //examples/hello:greet_lib //examples/aws:s3_bucket_lib //examples/gcp:storage_bucket_lib`
 - `bazel test //examples/...:all` (fmt_check tests only)
-- Go unit tests outside Bazel: `go test ./tf/private/cmd/...`. That does
-  not test the runner: its tests drive the built binary (`-runner=<path>`),
-  skip without it, and still report `ok`. They run under
-  `bazel test //tf/private/cmd/runner:runner_test`, which needs network.
+- Go unit tests outside Bazel: `go test ./tf/private/cmd/...`. That skips
+  the tests of `runner` and `dupcheck`, which drive the built binaries
+  (`-runner=<path>`, `-dupcheck=<path>`) and still report `ok` without
+  them. Build each binary to run its tests:
+  - `go build -o /tmp/runner ./tf/private/cmd/runner && go test ./tf/private/cmd/runner -runner=/tmp/runner`
+  - `go build -o /tmp/dupcheck ./tf/private/cmd/dupcheck && go test ./tf/private/cmd/dupcheck -dupcheck=/tmp/dupcheck`
+
+  (In Bazel: `bazel test //tf/private/cmd/...`, which needs network.)
 
 ## Where things are documented
 
