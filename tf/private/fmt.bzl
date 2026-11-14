@@ -1,7 +1,7 @@
 """Internal `tofu fmt` rules used by the `tf_library`, `tf_deploy` and `tf_test` macros.
 
-Not part of `//tf:defs.bzl`: the macros emit `:<name>.fmt` whenever `srcs` is
-non-empty, and `:<name>.fmt_check` when `fmt_test = True`.
+Not part of `//tf:defs.bzl`: when `srcs` is non-empty, the macros emit
+`:<name>.fmt` and, if `fmt_test = True`, `:<name>.fmt_check`.
 
 Both rules name the files they format or check, never a directory:
 `tofu fmt <dir>` reads only the directory's own files, so a `srcs` entry in

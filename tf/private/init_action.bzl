@@ -3,11 +3,10 @@
 `tf_library`, `tf_deploy` and `tf_test` call `tf_init_validate` and include its
 stamp in `DefaultInfo.files`, so `bazel build :foo` runs cached validation.
 
-`-plugin-dir` always points at the sibling plugin tree from
-`materialize_plugin_tree`, keeping `tofu init` offline whether or not
-`required_providers` is declared. When no providers are in scope, the plugin
-tree has no files and the action points `-plugin-dir` at an empty scratch
-directory instead.
+`-plugin-dir` is always passed, keeping `tofu init` offline whether or not
+`required_providers` is declared. It points at the sibling plugin tree from
+`materialize_plugin_tree`, or at an empty scratch directory when no providers
+are in scope and the plugin tree has no files.
 
 When providers come from `tf_providers.from_lock` and the root module has
 configuration files, the workspace's lock is copied next to the configuration
