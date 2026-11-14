@@ -9,8 +9,8 @@ tf_library(
     providers = ["@tf_providers//hashicorp/null"],
 )
 
-# This is a demo whose state is disposable, so it opts in to local state under
-# bazel-bin rather than declaring a remote backend.
+# This is a demo, so it keeps disposable state under bazel-bin; a real deploy
+# declares a remote backend instead.
 tf_deploy(
     name = "greeting",
     allow_ephemeral_state = True,

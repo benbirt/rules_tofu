@@ -1,23 +1,23 @@
-"""The repository holding rules_tofu's host tools, for module extensions and
-repository rules.
+"""Repository rule compiling `rules_tofu`'s Go host tools for module extensions and repository rules.
 
-Some of rules_tofu's work happens before anything can be built:
-`tf_providers.from_lock` reads the lock while its module extension is
-evaluated, and `tf_modules.module` describes a fetched module while its
-repository rule runs. Neither can run a Bazel target, so this repository rule
-compiles the Go tools they need with rules_go's host Go SDK, as Gazelle's
-`go_repository_tools` does for its own helpers:
+Some work runs before Bazel can build any target: `tf_providers.from_lock`
+reads the lock during module-extension evaluation, and `tf_modules` parses
+module source addresses during extension evaluation and scans fetched modules in
+its repository rule. Neither can run a Bazel target, so this repository rule
+compiles the Go tools they need with `rules_go`'s host Go SDK, as Gazelle's
+`go_repository_tools` does:
 
-- `lockjson` (//tf/private/cmd/lockjson) parses a `.terraform.lock.hcl`;
-- `modscan` (//tf/private/cmd/modscan) lists a module's required providers
-  and module calls.
+- `lockjson` (`//tf/private/cmd/lockjson`) parses `.terraform.lock.hcl`.
+- `modscan` (`//tf/private/cmd/modscan`) parses module `source` strings and
+  lists a module's `required_providers` and module calls.
 
-Their Go module dependencies (`hashicorp/hcl`, OpenTofu's `registry-address`
-and those they need) are downloaded through the Go module proxy (`GOPROXY`
-is honoured) and checked against rules_tofu's `go.sum`.
+Go module dependencies such as `hashicorp/hcl` and OpenTofu's
+`registry-address` are downloaded via the Go module proxy, honouring `GOPROXY`,
+`GONOSUMDB`, `GOPRIVATE`, `GONOPROXY` and `GOSUMDB`, and verified against
+`rules_tofu`'s `go.sum`.
 
-The repository is fetched the first time a tool is needed, and kept until
-rules_tofu's sources or the Go SDK change.
+The repository is fetched on first use and re-fetched only when its watched Go
+sources, the host Go SDK or those Go proxy environment variables change.
 """
 
 load("@go_host_compatible_sdk_label//:defs.bzl", "HOST_COMPATIBLE_SDK")
@@ -44,8 +44,8 @@ def _host_tools_impl(repository_ctx):
     module_dir = repository_ctx.path(Label("//:go.mod")).dirname
     scratch = repository_ctx.path("go")
 
-    # Everything else (PATH, GOPROXY, proxies, certificates) is inherited
-    # from the environment, as for `go` run by hand.
+    # Other variables such as PATH, GOPROXY, HTTP proxies and certificate paths
+    # are inherited from the environment, as when running `go` by hand.
     env = {
         "CGO_ENABLED": "0",
         "GOCACHE": str(scratch.get_child("cache")),

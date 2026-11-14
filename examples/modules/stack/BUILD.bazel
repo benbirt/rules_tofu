@@ -1,10 +1,13 @@
 load("@rules_tofu//tf:defs.bzl", "tf_deploy")
 
-# main.tf calls the `modules/stack` submodule of cloudposse/stack-config/yaml,
-# a real module from the OpenTofu registry. That submodule calls another
-# registry module, cloudposse/label/null, which MODULE.bazel declares too. The
-# providers stack-config requires come with its library, so none is listed
-# here; //examples/lock pins them.
+# main.tf calls the modules/stack submodule of cloudposse/stack-config/yaml,
+# which in turn calls cloudposse/label/null. MODULE.bazel declares both modules
+# with tf_modules.module. The providers that stack-config requires propagate
+# from @tf_modules//cloudposse/stack-config/yaml automatically. MODULE.bazel
+# pins those providers through examples/lock/.terraform.lock.hcl.
+#
+# This is a demo, so it keeps disposable state under bazel-bin; a real deploy
+# declares a remote backend instead.
 tf_deploy(
     name = "stack",
     srcs = ["main.tf"],

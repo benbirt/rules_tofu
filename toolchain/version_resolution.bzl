@@ -47,7 +47,7 @@ def resolve_version(requests, default):
         return struct(version = default, error = None)
 
     # With no root tag, honour the dependencies' explicit need rather than
-    # quietly substituting the default -- but only where they agree.
+    # quietly substituting the default, but only where they agree.
     requesters = {}
     for r in requests:
         requesters[r.version] = requesters.get(r.version, []) + [r.module_name]

@@ -16,9 +16,8 @@ provider "posthog" {
   host       = "https://eu.posthog.com"
   project_id = var.project_id
 
-  # The personal API key is read from POSTHOG_API_KEY at plan/apply time.
-  # `tofu validate`, which rules_tofu runs at `bazel build` time, doesn't
-  # contact PostHog.
+  # POSTHOG_API_KEY is read at plan and apply time. `bazel build` runs
+  # `tofu validate` offline without contacting PostHog.
 }
 
 resource "posthog_dashboard" "example" {

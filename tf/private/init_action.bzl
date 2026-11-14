@@ -1,25 +1,23 @@
-"""Build-time `tofu init -backend=false` + `tofu validate` for a materialized
-work tree.
+"""Build-time `tofu init -backend=false` and `tofu validate` for a materialised work tree.
 
-The deploy rule (and the library's auto-emitted validating deploy) call
-`tf_init_validate(...)` to attach a validate stamp to the rule's outputs, so
-`bazel build :foo` exercises validation in the build graph (with caching).
+`tf_library`, `tf_deploy` and `tf_test` call `tf_init_validate` and include its
+stamp in `DefaultInfo.files`, so `bazel build :foo` runs cached validation.
 
-`-plugin-dir` is always passed (pointing at the sibling plugin tree that
-`materialize_plugin_tree(...)` declares), so init is offline regardless of
-whether `required_providers` is declared. With zero providers in scope the
-plugin tree has no files, so the action falls back to an empty directory and
-init is still a no-op for provider installation.
+`-plugin-dir` is always passed, keeping `tofu init` offline whether or not
+`required_providers` is declared. It points at the sibling plugin tree from
+`materialize_plugin_tree`, or at an empty scratch directory when no providers
+are in scope and the plugin tree has no files.
 
-When providers come from `tf_providers.from_lock`, the workspace's lock is
-copied next to the configuration (after the check that refuses a lock in
-`srcs`/`data`), so init fails when the configuration's version constraints
-no longer match it, and checks the vendored packages against its hashes.
+When providers come from `tf_providers.from_lock` and the root module has
+configuration files, the workspace's lock is copied next to the configuration
+after checking that `srcs` and `data` brought none of their own. `tofu init`
+then checks both `required_providers` constraints and the vendored packages'
+hashes against the lock.
 
 Modules are never fetched either: `.terraform/modules/modules.json` (from
-`modules_manifest` in work_tree.bzl) records where in the work tree each
-module call's files are, and `-get=false` makes init fail rather than fetch
-when a call's `source` or `version` no longer matches it.
+`modules_manifest` in `work_tree.bzl`) records where in the work tree each
+module call's files are, and `-get=false` makes `tofu init` fail rather than
+fetch when a call's `source` or `version` does not match.
 """
 
 load("//toolchain:toolchain.bzl", "TOOLCHAIN_TYPE")
@@ -29,13 +27,13 @@ def tf_init_validate(ctx, work_tree_files, work_tree_root, package_dir, plugin_t
 
     Args:
       ctx: rule ctx. Must list `TOOLCHAIN_TYPE` in `toolchains`.
-      work_tree_files: depset[File] of every materialized work tree file,
-          plus the sibling plugin tree's provider binaries (read in place via
-          `-plugin-dir`, so they must still be listed as action inputs).
+      work_tree_files: depset[File] of every materialised work tree file plus
+          the sibling plugin tree's provider packages, which are read in place
+          via `-plugin-dir` and must still be listed as action inputs.
       work_tree_root: string, exec-root-relative path to the work tree root,
           e.g. `<bin>/<pkg>/<name>.work`.
-      package_dir: string, workspace-relative directory inside the work tree
-          that tofu should cd into before running init/validate.
+      package_dir: string, work-tree-relative directory of the root module
+          passed via `-chdir`.
       plugin_tree_root: string, exec-root-relative path to the sibling plugin
           tree root, e.g. `<bin>/<pkg>/<name>.plugins`. Pinned via
           `-plugin-dir` so init runs offline.
@@ -46,7 +44,7 @@ def tf_init_validate(ctx, work_tree_files, work_tree_root, package_dir, plugin_t
       test_dir: for a `tf_test`, the test files' directory relative to
           `package_dir`, passed to init and validate as `-test-directory` so
           the test files are checked too; "" when they are in `package_dir`
-          itself, which tofu reads without being told. None for a rule that
+          itself, which `tofu` reads without being told. None for a rule that
           has no test files.
 
     Returns:
@@ -56,15 +54,14 @@ def tf_init_validate(ctx, work_tree_files, work_tree_root, package_dir, plugin_t
     stamp = ctx.actions.declare_file(ctx.label.name + ".validate.stamp")
 
     # tofu init writes `.terraform/` and `.terraform.lock.hcl` next to the
-    # config. The materialized work tree directory in the sandbox contains
-    # symlinks (Bazel-managed); to avoid any chance of conflicting with
-    # sandbox read-only enforcement on input trees, copy the work tree into
-    # a scratch dir under $TMPDIR (dereferencing symlinks) and run there.
-    # Only the (small) config tree is copied — the provider binaries live in
-    # the sibling plugin tree and are read in place via -plugin-dir, never
-    # copied. The copy is removed when the script exits: only linux-sandbox
-    # gives an action a fresh $TMPDIR, while the darwin sandbox and local
-    # execution write to the host's and clean nothing up (issue #90).
+    # config. Because the materialised work tree in the sandbox consists of
+    # Bazel-managed symlinks on read-only input trees, copy it with symlinks
+    # dereferenced into a scratch directory under $TMPDIR and run there. Only
+    # the small config tree is copied; the provider packages live in the
+    # sibling plugin tree and are read in place via -plugin-dir. Remove the
+    # scratch directory on exit: only linux-sandbox gives each action a fresh
+    # $TMPDIR, whereas darwin-sandbox and local execution share the host's and
+    # clean nothing up (issue #90).
     ctx.actions.run_shell(
         inputs = depset(direct = [tofu.binary, modules_manifest] + ([lock] if lock else []), transitive = [work_tree_files]),
         outputs = [stamp],

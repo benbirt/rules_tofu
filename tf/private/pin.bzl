@@ -1,10 +1,12 @@
 """`tf_pin` rule: `bazel run @tf_providers//:pin`.
 
-Instantiated by the `tf_providers` extension in the hub repo it creates for
-`tf_providers.from_lock`. Running it rewrites the lock with
-`tofu providers lock`, using the toolchain's tofu, against the
-`required_providers` of every `tf_library` and `tf_deploy` in the
-workspace, found with `bazel query` (see //tf/private/cmd/pin).
+Always instantiated in `@tf_providers` by the `tf_providers` extension. When
+the root module uses `tf_providers.from_lock`, running `:pin` rewrites the lock
+with `tofu providers lock` using the toolchain's `tofu` against the
+`required_providers` of the workspace's `tf_library`, `tf_deploy` and `tf_test`
+targets and their external `deps`, found with `bazel query` (see
+`//tf/private/cmd/pin`). Otherwise `:pin` explains how to enable `from_lock`
+and exits 1.
 """
 
 load("//toolchain:toolchain.bzl", "TOOLCHAIN_TYPE")

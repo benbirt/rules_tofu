@@ -1,7 +1,7 @@
 """Unit tests for `resolve_version` in //toolchain:version_resolution.bzl.
 
-These live in a subpackage rather than in //toolchain so the `@bazel_skylib`
-load -- a dev-only dependency of rules_tofu -- stays out of
+These live in a subpackage rather than in //toolchain because `@bazel_skylib`
+is a dev-only dependency of rules_tofu and must stay out of
 //toolchain:BUILD.bazel, which every downstream module loads to reach
 `:toolchain_type`. The resolution rules under test are stated in
 //toolchain:extensions.bzl.

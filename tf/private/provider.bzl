@@ -1,15 +1,14 @@
 """`tf_provider` rule.
 
-A `tf_provider` target wraps the per-platform binaries of a single
-OpenTofu/Terraform provider plugin (e.g. `hashicorp/aws` at a given version).
+A `tf_provider` target wraps the per-platform packages and optional lock file
+of one OpenTofu provider version, such as `hashicorp/aws` at `5.70.0`.
 
-It is intended to be instantiated by the `tf_providers` module
-extension (see `//tf/providers:extensions.bzl`); end users do not
-write `tf_provider(...)` rules directly. Instead, they declare the
-provider in MODULE.bazel and reference it as `@tf_providers//<namespace>/<name>`
-from a `tf_library(providers = [...])` or `tf_deploy(providers = [...])`
-attribute. The generated `tf_provider` targets are visible only to those
-`@tf_providers` aliases.
+Instantiated by the `tf_providers` module extension (see
+`//tf/providers:extensions.bzl`); users do not call `tf_provider` directly.
+Providers are pinned via `tf_providers.from_lock` or `tf_providers.provider` in
+`MODULE.bazel` and referenced as `@tf_providers//<namespace>/<name>` in the
+`providers` attribute of `tf_library`, `tf_deploy` or `tf_test`. Each generated
+`tf_provider` target is visible only to its `@tf_providers` alias.
 """
 
 load(":providers.bzl", "TfProviderInfo")
@@ -65,22 +64,25 @@ tf_provider = rule(
         "binaries": attr.label_keyed_string_dict(
             mandatory = True,
             allow_files = True,
-            doc = "Map of provider binary file -> `<os>_<arch>` platform key. " +
-                  "Each file must already live at the canonical plugin-dir path " +
-                  "`<host>/<namespace>/<name>/<version>/<os>_<arch>/<filename>` " +
-                  "relative to the work tree's plugin-dir root.",
+            doc = "Map of single-file provider binary label to `<os>_<arch>` platform key. " +
+                  "Extracted at `plugins/<address>/<version>/<os>_<arch>/<filename>` in the " +
+                  "provider repository; `materialize_plugin_tree` symlinks each binary under " +
+                  "`<os>_<arch>/` by its `basename`.",
         ),
         "package_files": attr.label_keyed_string_dict(
             allow_files = True,
-            doc = "The rest of each platform's unpacked zip (LICENSE, README...) -> " +
-                  "`<os>_<arch>` platform key, under `plugins/` like the binaries.",
+            doc = "Map of the remaining files from each platform's unpacked zip, such as " +
+                  "`LICENSE` and `README.md`, to `<os>_<arch>` platform key. Each file's " +
+                  "target name must start with `plugins/<address>/<version>/<os>_<arch>/`, " +
+                  "which is stripped to give its path inside `<os>_<arch>/`.",
         ),
         "lock": attr.label(
             allow_single_file = True,
-            doc = "The `.terraform.lock.hcl` this provider was pinned by, if any. " +
-                  "Builds copy it next to the configuration before `tofu init`.",
+            doc = "Optional `.terraform.lock.hcl` from `tf_providers.from_lock`. Copied next " +
+                  "to a root module's configuration before `tofu init` in validation, deploy " +
+                  "runners and `tf_test`.",
         ),
     },
     provides = [TfProviderInfo],
-    doc = "Wraps the per-platform binaries of a single OpenTofu/Terraform provider plugin.",
+    doc = "Wraps the per-platform packages and optional lock file of one OpenTofu provider version.",
 )

@@ -1,8 +1,7 @@
-"""Bzlmod module extension that fetches OpenTofu modules and exposes each as a
-`tf_library`, to call from HCL by its `source` without `tofu init` fetching
-anything.
+"""Bzlmod module extension that fetches OpenTofu modules for `@tf_modules`.
 
-Downstream usage in MODULE.bazel:
+Exposes external modules from registries, git repositories and archives as
+`tf_library` targets so `tofu init` never fetches modules:
 
     tf_modules = use_extension("@rules_tofu//tf/modules:extensions.bzl", "tf_modules")
     tf_modules.module(source = "terraform-aws-modules/vpc/aws", version = "5.8.1")
@@ -17,44 +16,8 @@ Downstream usage in MODULE.bazel:
     )
     use_repo(tf_modules, "tf_modules")
 
-and in a BUILD file:
-
-    tf_library(
-        name = "network",
-        srcs = ["main.tf"],
-        deps = ["@tf_modules//terraform-aws-modules/vpc/aws"],
-    )
-
-where main.tf calls the module by the same `source` (with any `version`
-constraint, which must accept the pinned version), or one of its submodules
-with `//<subdir>`.
-
-Each module is labelled through the `@tf_modules` hub: a registry module as
-`@tf_modules//<namespace>/<name>/<system>` (lower-cased, and prefixed with the
-host unless it is registry.opentofu.org), any other as
-`@tf_modules//<name>`, from the tag's `name`. Behind each alias is a private
-repository holding the module's files and a `tf_library` whose
-`module_source` is the tag's `source`.
-
-Where the files come from, and what pins them:
-
-- A **registry module** needs an exact `version`. The registry says where its
-  source is, which for registry.opentofu.org is a git commit. The location
-  and commit are recorded as facts in MODULE.bazel.lock, so the registry is
-  asked once per lockfile.
-- A **git source** is fetched with `git` at a commit: `commit` if the tag
-  sets it, else the one `?ref=` names now, which is recorded as a fact
-  (trust on first use). Either way a tag that moves later changes nothing.
-- An **archive** needs its `sha256`.
-
-The generated library carries the module's providers (its required_providers
-as `@tf_providers//<namespace>/<name>`), which the root module pins as usual,
-and depends on the modules it calls, which must be declared too: a module
-that calls an undeclared one fails when fetched, naming the tag to add (its
-calls to its own address, for a submodule, it provides itself). Each
-module has one version per build. For a registry module the root's tag wins,
-else the highest version requested; git and archive modules must be declared
-identically wherever their `name` appears.
+BUILD files then reference each module in `deps`, for example
+`@tf_modules//terraform-aws-modules/vpc/aws` or `@tf_modules//acme_vpc`.
 """
 
 load("//tf/private:fetched_tree.bzl", "walk", "within")
@@ -111,9 +74,9 @@ def _parse_sources(module_ctx, sources):
     ]
 
 # Bazel's own files in a fetched module would split it into packages of its
-# own, or, for the ignore file (which Bazel reads at the root of any
-# repository), hide directories from the module's `glob`. They're removed
-# before the module's BUILD file is written.
+# own. A .bazelignore, which Bazel reads at the root of any repository, would
+# also hide directories from the module's `glob`. They're removed before the
+# module's BUILD file is written.
 _BAZEL_FILES = [".bazelignore", "BUILD", "BUILD.bazel", "MODULE.bazel", "REPO.bazel", "WORKSPACE", "WORKSPACE.bazel"]
 
 # The generated targets: the module's library, in its directory, and, when
@@ -123,11 +86,11 @@ _BAZEL_FILES = [".bazelignore", "BUILD", "BUILD.bazel", "MODULE.bazel", "REPO.ba
 _MODULE_TARGET = "_rules_tofu_module"
 _FILES_TARGET = "_rules_tofu_files"
 
-# Files that never belong in a work tree: VCS metadata; tofu's own state and
-# lock, which a module repository may have committed; and the variables files
-# tofu loads by itself, which a module's root and its examples often carry
-# and no rule accepts as data (`check_no_auto_tfvars`). tofu reads none of
-# them from a module that is called.
+# Files excluded from the module's globs: VCS metadata, any committed
+# .terraform directory or .terraform.lock.hcl, each package's generated
+# BUILD.bazel and auto-loaded variable files, which a module's root or
+# examples often carry and tf_library rejects in data. tofu reads none of
+# them from a called module.
 _EXCLUDED = [
     "**/.git/**",
     "**/.terraform/**",
@@ -218,10 +181,10 @@ def _cached(module_ctx, key, kind):
 def _cached_registry(module_ctx, key):
     """A registry module's recorded fact and its location, as `_resolve_registry` returns them, or None.
 
-    Like any other malformed fact, one whose location can't be read, or
-    whose pin is not the kind its location needs (a commit for a git
-    repository, a digest for an archive), is a miss: the registry is asked
-    again and the lockfile's record replaced (issue #96).
+    Like any other malformed fact, one whose location can't be read or whose
+    pin does not match its location kind, a commit for git or a sha256 for an
+    archive, is treated as a miss: the registry is queried again and the
+    lockfile's record replaced (issue #96).
     """
     fact = _cached(module_ctx, key, "registry")
     if not fact:
@@ -234,17 +197,18 @@ def _cached_registry(module_ctx, key):
     return None
 
 def _tidy(repository_ctx, context):
-    """Remove what the fetched files hold that Bazel must not see.
+    """Remove files and symlinks that Bazel must not see in the fetched tree.
 
-    Bazel's own files would split the module into packages of its own. A
-    symlink stays only if it leads to a file of the module, which Bazel
-    reads as that file. Its `glob` skips a symlink to nothing, but follows
-    one to a directory and fails the package when the links lead back up to
-    an ancestor; and through a symlink out of the module, the module's files
-    would depend on the machine's.
+    Upstream Bazel files would split the module into packages or hide
+    directories via `.bazelignore`. A symlink stays only if it resolves to a
+    regular file inside the repository, which Bazel reads as that file: `glob`
+    skips dangling symlinks, follows directory symlinks and fails the package
+    if they cycle to an ancestor, while symlinks outside the repository would
+    make its contents depend on the host machine.
 
-    The module's own directory can't be a symlink then: `//<subdir>` is
-    where its library is written, so that fails, naming where the link leads.
+    If `subdir` is or lies under a directory symlink, removing that symlink
+    leaves nowhere to write `//<subdir>/BUILD.bazel`, so fetching fails naming
+    the symlink target.
     """
     root = repository_ctx.path(".")
     root_real = str(root.realpath)
@@ -440,31 +404,43 @@ _tf_modules_hub = repository_rule(
 )
 
 _module_tag = tag_class(
+    doc = "Declare an external OpenTofu module from a registry, git repository or archive " +
+          "for offline use as a `tf_library` under `@tf_modules`.",
     attrs = {
         "source": attr.string(
             mandatory = True,
-            doc = "The module's address, as HCL's `source` gives it: a registry address " +
-                  "(`[<host>/]<namespace>/<name>/<system>`), `git::<url>[//<subdir>][?ref=<ref>]`, " +
-                  "`github.com/<owner>/<repo>[//<subdir>][?ref=<ref>]`, or the URL of an archive.",
+            doc = "HCL module `source` address. Registry sources take " +
+                  "`[<host>/]<namespace>/<name>/<system>` without `//<subdir>`. Git sources " +
+                  "take `git::<url>`, `git://...`, `github.com/<owner>/<repo>` or " +
+                  "`git@<host>:<path>`, with optional `//<subdir>` and `?ref=` or `?depth=`. " +
+                  "Archive sources take `http://`, `https://` or `file://` URLs ending in " +
+                  "`.zip`, `.tar.gz`, `.tgz`, `.tar.bz2`, `.tar.tbz2`, `.tar.xz` or `.txz`, " +
+                  "or carrying `?archive=<type>`, with optional `//<subdir>`. S3 via `s3::`, " +
+                  "GCS via `gcs::`, Bitbucket via `bitbucket.org/`, Mercurial via `hg::` and " +
+                  "`X-Terraform-Get` redirects are not supported.",
         ),
         "version": attr.string(
-            doc = "For a registry module, the exact version to pin, as `X.Y.Z`, e.g. \"5.8.1\" " +
-                  "(no constraint and no prerelease suffix). Required for registry modules and " +
-                  "not allowed for other sources.",
+            doc = "Exact module version as `X.Y.Z`, e.g. `\"5.8.1\"`; constraints and " +
+                  "prereleases such as `\"1.2.0-rc1\"` are rejected. Required for registry " +
+                  "modules and disallowed for git or archive sources.",
         ),
         "name": attr.string(
-            doc = "For a git or archive source, the module's label: `@tf_modules//<name>`. " +
-                  "Required for those and not allowed for registry modules, whose label is " +
-                  "their address in lower case, `@tf_modules//<namespace>/<name>/<system>`, " +
-                  "with the host in front unless it is registry.opentofu.org.",
+            doc = "Module label under `@tf_modules//<name>`, using only ASCII letters, digits, " +
+                  "`_`, `-` and `.`. Required for git and archive sources. Disallowed for " +
+                  "registry modules, which use `@tf_modules//<namespace>/<name>/<system>` in " +
+                  "lower case, prefixed with `<host>/` for hosts other than " +
+                  "`registry.opentofu.org`, e.g. `@tf_modules//example.com/acme/vpc/aws`.",
         ),
         "commit": attr.string(
-            doc = "For a git source, the commit to fetch. If unset, the commit that `?ref=` " +
-                  "names (the default branch without one) is recorded in MODULE.bazel.lock " +
-                  "the first time, and used from then on.",
+            doc = "Full 40- or 64-character lowercase hex commit SHA to fetch for a git source; " +
+                  "abbreviated commit hashes are rejected in both `commit` and `?ref=`. When " +
+                  "unset, the commit named by `?ref=`, or `HEAD` when omitted, is resolved on " +
+                  "first fetch and recorded in `MODULE.bazel.lock`. Disallowed for non-git " +
+                  "sources.",
         ),
         "sha256": attr.string(
-            doc = "For an archive, its SHA256. Required for archives and not allowed otherwise.",
+            doc = "SHA256 digest of the archive. Required for archive sources and disallowed " +
+                  "otherwise.",
         ),
     },
 )
@@ -664,5 +640,47 @@ def _tf_modules_extension_impl(module_ctx):
 tf_modules = module_extension(
     implementation = _tf_modules_extension_impl,
     tag_classes = {"module": _module_tag},
-    doc = "Fetches OpenTofu modules as `tf_library` targets, `@tf_modules//<path>`. See the module docstring.",
+    doc = """Fetches external OpenTofu modules and exposes each as a `tf_library` under `@tf_modules`.
+
+Registry modules are labelled `@tf_modules//<namespace>/<name>/<system>` in
+lower case, or `@tf_modules//<host>/<namespace>/<name>/<system>` for registries
+other than `registry.opentofu.org`. Custom hosts must advertise `modules.v1` at
+`/.well-known/terraform.json` and return a git or archive download location.
+Git and archive modules are labelled `@tf_modules//<name>`. Submodules are
+called in HCL with `//<subdir>` while depending on the parent module's label.
+
+Every fetch is pinned:
+  - Registry modules record their download location and git commit or archive
+    `sha256` in `MODULE.bazel.lock`.
+  - Git modules fetch `commit` when set, or resolve `?ref=`, defaulting to
+    `HEAD`, on first fetch and record the commit in `MODULE.bazel.lock`.
+    Fetching git modules requires `git` on `PATH`.
+  - Archive modules verify `sha256`.
+
+Unpacking deletes upstream Bazel files: `.bazelignore`, `BUILD`, `BUILD.bazel`,
+`MODULE.bazel`, `REPO.bazel`, `WORKSPACE` and `WORKSPACE.bazel`. It also
+excludes `.git/`, `.terraform/`, `.terraform.lock.hcl`, `terraform.tfvars`,
+`terraform.tfvars.json`, `*.auto.tfvars` and `*.auto.tfvars.json`, and removes
+directory, dangling or external symlinks; `//<subdir>` cannot be a symlink. Git
+submodules are not fetched.
+
+Each generated `tf_library` propagates providers from the module's root, its
+`modules/` subdirectories, and directories it calls itself. If only a caller
+reaches a `//<subdir>` outside `modules/`, declare that submodule's providers on
+the caller. External modules called transitively must also be declared with
+`tf_modules.module`.
+
+Across the module graph, each `@tf_modules` path resolves once. For registry
+modules, the root module's tag wins, else the highest version. Git and archive
+declarations sharing a `name` must agree on `source` and must not disagree on
+`commit` or `sha256`; an explicit `commit` wins over an unset one.
+
+`tf_modules` scans sources and fetched modules with a Go helper compiled by
+`rules_go`'s host Go SDK, honouring `GOPROXY`, `GONOSUMDB`, `GOPRIVATE`,
+`GONOPROXY` and `GOSUMDB`; workspaces that register a Go SDK must select a
+version at least as new as the `go` directive in `rules_tofu`'s `go.mod`.
+
+Import only `tf_modules` with `use_repo`. See
+[From a registry, git or an archive](https://github.com/benbirt/rules_tofu#from-a-registry-git-or-an-archive).
+""",
 )
