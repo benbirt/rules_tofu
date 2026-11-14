@@ -154,7 +154,15 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   `tfconfig.BestMatch` like the manifest, to a fixpoint), so a fetched
   module's examples never reach the lock (`tf_modules_test`). Every
   `_tf_library` in `deps` is queried, not only those with `module_source`
-  (issue #60). A directory's requirements are combined by provider source,
+  (issue #60). What a library in another repository serves is
+  `(*library).serves`: nothing, for one with neither configuration of its
+  own nor a `module_source` (an aggregate of deps, which must not sweep in
+  the `modules/` below it); its `modules/` and whatever calls reach, for a
+  bundle, one with a `module_source` and no configuration of its own, which
+  the manifest tool resolves `//<subdir>` calls into (issue #123;
+  `lock_update_test`). `tfconfig.ModuleDirs` therefore takes a module
+  without root configuration, and `modscan` makes its own check that a
+  fetched module has some. A directory's requirements are combined by provider source,
   never by local name (`requirements`): the query gives files, not targets,
   and two targets in one package may each require a provider under the same
   name (issue #99); don't go back to `ReadRequiredProviders` there, which is

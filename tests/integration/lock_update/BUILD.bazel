@@ -10,10 +10,13 @@ tf_library(
 
 # A second root module in the package, requiring the provider under the same
 # local name with a constraint of its own: pin reads the package's files
-# together, and must lock against both (issue #99).
+# together, and must lock against both (issue #99). It also calls a
+# submodule of a bundle library from another Bazel module, which has a
+# constraint of its own again (issue #123).
 tf_library(
     name = "floor",
     srcs = ["floor.tf"],
     fmt_test = False,
     providers = ["@tf_providers//hashicorp/null"],
+    deps = ["@bundle_module//bundle"],
 )

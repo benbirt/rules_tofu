@@ -139,6 +139,12 @@ func scan(repo, moduleDir string, modules []Module, self string, submodules []st
 	if s := submodule(moduleDir); s != "" {
 		return nil, fmt.Errorf("%q is in the git submodule %q of the repository, and %s", "/"+moduleDir, s, notFetched)
 	}
+	// A fetched module is declared by the directory callers call, which must
+	// then hold configuration. (tfconfig.ModuleDirs itself has no objection:
+	// to pin, a library without any is a bundle of submodules.)
+	if !tfconfig.HasConfig(filepath.Join(repo, filepath.FromSlash(moduleDir))) {
+		return nil, fmt.Errorf("%q holds no .tf, .tf.json, .tofu or .tofu.json files", "/"+moduleDir)
+	}
 
 	sources := make([]string, len(modules))
 	for i, m := range modules {
