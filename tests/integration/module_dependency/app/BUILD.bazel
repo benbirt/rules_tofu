@@ -8,7 +8,8 @@ tf_deploy(
 )
 
 # The deploy's test loads the dns module from a `.tofutest.hcl` run block,
-# so building it checks the manifest key tofu uses for that extension.
+# so building it checks the manifest key tofu uses for that extension. The
+# driver runs it too, on every pinned tofu.
 tf_test(
     name = "app_test",
     srcs = ["tests/dns.tofutest.hcl"],

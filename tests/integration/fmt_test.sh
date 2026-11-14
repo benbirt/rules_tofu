@@ -16,7 +16,8 @@
 #   6. Everything in the workspace builds, including libraries, and a test,
 #      whose root module is empty; so the fixture stays a shape the
 #      rules accept (it once listed the test file in a library's `srcs`,
-#      which nothing noticed: the steps above only format and query).
+#      which nothing noticed: the steps above only format and query). The
+#      test of the empty root module is then run, and passes.
 
 set -euo pipefail
 
@@ -91,5 +92,8 @@ grep -q -F "v${TOFU_VERSION}" <<<"${versions}" || fail "expected tofu ${TOFU_VER
 
 echo "--- 6. the whole workspace builds ---" >&2
 bazel build //... >&2 || fail "the fmt workspace doesn't build"
+# The one test here that is meant to run: its root module is empty, and its
+# run loads the library beside it (issue #119).
+bazel test //empty:test --test_output=errors >&2 || fail "the test of an empty root module failed"
 
 echo "OK: with tofu ${TOFU_VERSION}, fmt and fmt_check act on srcs by name" >&2

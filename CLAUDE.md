@@ -60,10 +60,10 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
 - `bazel build //examples/hello:hello //examples/aws:s3_bucket //examples/gcp:storage_bucket`
 - `bazel build //examples/hello:greet_lib //examples/aws:s3_bucket_lib //examples/gcp:storage_bucket_lib`
 - `bazel test //examples/...:all` (fmt_check tests only)
-- Runner unit tests outside Bazel: copy `main.go` + `main_test.go` to a
-  scratch dir with a trivial `go.mod` and `go test ./...` (the canonical
-  Bazel run is `bazel test //tf/private/cmd/runner:runner_test`,
-  which needs network).
+- Go unit tests outside Bazel: `go test ./tf/private/cmd/...`. That does
+  not test the runner: its tests drive the built binary (`-runner=<path>`),
+  skip without it, and still report `ok`. They run under
+  `bazel test //tf/private/cmd/runner:runner_test`, which needs network.
 
 ## Where things are documented
 
@@ -397,7 +397,13 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   (an absent plugin tree gets an empty directory under `$TEST_TMPDIR`), and
   fails on `errored_test.tfstate`, which tofu writes with exit 0 when a
   run's destroy fails. Don't route tests through the plan/apply path or its
-  ephemeral-state gate. The copy keeps a file's executable bit and nothing
+  ephemeral-state gate. The JSON log goes to `-json-into` only when the
+  binary's own `tofu test -help` lists it (`hasJSONInto`): 1.8.5, which is
+  in `KNOWN_VERSIONS`, has no such flag and fails on it (issue #125). Don't
+  pass it unconditionally, don't fall back to `-json` (it replaces the
+  readable log), and don't decide by version (an `opentofu_toolchain` wraps
+  any binary). `module_dependency_<version>_test` runs a tf_test on every
+  pinned tofu; keep one that does. The copy keeps a file's executable bit and nothing
   else of its mode (`copyFile`: `0o755` or `0o644`, never `Perm()`): Bazel's
   outputs are read-only, and tofu must be able to write the copy. Both walks
   of a work tree (`copyTree`, and `linkTree` for the run directory) refuse a

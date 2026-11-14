@@ -101,8 +101,17 @@ func parseInvocations(data []byte) []invocation {
 // fakeTofuScript is the stand-in for tofu: it logs its working directory,
 // arguments and the environment variables the runner is meant to control,
 // then runs `extra` (shell) and exits 0.
+//
+// `test -help`, which the runner asks before a test to learn whether this
+// tofu has -json-into, is answered first and not logged: it lists the flag
+// unless FAKE_NO_JSON_INTO is set, and exits with FAKE_HELP_EXIT.
 func fakeTofuScript(extra string) string {
 	return "#!/bin/sh\n" +
+		"if [ \"$1\" = test ] && [ \"$2\" = -help ]; then\n" +
+		"  echo 'Usage: tofu [global options] test [options]'\n" +
+		"  [ -n \"${FAKE_NO_JSON_INTO:-}\" ] || echo '  -json-into=out.json   Produce the same output as -json, but sent directly'\n" +
+		"  exit \"${FAKE_HELP_EXIT:-0}\"\n" +
+		"fi\n" +
 		"{ printf 'cwd=%s\\n' \"$(pwd)\"; for a in \"$@\"; do printf 'arg=%s\\n' \"$a\"; done; " +
 		"printf 'env=TF_DATA_DIR=%s\\n' \"${TF_DATA_DIR-<unset>}\"; " +
 		"printf 'env=TF_PLUGIN_CACHE_DIR=%s\\n' \"${TF_PLUGIN_CACHE_DIR-<unset>}\"; " +
@@ -1226,6 +1235,49 @@ func TestRunner_Test_PluginDirUsedInPlace(t *testing.T) {
 	}
 	if init := invocations()[0]; !init.hasArg("-plugin-dir=" + pluginDir) {
 		t.Errorf("init args = %v, want -plugin-dir=%s", init.args, pluginDir)
+	}
+}
+
+// -json-into goes to a tofu whose `test -help` lists it, and to no other:
+// OpenTofu 1.8 has no such flag and fails on it (issue #125). Without it the
+// test still runs, and the runner says there will be no JSON log. A tofu
+// that can't print its help is taken not to have the flag, whatever it
+// printed; and with no outputs directory nobody wants the log at all.
+func TestRunner_Test_JSONIntoOnlyWhereTofuHasIt(t *testing.T) {
+	const notice = "has no -json-into"
+	for name, tc := range map[string]struct {
+		env        []string
+		wantFlag   bool
+		wantNotice bool
+	}{
+		"listed in the help":       {nil, true, false},
+		"not listed":               {[]string{"FAKE_NO_JSON_INTO=1"}, false, true},
+		"the help fails":           {[]string{"FAKE_HELP_EXIT=1"}, false, true},
+		"no outputs directory":     {[]string{"TEST_UNDECLARED_OUTPUTS_DIR="}, false, false},
+		"no outputs, flag unknown": {[]string{"TEST_UNDECLARED_OUTPUTS_DIR=", "FAKE_NO_JSON_INTO=1"}, false, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cmd, _, _, outputs, invocations := setupTest(t)
+			cmd.Env = append(cmd.Env, tc.env...)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
+			}
+			invs := invocations()
+			if len(invs) != 2 {
+				t.Fatalf("got %d logged tofu invocations, want init then test (the help is not one): %+v", len(invs), invs)
+			}
+			flag := "-json-into=" + filepath.Join(outputs, "tofu-test.json")
+			if got := invs[1].hasArg(flag); got != tc.wantFlag {
+				t.Errorf("test has %s: %v, want %v (args %q)", flag, got, tc.wantFlag, invs[1].args)
+			}
+			if invs[1].hasArgWithPrefix("-json-into") != tc.wantFlag {
+				t.Errorf("test args = %q", invs[1].args)
+			}
+			if got := strings.Contains(string(out), notice); got != tc.wantNotice {
+				t.Errorf("notice printed: %v, want %v:\n%s", got, tc.wantNotice, out)
+			}
+		})
 	}
 }
 

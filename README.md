@@ -518,7 +518,9 @@ infrastructure: the test then carries `external` and `requires-network`, so
 it is never cached.
 
 **Output.** `tofu test`'s JSON log is in the test's undeclared outputs as
-`tofu-test.json`. When a run's destroy fails, tofu writes the resources it
+`tofu-test.json`, where the `tofu` binary's `test` command has `-json-into`
+(OpenTofu 1.12 does, 1.8 doesn't); an older one runs the test without the
+log. When a run's destroy fails, tofu writes the resources it
 could not remove to `errored_test.tfstate` and still exits 0; the test fails
 and keeps that file with its outputs. Extra arguments reach `tofu test`
 through `--test_arg`, as in
