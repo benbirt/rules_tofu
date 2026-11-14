@@ -85,7 +85,7 @@ var (
 	outputRoot = flag.String("output-root", "", "absolute path to Bazel's output tree (bazel-out); a local backend's state inside it is ephemeral")
 
 	allowEphemeralState = flag.Bool("allow-ephemeral-state", false,
-		"permit apply/destroy against local state under bazel-bin, for a deploy with no backend or with a local one that keeps state there; "+
+		"permit apply/destroy when the state is not provably outside --output-root: no backend, or a local backend whose path and workspace_dir are not both literal absolute paths outside it; "+
 			"set by tf_deploy(allow_ephemeral_state = True)")
 
 	tofu    = flag.String("tofu", "", "path to the tofu binary")

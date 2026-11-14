@@ -78,7 +78,7 @@ import (
 
 var (
 	tofu      = flag.String("tofu", "", "path to the tofu binary")
-	lockDir   = flag.String("lock-dir", "", "workspace-relative directory of the .terraform.lock.hcl")
+	lockDir   = flag.String("lock-dir", "", "workspace-relative directory of the .terraform.lock.hcl; empty for the workspace root")
 	platforms = flags.StringList("platform", "`<os>_<arch>` to lock for unless -platform= arguments follow (repeatable)")
 	excluded  = flags.StringList("exclude-source", "`<namespace>/<name>` pinned by a tag instead, left out of the lock (repeatable)")
 )
