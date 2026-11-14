@@ -417,7 +417,8 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   than the floor, don't probe the binary for the flag or fall back to
   `-json` (it replaces the readable log) to accommodate one, and if the
   rules come to need a flag newer than the floor, raise the floor in
-  `KNOWN_VERSIONS`, the README and here together. Nothing checks a root
+  `toolchain/` (`versions.bzl`, and `opentofu_toolchain`'s doc in
+  `toolchain.bzl`), the README and here together. Nothing checks a root
   module's own binary: `opentofu_toolchain.version` is whatever its author
   wrote (the `custom_toolchain` fixture's is `0.0.0`).
   `module_dependency_<version>_test` runs a tf_test on every pinned tofu;
