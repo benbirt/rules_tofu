@@ -529,11 +529,17 @@ _from_lock_tag = tag_class(
           "module's `from_lock` is read, at most once; `from_lock` in dependencies is " +
           "ignored.",
     attrs = {
-        "lock": attr.label(
-            doc = "Label of a file named `.terraform.lock.hcl` in the main repository, e.g. " +
-                  "`\"//infra:.terraform.lock.hcl\"`; defaults to `//:.terraform.lock.hcl`. " +
-                  "The file need not exist before the first `pin` run, but its package must " +
-                  "have a `BUILD.bazel` or `BUILD` file.",
+        "lock_file": attr.label(
+            mandatory = True,
+            doc = "Label of a file named `.terraform.lock.hcl` in the main repository, such as " +
+                  "`\"//:.terraform.lock.hcl\"` or `\"//infra:.terraform.lock.hcl\"`. Write the " +
+                  "label as a string literal rather than building it from a variable. " +
+                  "Dependabot's `bazel` updater does not clone the repository. It fetches only " +
+                  "the root Bazel files and files named in recognised `MODULE.bazel` attributes " +
+                  "such as `lock_file`, together with the `BUILD.bazel` or `BUILD` file beside " +
+                  "each, before regenerating `MODULE.bazel.lock`. The lock file need not exist " +
+                  "before the first `bazel run @tf_providers//:pin` run. Its directory must be " +
+                  "a Bazel package with a `BUILD.bazel` or `BUILD` file, which may be empty.",
         ),
     },
 )

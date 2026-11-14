@@ -186,14 +186,19 @@ without root-tagged providers. Full tag reference is in the
 ```python
 # MODULE.bazel
 tf_providers = use_extension("@rules_tofu//tf/providers:extensions.bzl", "tf_providers")
-tf_providers.from_lock()  # reads //:.terraform.lock.hcl; or lock = "//infra:.terraform.lock.hcl"
+tf_providers.from_lock(lock_file = "//:.terraform.lock.hcl")
 use_repo(tf_providers, "tf_providers")
 ```
 
-`lock` must name a `.terraform.lock.hcl` file in the main repository, and its
-package needs a `BUILD.bazel` or `BUILD` file. Add
-`@tf_providers//<namespace>/<name>` to `providers` on the targets requiring each
-provider, then write the lock:
+`lock_file` is required and must name a `.terraform.lock.hcl` file in the main
+repository, such as `"//:.terraform.lock.hcl"` or
+`"//infra:.terraform.lock.hcl"`. Its directory must be a Bazel package with a
+`BUILD.bazel` or `BUILD` file, which may be empty. Write `lock_file` as a string
+literal so Dependabot can find the lock; see
+[Keeping the lock up to date](#keeping-the-lock-up-to-date).
+
+Add `@tf_providers//<namespace>/<name>` to `providers` on the targets requiring
+each provider, then write the lock:
 
 ```sh
 bazel run @tf_providers//:pin
@@ -248,6 +253,14 @@ Locked providers record nothing in `MODULE.bazel.lock`, so updating
 - Dependabot requires `package-ecosystem: "opentofu"` rather than `"terraform"`,
   `directory` set to the lock's directory, and a `.tf` file such as
   `versions.tf` alongside the lock.
+
+Dependabot's `bazel` ecosystem updates `MODULE.bazel` without cloning the
+repository. It fetches `MODULE.bazel`, the root Bazel files, and the files
+`MODULE.bazel` names in recognised attributes such as `lock_file`, together with
+the `BUILD.bazel` or `BUILD` file beside each. It then regenerates
+`MODULE.bazel.lock`, which runs `from_lock`. Dependabot finds the lock only when
+`lock_file = "..."` is a string literal in `MODULE.bazel` rather than built from
+a variable.
 
 ### Pinning with tags
 
