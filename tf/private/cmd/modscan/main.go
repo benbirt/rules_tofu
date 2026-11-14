@@ -1,40 +1,45 @@
-// Command modscan reads module sources and fetched modules for tf_modules.
-// The module extension and its repository rule can't run Bazel-built tools,
-// so they run this one as compiled by //tf/private:host_tools.bzl.
+// Command modscan reads module source addresses and fetched module trees for
+// tf_modules. Module extensions and repository rules cannot run Bazel-built
+// tools, so they compile and run modscan via //tf/private:host_tools.bzl.
 //
 //	modscan parse <source>...
 //
-// reads each module source address as OpenTofu does (tfconfig.ParseSource)
-// and prints a JSON list holding, for each, its tfconfig.Source or an
-// `error`. The extension uses it to tell registry, git and archive sources
+// Parses each source address with tfconfig.ParseSource and writes a JSON
+// array of Parsed objects to stdout. No flags are recognised, and parse
+// errors are recorded in each element's error field rather than failing the
+// command. The extension uses it to tell registry, git and archive sources
 // apart and to find where each is fetched from.
 //
 //	modscan [--module=<label>=<source>...] [--self=<label>] [--git-submodule=<path>...] <repository dir> <module dir>
 //
-// describes a fetched module, for the repository rule that generates its
-// tf_library. <module dir> is relative to the repository ("" for its root),
-// each --module is a declared tf_modules.module, its label and source,
-// --self is the label of the one being described, and each --git-submodule
-// is the path of a git submodule of the fetched commit. rules_tofu doesn't
-// fetch those, so the module's own directory, or a call of its own, that
-// leads into one is an error here, where it can be named, rather than a
-// missing directory when a caller builds.
-// The module's library serves the module and its submodules, which callers
-// reach with `//<subdir>`, so modscan scans the directories
-// tfconfig.ModuleDirs lists: the module directory, each directory below its
-// `modules/` (the standard place for submodules) that holds configuration,
-// every directory those reach with local `source` paths, and every
-// directory of the module's own that they call by its address with
-// `//<subdir>`. Examples and tests are left out unless something calls
-// them. It prints, as JSON:
+// Inspects a fetched module to generate its tf_library. <module dir> is
+// relative to <repository dir>, or "" for its root, and must contain
+// configuration files.
+//   - --module=<label>=<source>: a declared tf_modules.module tag, repeatable.
+//   - --self=<label>: label of the module being scanned, so calls to
+//     <self>//<subdir> are scanned as internal submodules rather than deps.
+//   - --git-submodule=<path>: repository-relative path of an unfetched git
+//     submodule, repeatable. OpenTofu fetches git submodules and rules_tofu
+//     does not. If <module dir> or any call from its served directories
+//     enters one, modscan fails here naming the submodule rather than leaving
+//     a caller's build to fail on a missing directory.
 //
-//   - providers: every required provider, as `<host>/<namespace>/<name>`;
-//   - deps: the label of each other declared module that a call uses: the
-//     most specific match (tfconfig.BestMatch), as the modules manifest
-//     resolves the call. A call the module itself provides is satisfied
-//     with no dep;
-//   - undeclared: each call by address that no declared module provides,
-//     where it is, and the tf_modules.module tag that would declare it.
+// modscan walks the directories returned by tfconfig.ModuleDirs together with
+// any subdirectories reached by <self>//<subdir> calls, leaving uncalled
+// examples and tests out. It writes a JSON Result to stdout:
+//   - providers: sorted canonical <host>/<namespace>/<name> addresses of
+//     required providers, or [] when none.
+//   - deps: sorted labels of other declared modules that calls match via
+//     tfconfig.BestMatch, as the modules manifest resolves each call, or []
+//     when none. Self-calls add no dep.
+//   - undeclared: non-local calls that no declared module matches, sorted by
+//     source, each with source, where and a suggested tf_modules.module tag,
+//     or [] when none.
+//
+// Scan mode exits 2 on unrecognised or malformed flags, the wrong number of
+// arguments or a --module value without =. Either mode prints the error to
+// stderr and exits 1 on a scan or I/O error; `modscan parse` exits 0 even when
+// sources fail to parse.
 package main
 
 import (
@@ -59,7 +64,7 @@ var (
 	gitlinks = flags.StringList("git-submodule", "`path` of a git submodule of the fetched commit, which was not fetched (repeatable)")
 )
 
-// Result is modscan's output.
+// Result is the JSON object written by scan mode; slices are never nil.
 type Result struct {
 	Providers  []string `json:"providers"`
 	Deps       []string `json:"deps"`
@@ -114,10 +119,10 @@ func main() {
 // notFetched is what every error about a git submodule ends with.
 const notFetched = "rules_tofu does not fetch git submodules (OpenTofu does)"
 
-// scan describes the module at moduleDir of repo. modules are the declared
-// modules, and self is the label of the one being described ("" if it isn't
-// among them). submodules are the paths in repo of the git submodules that
-// the fetch left out.
+// scan describes the module at moduleDir in repo, where "" is repo's root.
+// modules lists the declared modules, and self is the label of the one being
+// described, or "" if it is not among them. submodules lists the paths in
+// repo of git submodules that the fetch left out.
 func scan(repo, moduleDir string, modules []Module, self string, submodules []string) (*Result, error) {
 	moduleDir = strings.Trim(moduleDir, "/")
 	var gitlinks []string
@@ -140,8 +145,8 @@ func scan(repo, moduleDir string, modules []Module, self string, submodules []st
 		return nil, fmt.Errorf("%q is in the git submodule %q of the repository, and %s", "/"+moduleDir, s, notFetched)
 	}
 	// A fetched module is declared by the directory callers call, which must
-	// then hold configuration. (tfconfig.ModuleDirs itself has no objection:
-	// to pin, a library without any is a bundle of submodules.)
+	// hold configuration. tfconfig.ModuleDirs itself allows an unconfigured
+	// root because pin treats such a library as a bundle of submodules.
 	if !tfconfig.HasConfig(filepath.Join(repo, filepath.FromSlash(moduleDir))) {
 		return nil, fmt.Errorf("%q holds no .tf, .tf.json, .tofu or .tofu.json files", "/"+moduleDir)
 	}
@@ -160,12 +165,12 @@ func scan(repo, moduleDir string, modules []Module, self string, submodules []st
 		return &modules[i], subdir
 	}
 
-	// The directories of its own that the module calls by its address, as a
-	// caller would: `<self>//<subdir>`. They are part of what the library
-	// serves, like a directory a local path reaches, and may call others in
-	// turn, so read until no call adds one. A directory is marked before it
-	// is read, so calls that form a cycle, or name a directory with no
-	// configuration, end the loop all the same.
+	// Directories of its own that the module calls by address with
+	// <self>//<subdir> are part of what the library serves, like a
+	// directory a local path reaches (issue #95). They may call others in
+	// turn, so repeat until no call adds one. Marking each directory before
+	// reading it ensures cycles and directories without configuration still
+	// terminate the loop.
 	called := map[string]bool{}
 	var providers map[string]bool
 	var calls map[string]Call

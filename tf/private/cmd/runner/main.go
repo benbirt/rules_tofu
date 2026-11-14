@@ -1,34 +1,59 @@
-// Command runner is rules_tofu's tofu plan/apply/test wrapper. It is invoked by
-// the generated shell launcher emitted by the tf_runner rule with every
-// configuration value passed via explicit standard flags.
+// Command runner wraps OpenTofu's plan, apply, destroy and test commands for
+// generated tf_runner and tf_test launchers. Each tf_deploy target generates
+// .plan, .apply and .destroy launchers via tf_runner. Launchers are ordinary
+// executables: they work under `bazel run` or `bazel test` and when run
+// directly, and runner reads nothing about the checkout such as
+// BUILD_WORKSPACE_DIRECTORY.
 //
-// Responsibilities:
-//   - Refuse apply/destroy when the deploy's state would be ephemeral and it
-//     has not opted in via --allow-ephemeral-state: it declares no state
-//     backend, or a `backend "local"` whose paths aren't provably outside
-//     Bazel's output tree, which `bazel clean` deletes.
-//   - Make the deploy's run directory, <state-dir>/work, a mirror of the
-//     launcher's work tree (see rundir.go) and run tofu there: one directory
-//     shared by the deploy's .plan, .apply and .destroy, so tofu resolves
-//     every relative path and expression itself and each launcher sees the
-//     same files.
-//   - Run `tofu init -get=false -reconfigure` in it, with TF_DATA_DIR fixed to
-//     its `.terraform`, after copying in the module manifest (every module is
-//     already in the work tree) and the provider lock when providers come from
-//     tf_providers.from_lock.
-//   - For plan: emit a plan artifact and stop.
-//   - For apply/destroy: delegate to tofu, passing through any extra args.
-//   - For test (tf_test): copy the work tree into $TEST_TMPDIR, init it with
-//     -backend=false and run `tofu test` there (see test.go).
+// Flags:
+//   - --tofu, --work-tree, --plugin-dir, --modules-manifest and --command:
+//     required for every invocation. --command is "plan", "apply", "destroy" or
+//     "test".
+//   - --state-dir and --output-root: required for plan, apply and destroy.
+//   - --package-dir: root module directory relative to --work-tree, or "" for
+//     the workspace root package.
+//   - --lock-file: .terraform.lock.hcl from tf_providers.from_lock.
+//   - --var-file: .tfvars or .tfvars.json file passed via -var-file,
+//     repeatable.
+//   - --test-dir: for --command=test, test directory relative to --package-dir,
+//     passed as -test-directory; "" uses OpenTofu's default "tests".
+//   - --allow-ephemeral-state: permit apply and destroy when state would live
+//     under --output-root.
 //
-// The launcher is an ordinary executable: it works under `bazel run` and when
-// the built file is run directly, and the runner reads nothing about the
-// checkout (no BUILD_WORKSPACE_DIRECTORY).
+// Trailing arguments after flags are forwarded verbatim to tofu.
 //
-// Configuration validation (`tofu init -backend=false && tofu validate`)
-// happens at `bazel build` time via the deploy rule's TofuValidate action,
-// not here. Duplicate-variable-key detection across `vars` and `var_files`
-// likewise happens at build time via the dupcheck action.
+// For plan, apply and destroy, runner performs these steps in order:
+//   - Refuse apply and destroy without --allow-ephemeral-state when the root
+//     module declares no state backend or declares a `backend "local"` whose
+//     path and workspace_dir are not both literal absolute paths outside
+//     --output-root, which `bazel clean` deletes.
+//   - Mirror --work-tree as symlinks into <state-dir>/work (see rundir.go). The
+//     deploy's .plan, .apply and .destroy share that directory so OpenTofu
+//     resolves every relative path itself and each launcher sees the same
+//     files.
+//   - Copy --modules-manifest to .terraform/modules/modules.json and any
+//     --lock-file to .terraform.lock.hcl in <state-dir>/work/<package-dir>, and
+//     run `tofu init -input=false -get=false -reconfigure
+//     -plugin-dir=<plugin-dir>` there with TF_DATA_DIR fixed to its .terraform.
+//   - Without a backend or cloud block, pass -state and -state-out for
+//     <state-dir>/terraform.tfstate; with one, pass no state flags so OpenTofu
+//     owns state placement.
+//   - For plan, write <state-dir>/tfplan via -out and print
+//     rules_tofu: plan saved to <path> to stdout.
+//   - For apply and destroy, run `tofu apply` or `tofu destroy`.
+//
+// For test, runner copies --work-tree into TEST_TMPDIR or a temporary
+// directory, initialises with -backend=false and runs `tofu test` there (see
+// test.go). If a failed destroy leaves errored_test.tfstate behind, runner
+// fails the test even though `tofu test` exits 0. When
+// TEST_UNDECLARED_OUTPUTS_DIR is set, runner writes tofu-test.json there and
+// copies any errored_test.tfstate into it.
+//
+// When a tofu subprocess exits non-zero, runner exits with that code unless
+// errored_test.tfstate supersedes it with exit code 1. Unrecognised or
+// malformed flags exit 2, and other errors exit 1. Configuration validation
+// via TofuValidate on tf_library, tf_deploy and tf_test and duplicate-variable
+// checks via dupcheck happen at `bazel build` time, not here.
 package main
 
 import (
@@ -131,11 +156,11 @@ func run() error {
 	runRoot := filepath.Join(*stateDir, "work")
 	cwd := filepath.Join(runRoot, filepath.FromSlash(*packageDir))
 
-	// Backend detection is a read-only scan of the root module's .tf files in
-	// the launcher's work tree, so it depends neither on init having run nor
-	// on the run directory existing. Compute it once, up front: the gate below
-	// needs the answer before any tofu process is started or any directory is
-	// created, and the state flags reuse it.
+	// Backend detection is a read-only scan of the root module's configuration
+	// files in the launcher's work tree, so it depends neither on init having
+	// run nor on the run directory existing. Compute it once, up front: the
+	// gate below needs the answer before any tofu process is started or any
+	// directory is created, and the state flags reuse it.
 	backend := detectBackend(srcDir, *outputRoot)
 	planFile := filepath.Join(*stateDir, "tfplan")
 	stateFile := filepath.Join(*stateDir, "terraform.tfstate")
@@ -161,10 +186,9 @@ func run() error {
 	env := tofuEnv(cwd)
 
 	// Ensure the vendored plugin tree exists even when zero providers are in
-	// scope (the deploy declares no symlinks under the sibling <name>.plugins/
-	// tree in that case, so the runfiles tree lacks the directory).
-	// -plugin-dir overrides all default plugin search paths and prevents the
-	// registry from being contacted at runtime.
+	// scope: the deploy declares no symlinks under <name>.plugins/ in that
+	// case, so the runfiles tree lacks the directory. -plugin-dir overrides
+	// default plugin search paths and prevents runtime registry lookups.
 	if err := os.MkdirAll(*pluginDir, 0o755); err != nil {
 		return fmt.Errorf("create plugin dir %s: %w", *pluginDir, err)
 	}
@@ -176,10 +200,9 @@ func run() error {
 	if err := installModulesManifest(*modulesManifest, cwd); err != nil {
 		return err
 	}
-	// -reconfigure: the run directory keeps the `.terraform/` of earlier runs,
-	// whose saved backend configuration would otherwise make init refuse an
-	// edited backend block (the only way out being `bazel clean`). It resets
-	// that saved copy from the configuration and never migrates state.
+	// -reconfigure resets the backend settings saved in .terraform/ from
+	// earlier runs without migrating state; without it, init refuses an edited
+	// backend block until `bazel clean`.
 	if err := runTofu(env, cwd, "init", "-input=false", "-get=false", "-reconfigure", "-plugin-dir="+*pluginDir); err != nil {
 		if *lockFile != "" {
 			log.Print("if the provider versions in required_providers changed, run `bazel run @tf_providers//:pin` to update the lock file.")
@@ -276,9 +299,9 @@ func installModulesManifest(src, cwd string) error {
 	return nil
 }
 
-// ephemeralExplanation says why state under bazel-bin is disposable (each
-// refusal supplies the sentence's subject), and optInAdvice how to accept
-// that.
+// ephemeralExplanation says why state under bazel-bin is disposable; each
+// refusal supplies the sentence's subject, and optInAdvice explains how to opt
+// in.
 const (
 	ephemeralExplanation = `is machine-local and disposable. It sits under bazel-bin, so
 "bazel clean" deletes it; it embeds the build configuration, so building with
@@ -303,8 +326,8 @@ The deploy's .plan target is never gated, so planning still works either way.`
 
 // ephemeralStateError is the refusal returned when apply/destroy would write
 // local state for a deploy with no backend. It is the whole user-facing
-// surface of the gate, so it names the state path, the recommended fix, and
-// the opt-in verbatim.
+// surface of the gate, so it names the state path, the recommended fix and the
+// opt-in verbatim.
 func ephemeralStateError(command, stateFile string) error {
 	return fmt.Errorf(`rules_tofu: refusing to run "tofu %s": this deploy declares no state backend, so its state would be written to
 
@@ -334,7 +357,7 @@ With one present, the runner defers to it and this check no longer applies.
 // localBackendError is the refusal returned when apply/destroy would run
 // against a `backend "local"` block that doesn't provably keep its state
 // outside Bazel's output tree. It names the block and the attribute that
-// fails the test, where tofu runs, the fix, and the opt-in.
+// fails the test, where tofu runs, the fix and the opt-in.
 func localBackendError(command string, backend backendInfo, cwd string) error {
 	return fmt.Errorf(`rules_tofu: refusing to run "tofu %s": the backend "local" block at %s does not provably keep state outside Bazel's output tree: %s.
 
@@ -361,18 +384,17 @@ or declare a remote backend (s3, gcs, ...) or a cloud {} block.
 		command, backend.where, backend.ephemeral, cwd, ephemeralExplanation, optInAdvice)
 }
 
-// tofuEnv is the environment tofu runs with: the user's, less the variables
-// that would move tofu's data directory or plugin cache away from its working
-// directory, plus TF_IN_AUTOMATION and a TF_DATA_DIR fixed to that directory's
-// own `.terraform`, where the module manifest is installed. A user's
-// TF_DATA_DIR would otherwise make `init -get=false` miss the manifest at run
-// time only (the validate action runs with a clean environment), and a plugin
-// cache would be consulted and written to beside the vendored plugin tree.
-//
-// TF_IN_AUTOMATION=1 suppresses usage-hint lines in tofu output that don't
-// apply in our wrapped invocation (e.g. "Run `terraform plan`…"). TF_INPUT is
-// deliberately not set: variable prompts are suppressed per-command via
-// -input=false, but the apply/destroy approval prompt must remain reachable.
+// tofuEnv returns os.Environ() adjusted for running tofu in working directory
+// cwd:
+//   - TF_DATA_DIR is fixed to cwd/.terraform, where installModulesManifest
+//     wrote modules.json. Inheriting a user's TF_DATA_DIR would make
+//     `tofu init -get=false` miss the manifest at run time while build-time
+//     validation, which runs in a clean environment, succeeded.
+//   - TF_PLUGIN_CACHE_DIR is stripped so tofu neither consults nor writes a
+//     shared cache beside the vendored plugin tree.
+//   - TF_IN_AUTOMATION=1 suppresses CLI usage hints aimed at unwrapped runs.
+//   - TF_INPUT is left unset: -input=false suppresses variable prompts per
+//     command while keeping the apply and destroy approval prompt reachable.
 func tofuEnv(cwd string) []string {
 	var env []string
 	for _, e := range os.Environ() {
@@ -394,11 +416,11 @@ func runTofu(env []string, cwd string, args ...string) error {
 	return cmd.Run()
 }
 
-// terraformBlockSchema matches top-level `terraform {}` blocks; backendBlockSchema
-// matches the `backend "type" {}` and `cloud {}` blocks nested within one. Both
-// are used with schema-based PartialContent, which decodes native (.tf, .tofu)
-// and JSON (.tf.json, .tofu.json) syntax uniformly and ignores every other
-// construct.
+// terraformBlockSchema matches top-level `terraform {}` blocks;
+// backendBlockSchema matches the `backend "type" {}` and `cloud {}` blocks
+// nested within one. Both are used with schema-based PartialContent, which
+// decodes native .tf and .tofu and JSON .tf.json and .tofu.json syntax
+// uniformly and ignores every other construct.
 var (
 	terraformBlockSchema = &hcl.BodySchema{
 		Blocks: []hcl.BlockHeaderSchema{{Type: "terraform"}},
@@ -437,25 +459,21 @@ func (b backendInfo) durable() bool {
 	return b.present && b.ephemeral == ""
 }
 
-// detectBackend scans the configuration files tofu reads in the deploy's
-// package directory, dir (tfconfig.ConfigFiles: a `.tofu` file shadows the
-// `.tf` file of the same name), for a `backend "..." {}` or `cloud {}` block
-// nested inside a top-level `terraform {}` block, and returns what it finds.
-// Either construct means the configuration chooses its own state backend, and
-// the local -state/-state-out flags are omitted. A `backend "local"` is also
-// checked for where it keeps state (see localBackendEphemeral); outputRoot is
-// Bazel's output tree.
+// detectBackend scans the effective configuration files in the deploy's
+// package directory dir (see tfconfig.ConfigFiles) for the first
+// `backend "..." {}` or `cloud {}` block inside a top-level `terraform {}`
+// block. Either construct means the configuration chooses its own state
+// backend and the local -state and -state-out flags are omitted. A
+// `backend "local"` block is also checked against Bazel's output tree
+// outputRoot (see localBackendEphemeral).
 //
-// A file that fails to parse is treated as backend-less. The build-time validate
-// action already guarantees well-formed files at runtime, so a parse error here
-// must not crash the runner.
+// A file that cannot be read or parsed is skipped: build-time validation
+// already checks syntax, so a parse error here must not crash the runner.
 //
-// Only the package directory is scanned — not the full work tree. This is
-// intentional: Terraform reads backend configuration from the root module only,
-// which is the directory where `tofu init` runs. Transitive library deps are
-// materialised at their own workspace-relative paths (e.g. sibling directories)
-// and are not the root module, so backend blocks in those files do not affect
-// the root module's state backend.
+// Only dir is scanned, never the full work tree. OpenTofu reads backend
+// configuration from the root module only, where `tofu init` runs; transitive
+// tf_library deps materialised elsewhere in the work tree are not the root
+// module, so backend blocks in their files have no effect.
 func detectBackend(dir, outputRoot string) backendInfo {
 	files, err := tfconfig.ConfigFiles(dir)
 	if err != nil {
@@ -516,16 +534,16 @@ var localBackendAttrs = []struct{ name, def string }{
 }
 
 // localBackendEphemeral decides whether a `backend "local"` block provably
-// keeps its state outside Bazel's output tree, outputRoot, and returns why
-// not, or "" when it does. The runner never changes what the block means:
-// tofu resolves it from the run directory, which is under bazel-bin, so
-// anything relative lands there and goes with `bazel clean`.
+// keeps its state outside Bazel's output tree outputRoot, returning why not,
+// or "" when it does. The runner never changes what the block means: tofu
+// resolves it from the run directory, which is under bazel-bin, so anything
+// relative lands there and goes with `bazel clean`.
 //
-// State is provably outside only when both `path` and `workspace_dir` are set
-// to literal absolute paths that don't lead into outputRoot, symlinks followed
-// (the `bazel-bin` convenience link in a checkout leads there). An attribute
-// left unset takes tofu's relative default; one that is an expression
-// (OpenTofu 1.8 allows them) can't be read here.
+// State is provably outside only when both path and workspace_dir are set to
+// literal absolute paths that do not lead into outputRoot once symlinks are
+// followed, such as a checkout's bazel-bin convenience link. An unset
+// attribute takes tofu's relative default; a non-literal expression, which
+// OpenTofu 1.8 allows, cannot be evaluated statically here.
 func localBackendEphemeral(body hcl.Body, outputRoot string) string {
 	content, _, diags := body.PartialContent(localBackendSchema)
 	if diags.HasErrors() {

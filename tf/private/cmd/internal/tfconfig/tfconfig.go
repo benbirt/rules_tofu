@@ -1,6 +1,7 @@
-// Package tfconfig reads the parts of an OpenTofu configuration that
-// rules_tofu needs before tofu itself runs: module calls and the providers a
-// module requires, and how module source addresses compare.
+// Package tfconfig reads the parts of OpenTofu configuration and test files
+// that rules_tofu needs before tofu runs: configuration and test file sets,
+// module calls, required_providers blocks, module directories and module
+// source addresses.
 package tfconfig
 
 import (
@@ -17,7 +18,9 @@ import (
 	regaddr "github.com/opentofu/registry-address/v2"
 )
 
-// Call is a `module` block.
+// Call is a module call from a `module` block or a test file's `run` block.
+// Name is the module or run label, and Range is the source attribute's
+// location.
 type Call struct {
 	Name   string
 	Source string
@@ -81,7 +84,7 @@ func Effective(files []string) []string {
 
 // ConfigFiles lists the configuration files in dir that tofu reads, sorted
 // by name: those with a configuration extension, less the ones Effective
-// drops.
+// drops. Unlike TestFiles, it returns an error if dir does not exist.
 func ConfigFiles(dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -96,10 +99,10 @@ func ConfigFiles(dir string) ([]string, error) {
 	return Effective(files), nil
 }
 
-// ignored reports whether tofu passes over a file of this name when it
-// reads a directory: one that starts with a dot. (It passes over editors'
-// `name~` and `#name#` files too, which no configuration or test file's
-// name can be.)
+// ignored reports whether tofu passes over a file of this name when it reads
+// a directory: one that starts with a dot. OpenTofu also passes over editors'
+// name~ and #name# backup files, which no configuration or test file name can
+// match.
 func ignored(name string) bool {
 	return strings.HasPrefix(name, ".")
 }
@@ -128,7 +131,7 @@ func splitOverrides(files []string) (primary, overrides []string) {
 	return primary, overrides
 }
 
-// HasConfig reports whether dir holds any configuration file.
+// HasConfig reports whether dir is readable and holds any configuration file.
 func HasConfig(dir string) bool {
 	files, err := ConfigFiles(dir)
 	return err == nil && len(files) > 0
@@ -153,8 +156,9 @@ func parse(parser *hclparse.Parser, file string) (*hcl.File, error) {
 }
 
 // ReadCalls parses the module blocks of the configuration files in dir. An
-// `_override` file's `source` replaces the one in the primary file, as tofu
-// merges it.
+// _override file's source replaces the one in the primary file, as tofu
+// merges it. Duplicate primary calls and missing or non-literal source
+// attributes return an error.
 func ReadCalls(dir string) ([]Call, error) {
 	primary, overrides, err := configFiles(dir)
 	if err != nil {
@@ -163,10 +167,8 @@ func ReadCalls(dir string) ([]Call, error) {
 	return readCalls(primary, overrides)
 }
 
-// ReadCallsFrom parses the module blocks of files, which share a module
-// directory, as ReadCalls does for a directory. A `.tf` or `.tf.json` file
-// that a `.tofu` or `.tofu.json` file of files shadows is skipped, as tofu
-// skips it (see Effective).
+// ReadCallsFrom parses the module blocks of files, which share a directory,
+// after filtering with Effective (see ReadCalls).
 func ReadCallsFrom(files []string) ([]Call, error) {
 	primary, overrides := splitOverrides(Effective(files))
 	sort.Strings(primary)
@@ -250,8 +252,9 @@ type Requirement struct {
 	Version string `json:"version,omitempty"`
 }
 
-// RequiredProviders returns the normalised `source` of every
-// required_providers entry in dir's configuration files, sorted.
+// RequiredProviders returns the normalised source of every
+// required_providers entry in dir's configuration files, sorted. Two primary
+// entries of one local name return an error.
 func RequiredProviders(dir string) ([]string, error) {
 	primary, overrides, err := configFiles(dir)
 	if err != nil {
@@ -285,15 +288,14 @@ type Declared struct {
 }
 
 // ReadRequirements returns every required_providers entry in files, which
-// share a directory: the primary files' in file name order, then the
-// `_override` files', each file's in the order written. A `.tf` or `.tf.json`
-// file that a `.tofu` or `.tofu.json` file of files shadows is skipped, as
-// tofu skips it (see Effective). Nothing is merged and nothing rejected:
-// files of one directory may belong to several root modules (two tf_deploys
-// in a package), so two entries of one name needn't be a mistake.
-// ReadRequiredProviders reads a single module's.
+// share a directory, after filtering with Effective: the primary files' in
+// file name order, then the _override files', each file's in the order
+// written. Nothing is merged and nothing rejected: files in one directory may
+// belong to several root modules, such as two tf_deploy targets in a package,
+// so two entries of one name needn't be a mistake. ReadRequiredProviders reads
+// a single module's.
 //
-// An entry is `{ source = ..., version = ... }`, or the legacy bare version
+// An entry is `{ source = ..., version = ... }` or the legacy bare version
 // string. Other keys, like configuration_aliases, are references that can't
 // be evaluated here and don't name a provider, so they're skipped.
 func ReadRequirements(files []string) ([]Declared, error) {
@@ -417,10 +419,12 @@ func NormalizeProvider(source string) (string, error) {
 	return p.String(), nil
 }
 
-// LiteralString evaluates expr with no variables in scope, as a string. The
-// context is empty rather than nil: with a nil one the JSON syntax returns a
-// template such as "${path.module}/x" as the literal text, where the native
-// syntax reports the unknown variable, and both must be rejected alike.
+// LiteralString evaluates expr with no variables in scope as a string,
+// returning ("", false) if expr is null, unknown, not a string or references
+// variables. The context is empty rather than nil: with a nil one the JSON
+// syntax returns a template such as "${path.module}/x" as literal text, where
+// the native syntax reports the unknown variable, and both must be rejected
+// alike.
 func LiteralString(expr hcl.Expression) (string, bool) {
 	v, diags := expr.Value(&hcl.EvalContext{})
 	if diags.HasErrors() || v.IsNull() || !v.IsKnown() || v.Type().FriendlyName() != "string" {
@@ -429,20 +433,23 @@ func LiteralString(expr hcl.Expression) (string, bool) {
 	return v.AsString(), true
 }
 
-// ModuleDirs lists the directories that a module's library serves, relative
-// to repo: the module's own (moduleDir, relative to repo, "" for its root)
-// if it holds configuration, every directory below its `modules/` (the
-// standard place for submodules) that holds configuration, each directory of
-// called (relative to repo) that holds configuration, and every directory
-// those reach with local `source` paths that stay inside repo. Examples and
-// tests are left out unless something calls them: called is for the
-// submodules outside `modules/` that callers reach with `//<subdir>`, which
-// only the callers know. The result is sorted.
+// ModuleDirs lists the directories that a module's library serves, relative to
+// repo, sorted. An empty string stands for repo itself:
+//   - moduleDir itself, relative to repo, if it holds configuration;
+//   - every directory below <moduleDir>/modules that holds configuration;
+//   - each directory in called, relative to repo, that holds configuration;
+//   - every directory inside repo that those reach through local source
+//     paths.
 //
-// A module whose own directory holds no configuration is a bundle of
-// submodules, and serves the rest all the same (issue #123). Whether such a
-// module is acceptable is the caller's to say: modscan refuses a fetched
-// one, pin locks what a library in another repository serves.
+// modules/ is the standard place for submodules; examples and tests are left
+// out unless something calls them. The called list supplies submodules outside
+// modules/ that callers reach with //<subdir>, which only the callers know.
+//
+// A readable moduleDir that holds no configuration is a bundle of submodules
+// and serves the rest all the same (issue #123). Whether such a module is
+// acceptable is the caller's to say: modscan refuses a fetched one, while pin
+// locks what a library in another repository serves. A missing or unreadable
+// moduleDir returns an error.
 func ModuleDirs(repo, moduleDir string, called ...string) ([]string, error) {
 	moduleDir = strings.Trim(moduleDir, "/")
 	// The directory itself must be there and readable: a module that isn't

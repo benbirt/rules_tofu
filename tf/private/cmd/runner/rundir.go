@@ -18,11 +18,11 @@ import (
 // path to a different file, in a tree Bazel prunes; and the declared one under
 // bazel-bin is an input to build actions, which must not find tofu's files in
 // it. The run directory is the runner's own, one per deploy, and holds
-// whatever tofu writes beside the configuration: `.terraform/`, the lock, and
+// whatever tofu writes beside the configuration: .terraform/, the lock and
 // the state of a `backend "local"` with relative paths.
 //
 // The links are what the runner put there, and the only links in the run
-// directory outside tofu's `.terraform/`, so bringing it up to date needs no
+// directory outside tofu's .terraform/, so bringing it up to date needs no
 // record of earlier runs: remove every link, then link the current work tree.
 // Regular files are tofu's or the user's and are never touched, bar the two
 // stale ones noted below. One in the way of a link is an error: it would
@@ -49,9 +49,9 @@ func syncRunDir(workTree, runRoot, cwd string) error {
 	}
 
 	// Left by an earlier run, and wrong for this one: the lock tofu wrote
-	// records the provider versions of that build (installLockFile writes the
-	// managed one, if any, after this), and `.terraform/providers` links into
-	// that launcher's plugin tree, which init relinks.
+	// records the provider versions of that build, and .terraform/providers
+	// links into that launcher's plugin tree, which init relinks.
+	// installLockFile writes any managed lock after this.
 	if err := os.Remove(filepath.Join(cwd, ".terraform.lock.hcl")); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("remove the previous run's lock file: %w", err)
 	}
@@ -70,8 +70,8 @@ func syncRunDir(workTree, runRoot, cwd string) error {
 // linkTree creates, for every file under src, a symlink to it at the same
 // relative path under dst. src is absolute, so the links are too. Directories
 // are created rather than linked, so that nothing tofu writes beside the
-// configuration can land in src. A symlink to a directory is an error
-// (errDirectoryLink).
+// configuration can land in src. A symlink to a directory is an error (see
+// errDirectoryLink).
 func linkTree(src, dst string) error {
 	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
