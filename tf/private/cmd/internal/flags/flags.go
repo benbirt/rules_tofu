@@ -13,9 +13,9 @@ type stringList []string
 func (s *stringList) String() string     { return strings.Join(*s, ",") }
 func (s *stringList) Set(v string) error { *s = append(*s, v); return nil }
 
-// StringList defines a repeatable string flag on the default flag set (e.g.
-// --var-file can appear multiple times), like flag.String does for a single
-// value.
+// StringList defines a repeatable string flag on flag.CommandLine, like
+// flag.String does for a single value. Each occurrence appends to the
+// returned slice.
 func StringList(name, usage string) *[]string {
 	sl := new(stringList)
 	flag.Var(sl, name, usage)
