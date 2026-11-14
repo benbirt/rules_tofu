@@ -73,15 +73,15 @@ import (
 )
 
 var (
-	workTree        = flag.String("work-tree", "", "path to the materialized work tree root")
-	packageDir      = flag.String("package-dir", "", "workspace-relative dir of the root module within the work tree")
+	workTree        = flag.String("work-tree", "", "path to the materialised work tree root")
+	packageDir      = flag.String("package-dir", "", "work-tree-relative directory of the root module; empty for the workspace root package")
 	pluginDir       = flag.String("plugin-dir", "", "absolute path to the vendored provider plugin tree, passed to tofu init via -plugin-dir")
-	varFiles        = flags.StringList("var-file", "path to a .tfvars.json file passed to tofu via -var-file (repeatable)")
+	varFiles        = flags.StringList("var-file", "path to a .tfvars or .tfvars.json file passed to tofu via -var-file (repeatable)")
 	modulesManifest = flag.String("modules-manifest", "", "the .terraform/modules/modules.json recording every module call, copied into place before tofu init -get=false")
 	lockFile        = flag.String("lock-file", "", "optional .terraform.lock.hcl pinning the providers (tf_providers.from_lock), copied next to the configuration before tofu init")
 	testDir         = flag.String("test-dir", "", "for --command=test, the test files' directory relative to the package dir, passed to tofu as -test-directory; empty for tofu's default")
 
-	stateDir   = flag.String("state-dir", "", "absolute path to the per-deploy state directory; tofu runs in its work/ subdirectory")
+	stateDir   = flag.String("state-dir", "", "absolute path to the per-deploy state directory; tofu runs in work/<package-dir> beneath it")
 	outputRoot = flag.String("output-root", "", "absolute path to Bazel's output tree (bazel-out); a local backend's state inside it is ephemeral")
 
 	allowEphemeralState = flag.Bool("allow-ephemeral-state", false,
