@@ -70,11 +70,13 @@ via `_CASES`) registers a root `opentofu_toolchain` whose stand-in `tofu` exits
 non-zero with `"custom tofu toolchain selected"`. It verifies that a root
 toolchain registration wins over `rules_tofu`'s downloads.
 
-`lock_update/` (`lock_update_test`, driven by `lock_update_test.sh`) covers a
-workspace's first `@tf_providers//:pin`, a lock-only provider bump leaving
-`MODULE.bazel.lock` untouched under `--lockfile_mode=error`, and resolving a
-root `tf_providers.provider` tag conflict via `pin`. See the header of
-`lock_update_test.sh` for the steps.
+`lock_update/` (`lock_update_test`, driven by `lock_update_test.sh`) keeps its
+lock in `infra/` and covers a workspace's first `@tf_providers//:pin`, a
+lock-only provider bump leaving `MODULE.bazel.lock` untouched under
+`--lockfile_mode=error`, and resolving a root `tf_providers.provider` tag
+conflict via `pin`. It also checks that `bazel mod tidy` succeeds and changes
+nothing in a copy holding only the files Dependabot's `bazel` updater fetches.
+See the header of `lock_update_test.sh` for the steps.
 
 `module_dependency/` (`module_dependency_<version>_test`, driven by
 `module_dependency_test.sh`) has `//app` call a `tf_library` in
@@ -89,7 +91,7 @@ the steps.
 `fixtures/network` into a tagged git repository and `fixtures/dns` into an
 archive at test time alongside `cloudposse/label/null` from the OpenTofu
 registry. It covers offline planning, tree tidying, commit and registry facts,
-`from_lock()` with `pin`, and fetch-time error diagnostics; see the header of
+`from_lock` with `pin`, and fetch-time error diagnostics; see the header of
 `tf_modules_test.sh` for the steps.
 
 `run_directory/` (`run_directory_test`, driven by `run_directory_test.sh`)

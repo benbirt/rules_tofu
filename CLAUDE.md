@@ -128,6 +128,13 @@ Then `bazel shutdown` so the new startup flags take effect.
   dependency carries one from being developed as a root module of its own,
   while in a consumer workspace the root owns provider versions and libraries
   only constrain them.
+- Keep `lock_file` on `tf_providers.from_lock` named `lock_file` and
+  `mandatory = True` with no default, and tell users in docs and `tf_pin` to
+  write it as a string literal (issue #131; `lock_update_test` step 5).
+  Dependabot's `bazel` updater does not clone the repository, fetching only
+  files that `MODULE.bazel` names as string literals in attributes it
+  recognises alongside their `BUILD` files. It then runs `bazel mod tidy` to
+  regenerate `MODULE.bazel.lock`, which evaluates `from_lock`.
 - Always create the `@tf_providers` hub so dependencies' `use_repo` calls
   resolve even when the root declares no providers.
 - Treat a missing lock file as empty so `pin` can write the first one.
