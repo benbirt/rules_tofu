@@ -166,9 +166,10 @@ bazel_integration_test(
 ]
 
 # Provider lock workflow: a workspace's first pin, a Dependabot/Renovate
-# update (versions.tf and .terraform.lock.hcl only) that must leave
-# MODULE.bazel.lock untouched, and a root tag for the locked provider that
-# fails the build while leaving pin runnable. See lock_update_test.sh.
+# update (versions.tf and infra/.terraform.lock.hcl only) that must leave
+# MODULE.bazel.lock untouched, `bazel mod tidy` with only the files
+# Dependabot's bazel updater fetches, and a root tag for the locked provider
+# that fails the build while leaving pin runnable. See lock_update_test.sh.
 sh_binary(
     name = "lock_update_driver",
     srcs = ["lock_update_test.sh"],

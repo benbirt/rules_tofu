@@ -39,7 +39,8 @@
 #      makes the next build resolve and record the commit again (issue #96).
 #   5. Moving v1.0.0 to a new commit and running `bazel clean --expunge` still
 #      plans the old commit's content and passes with --lockfile_mode=error.
-#   6. Switching from provider tags to tf_providers.from_lock() and running
+#   6. Switching from provider tags to
+#      tf_providers.from_lock(lock_file = "//:.terraform.lock.hcl") and running
 #      @tf_providers//:pin locks hashicorp/null (from the git module) and
 #      hashicorp/time (from //vpc/peering), leaves out hashicorp/random (used
 #      only under examples/), and re-plans //app.

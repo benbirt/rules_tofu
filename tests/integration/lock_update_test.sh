@@ -4,25 +4,29 @@
 # sub-workspace).
 #
 # Steps:
-#   1. `bazel run @tf_providers//:pin` writes the initial .terraform.lock.hcl
-#      although the libraries already name @tf_providers//hashicorp/null,
-#      which has no package in the hub until it is locked. The lock meets the
-#      constraints of both root-package libraries (versions.tf and floor.tf,
-#      issue #99) and of a submodule in @bundle_module//bundle, a module_source
-#      bundle with no configuration in its own directory (issue #123).
+#   1. `bazel run @tf_providers//:pin` writes the initial
+#      infra/.terraform.lock.hcl although the libraries already name
+#      @tf_providers//hashicorp/null, which has no package in the hub until it
+#      is locked. The lock meets the constraints of both root-package libraries
+#      (versions.tf and floor.tf, issue #99) and of a submodule in
+#      @bundle_module//bundle, a module_source bundle with no configuration in
+#      its own directory (issue #123).
 #   2. Building //:versions, //:floor and //empty:lib writes MODULE.bazel.lock.
 #      //empty:lib lists the locked provider and has no files; it validates
 #      because an empty root module is not given the lock (issue #119).
 #   3. Bump hashicorp/null as Dependabot or Renovate does: in versions.tf and
-#      .terraform.lock.hcl, and nowhere else.
+#      infra/.terraform.lock.hcl, and nowhere else.
 #   4. Building //:versions and //:floor passes with --lockfile_mode=error and
 #      leaves MODULE.bazel.lock byte-identical.
-#   5. Adding a root tf_providers.provider tag for hashicorp/null while it is
-#      still in .terraform.lock.hcl fails `bazel build //:versions` in the
-#      provider's fetch (not in the extension), naming the conflict.
-#   6. Because the extension still evaluates, pin remains runnable: it omits
+#   5. In a directory with only the files Dependabot's bazel updater fetches,
+#      `bazel mod tidy --lockfile_mode=update` regenerates MODULE.bazel.lock
+#      and leaves it and MODULE.bazel byte-identical (issue #131).
+#   6. Adding a root tf_providers.provider tag for hashicorp/null while it is
+#      still in infra/.terraform.lock.hcl fails `bazel build //:versions` in
+#      the provider's fetch (not in the extension), naming the conflict.
+#   7. Because the extension still evaluates, pin remains runnable: it omits
 #      the tagged provider and writes an empty lock.
-#   7. Building //:versions and //:floor passes with the root tag alone.
+#   8. Building //:versions and //:floor passes with the root tag alone.
 
 set -euo pipefail
 
@@ -83,12 +87,12 @@ cmp MODULE.bazel.lock "${_TMPDIR}/MODULE.bazel.lock.before" >&2 ||
   fail "MODULE.bazel.lock changed after a lock-only bump"
 
 echo "--- 5. Dependabot's bazel updater, with only the files it fetches ---" >&2
-# Dependabot doesn't clone the repository. Its bazel file fetcher takes the
-# Bazel files at the root, the files MODULE.bazel names in the attributes it
-# knows (by a text match: lock_file is the one from_lock uses), each with the
-# BUILD file beside it, and the local_path_override directories. Then it runs
-# `bazel mod tidy` to regenerate MODULE.bazel.lock, which runs from_lock, so
-# the lock and its package must be among those files (issue #131).
+# Dependabot does not clone the repository. Its bazel file fetcher takes the
+# root Bazel files, local_path_override directories, and files MODULE.bazel
+# names by text match in attributes it knows, each with the BUILD file beside
+# it. lock_file is the attribute from_lock uses for that match. Dependabot then
+# runs `bazel mod tidy` to regenerate MODULE.bazel.lock. That runs from_lock,
+# so the lock and its package must be among the fetched files (issue #131).
 DEPENDABOT="${_TMPDIR}/dependabot"
 rm -rf "${DEPENDABOT}"
 mkdir "${DEPENDABOT}"
