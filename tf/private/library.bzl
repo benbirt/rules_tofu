@@ -1,13 +1,4 @@
-"""`tf_library` rule: a reusable bundle of OpenTofu/Terraform
-configuration files, plus transitive `tf_library` deps. Not
-directly runnable; bind variable values and produce runnable
-`.plan`/`.apply` targets with `tf_deploy`.
-
-Building a library runs `tofu init -backend=false && tofu validate`
-against its transitive files as part of the build action — the target
-will not build if validation fails. There is no separate `.validate`
-sub-target.
-"""
+"""The tf_library macro and its underlying rule."""
 
 load("//toolchain:toolchain.bzl", "TOOLCHAIN_TYPE")
 load(":fmt.bzl", _tf_fmt = "tf_fmt", _tf_fmt_check = "tf_fmt_check_test")
@@ -97,42 +88,37 @@ _tf_library = rule(
     attrs = {
         "srcs": attr.label_list(
             allow_files = ALLOWED_SRC_EXTS,
-            doc = "Source files belonging to this library (.tf, .tf.json, .tofu, .tofu.json, .tftpl, .hcl). " +
-                  "Test files (.tftest.hcl, .tofutest.hcl) go in a `tf_test`.",
+            doc = "Configuration and template files: `.tf`, `.tf.json`, `.tofu`, `.tofu.json`, " +
+                  "`.tftpl` and `.hcl`. `.tofu` and `.tofu.json` shadow `.tf` and `.tf.json` " +
+                  "of the same name. Test files belong in `tf_test.srcs`.",
         ),
         "deps": attr.label_list(
             providers = [TfLibraryInfo],
-            doc = "Other `tf_library` targets whose files this library composes with.",
+            doc = "`tf_library` targets whose files, providers and `module_source` mappings " +
+                  "propagate through this library.",
         ),
         "data": attr.label_list(
             allow_files = True,
-            doc = "Arbitrary files to include alongside the Terraform sources in the work tree. " +
-                  "Use to expose files for `file()` calls in Terraform configs. " +
-                  "Variables files that OpenTofu loads by itself (`terraform.tfvars[.json]`, " +
-                  "`*.auto.tfvars[.json]`) are rejected: values come through a `tf_deploy`'s " +
-                  "`vars`, or the `var_files` of a `tf_deploy` or `tf_test`.",
+            doc = "Files placed in the work tree for `file()` and `templatefile()`. " +
+                  "`terraform.tfvars`, `terraform.tfvars.json`, `*.auto.tfvars` and " +
+                  "`*.auto.tfvars.json` are rejected; pass variable files via `var_files` on " +
+                  "`tf_deploy` or `tf_test`.",
         ),
         "providers": attr.label_list(
             providers = [TfProviderInfo],
-            doc = "Vendored OpenTofu/Terraform providers this library references. " +
-                  "Declare each provider once in MODULE.bazel via the `tf_providers` " +
-                  "extension and pass `@tf_providers//<namespace>/<name>` here. " +
-                  "Propagates transitively to " +
-                  "any `tf_deploy` that pulls this library in.",
+            doc = "Providers required by `srcs`, as `@tf_providers//<namespace>/<name>` targets " +
+                  "from the `tf_providers` extension. Propagated transitively to dependants.",
         ),
         "module_source": attr.string(
-            doc = "The address by which HCL calls this library as a module, e.g. " +
-                  "`\"git::https://github.com/acme/infra.git//vpc?ref=v1.2.0\"`: the `source` that " +
-                  "users outside Bazel would write. A `module` block whose `source` is this " +
-                  "address (or this address plus `//<subdir>`) uses this library's files, " +
-                  "when the library is in the caller's `deps`. Needed to call a library " +
-                  "from another Bazel repository, which a relative path can't reach.",
+            doc = "Address by which HCL `module` blocks call this library or `//<subdir>` " +
+                  "within it when it is in the caller's `deps`, e.g. " +
+                  "`\"git::https://github.com/acme/infra.git//vpc?ref=v1.2.0\"`. Required to " +
+                  "call a library in another Bazel repository.",
         ),
         "module_version": attr.string(
-            doc = "The version of this module, required when `module_source` is a module " +
-                  "registry address. A caller's `version` constraint must accept it. The " +
-                  "`tf_library` macro defaults it to the version of the Bazel module that " +
-                  "holds the library.",
+            doc = "Version checked against callers' `version` constraints when `module_source` " +
+                  "is a registry address. Required for registry addresses; setting it without " +
+                  "`module_source` is an error.",
         ),
         "_modules_bin": attr.label(
             default = MODULES_BIN,
@@ -141,76 +127,109 @@ _tf_library = rule(
         ),
     },
     toolchains = [TOOLCHAIN_TYPE],
-    doc = """Bundles a set of OpenTofu/Terraform configuration files for reuse.
-
-A `tf_library` carries no variable values and is not directly
-runnable. Use `tf_deploy` to bind variable values and produce
-`:foo.plan` / `:foo.apply` runnable sub-targets.
-
-Building a library runs `tofu init -backend=false && tofu validate` against
-its transitive files, so configuration errors fail the build.
-
-At runtime, every file in `srcs` is materialized at its
-workspace-relative path, so:
-  - Same-package files reference each other bare.
-  - Cross-package deps reference each other with
-    `source = "../other_lib"`.
-
-Note: Terraform parses any `source` not starting with `./` or `../` as
-a registry address, so to reach a top-level workspace directory from a
-deeply nested module, traverse with `../../...`.
-
-A library from another Bazel repository is called by its `module_source`
-instead, the address that users outside Bazel would write. rules_tofu writes
-every module call into `.terraform/modules/modules.json`, as `tofu init`
-does when it installs modules, and runs `tofu init -get=false`, so no module
-is ever fetched. A call whose `source` no dep provides fails the build, as
-does a dep with `module_source` that no call uses.
-""",
+    doc = "Underlying rule for `tf_library`. Use the macro.",
 )
 
 def tf_library(name, srcs = None, deps = None, data = None, providers = None, module_source = None, module_version = None, fmt_test = True, **kwargs):
-    """A reusable bundle of OpenTofu/Terraform configuration files.
+    """A reusable bundle of OpenTofu and Terraform-compatible configuration files.
 
-    Always generates:
-      - `:<name>`     — the library target. Building it runs
-                        `tofu init -backend=false && tofu validate` against
-                        the library's transitive files.
+    A `tf_library` carries no variable values and has no `.plan`, `.apply` or
+    `.destroy` targets; use `tf_deploy` for a root configuration.
 
-    When `srcs` is non-empty:
-      - `:<name>.fmt` — `bazel run` to reformat the .tf and .tofu files in
-                        `srcs` in place.
+    Files in the main repository are materialised at their workspace-relative
+    paths, so same-package files see each other directly. Call modules in other
+    workspace packages by relative paths starting with `./` or `../`, such as
+    `../../infra/dns`.
 
-    When additionally `fmt_test=True` (the default):
-      - `:<name>.fmt_check`  — `bazel test` that fails if those files are not formatted.
+    Module calls are resolved offline at build time:
+      - Every `module` block's `source` must be a literal string. `override`
+        and `*_override` files replace `source` on matching `module` blocks,
+        as OpenTofu merges them.
+      - Relative paths starting with `./` or `../` resolve within the caller's
+        own Bazel repository in the work tree and cannot cross into another
+        Bazel repository.
+      - Other `source` strings match the `tf_library` in `deps` whose
+        normalised `module_source` equals the address or leaves the shortest
+        `//<subdir>` suffix, so a submodule's own library takes precedence over
+        its parent module's library.
+      - Registry addresses normalise to lower-case
+        `<host>/<namespace>/<name>/<system>`, defaulting `<host>` to
+        `registry.opentofu.org`.
+      - Git shorthands normalise as OpenTofu parses them:
+        `github.com/<owner>/<repo>[/<subdir>]` becomes
+        `git::https://github.com/<owner>/<repo>.git[//<subdir>]`, and
+        `git@<host>:<path>` becomes `git::ssh://git@<host>/<path>`. `?ref=`
+        must match, while `?depth=` is ignored.
+      - Archive URLs match by archive format and URL after stripping
+        `?archive=`, so `.tgz` and `?archive=tar.gz` share `tar.gz`; any other
+        query parameters must match.
+      - A library with `module_source` also satisfies calls from its own files
+        to that `module_source` with `//<subdir>`.
+
+    `rules_tofu` writes `<name>.modules.json` at build time, copies it to
+    `.terraform/modules/modules.json`, and runs `tofu init -get=false`.
+    `bazel build` fails on:
+      - A `module` block whose `source` is not a literal string or uses an
+        unsupported source type.
+      - A local `./` or `../` call to a directory outside the work tree, in
+        another Bazel repository, or absent from `deps`.
+      - A non-local `module` call that no `tf_library` in `deps` matches.
+      - A direct `module_source` dependency unused by this target's own
+        configuration. Calls inside other libraries' packages in `deps` do not
+        count, whereas a `module_source` library in this target's own package
+        or reached from it by `./` or `../` counts as used.
+      - Two libraries in `deps` with the same normalised `module_source`.
+      - A registry `module` call whose library has an empty `module_version` or
+        fails the caller's `version` constraint.
+      - A `module_source` call landing in a directory with no `.tf`,
+        `.tf.json`, `.tofu` or `.tofu.json` files. Local `./` or `../` calls
+        may target directories in the work tree that hold no configuration
+        files.
+      - A module call cycle.
+      - A `required_providers` entry missing from `providers` or `deps`, or
+        outside `registry.opentofu.org`. Built-in providers such as
+        `terraform.io/builtin/terraform` are exempt.
+    See [Modules](https://github.com/benbirt/rules_tofu#modules).
+
+    Generated targets:
+      - `:<name>`: materialises the work tree and runs
+        `tofu init -backend=false && tofu validate`.
+      - `:<name>.fmt`: `bazel run` target, emitted when `srcs` is non-empty,
+        that reformats main-repository `.tf` and `.tofu` source files in `srcs`
+        in place.
+      - `:<name>.fmt_check`: `bazel test` target, emitted when `srcs` is
+        non-empty and `fmt_test = True`, that checks formatting of `.tf` and
+        `.tofu` files in `srcs`, including generated and external files.
 
     Args:
-      name: target name.
-      srcs: source .tf/.tf.json/.tofu/.tofu.json/.tftpl/.hcl files. Test files
-          (`.tftest.hcl`, `.tofutest.hcl`) belong in a `tf_test` instead.
-      deps: other `tf_library` targets to compose with.
-      data: arbitrary files to include in the work tree for `file()` calls.
-          Variables files that OpenTofu loads by itself
-          (`terraform.tfvars[.json]`, `*.auto.tfvars[.json]`) are rejected:
-          values come through a `tf_deploy`'s `vars`, or the `var_files` of a
-          `tf_deploy` or `tf_test`.
-      providers: providers (`@tf_providers//<namespace>/<name>`, from the
-          `tf_providers` extension in MODULE.bazel) that this library
-          references in `required_providers`. Propagates transitively to any
-          `tf_deploy` consuming this library.
-      module_source: the address by which HCL calls this library as a module,
-          as users outside Bazel would write it in `source`. Callers with this
-          library in `deps` use its files for a `module` block with that
-          `source` (or that plus `//<subdir>`).
-      module_version: this module's version, which a caller's `version`
-          constraint must accept. Required when `module_source` is a module
-          registry address. Defaults to the version of the Bazel module that
-          holds this library (`native.module_version()`), so a module released
-          to a Bazel registry needn't repeat its version here. Pass "" to set
-          none.
-      fmt_test: whether to emit a `:<name>.fmt_check` test target. Only emitted
-          when True (the default) and `srcs` is non-empty.
-      **kwargs: forwarded to the underlying rule (visibility, tags, testonly).
+      name: Target name.
+      srcs: `.tf`, `.tf.json`, `.tofu`, `.tofu.json`, `.tftpl` and `.hcl`
+          files. `.tofu` and `.tofu.json` shadow `.tf` and `.tf.json` of the
+          same name. OpenTofu ignores dot-prefixed filenames.
+          `.terraform.lock.hcl` is rejected in `srcs` and `data`, and test
+          files belong in `tf_test.srcs`.
+      deps: `tf_library` targets whose files, providers and `module_source`
+          mappings propagate through this library.
+      data: Files placed in the work tree at their workspace-relative paths for
+          `file()` and `templatefile()`. `terraform.tfvars`,
+          `terraform.tfvars.json`, `*.auto.tfvars` and `*.auto.tfvars.json` are
+          rejected; pass variable files via `var_files` on `tf_deploy` or
+          `tf_test`.
+      providers: `@tf_providers//<namespace>/<name>` targets required by
+          `srcs`. Propagated transitively to dependants.
+      module_source: Address by which HCL `module` blocks call this library or
+          `//<subdir>` within it when it is in the caller's `deps`. Required to
+          call a library from another Bazel repository.
+      module_version: Version checked against callers' `version` constraints
+          when `module_source` is a registry address. Required for registry
+          addresses. Defaults to the version of the Bazel module that holds the
+          library when `module_source` is set, or `""` otherwise; setting it
+          without `module_source` is an error.
+      fmt_test: Emit `:<name>.fmt_check` when `True` and `srcs` is non-empty;
+          defaults to `True`.
+      **kwargs: Forwarded to the underlying rules. `visibility`, `tags` and
+          `testonly` apply to all generated targets; other rule attributes
+          apply to `:<name>`.
     """
     common_kwargs = {}
     for forwarded in ("visibility", "tags", "testonly"):

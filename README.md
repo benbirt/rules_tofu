@@ -1,4 +1,4 @@
-# rules_tofu 🌱
+# rules_tofu
 
 [![CI](https://github.com/benbirt/rules_tofu/actions/workflows/ci.yml/badge.svg)](https://github.com/benbirt/rules_tofu/actions/workflows/ci.yml)
 [![BCR](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fbcr.bazel.build%2Fmodules%2Frules_tofu%2Fmetadata.json&query=%24.versions%5B-1%3A%5D&label=BCR&color=43a047&logo=bazel)](https://registry.bazel.build/modules/rules_tofu)
@@ -8,190 +8,178 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Bazel rules for [OpenTofu](https://opentofu.org/) and Terraform-compatible
-configuration. Your `.tf` files become ordinary build targets: `bazel build`
-validates them, `bazel test` checks their formatting and runs their
-`tofu test` tests, and `bazel run` plans, applies and destroys them, with
-providers and the `tofu` binary vendored by Bazel.
+configuration. `bazel build` runs `tofu init` and `tofu validate` offline as a
+cached action; `bazel test` checks formatting and runs `tofu test`; `bazel run`
+plans, applies and destroys. Bazel downloads and pins the `tofu` binary,
+provider plugins and external modules by digest or commit, so `tofu init` never
+contacts the network.
 
-## Why
+Requires Bazel 8.5 or later on Linux or macOS. You do not need `tofu` installed
+because Bazel downloads it; OpenTofu 1.12 is the oldest supported release.
 
-- **Build = validate.** `bazel build //...` runs `tofu init` and
-  `tofu validate` over every library and deploy, offline and cached.
-- **Hermetic and reproducible.** Bazel downloads the `tofu` binary, every
-  provider plugin and every module, each pinned by a digest or commit. No
-  `tofu init` hitting the network, no `.terraform/` directories.
-- **Composable.** `tf_library` is to `.tf` files what `cc_library` is to
-  C++: reusable, dependency-aware, and not runnable on its own. `tf_deploy`
-  is the root that binds variables and runs.
-- **Plays well with bots.** Provider versions live in a standard
-  `.terraform.lock.hcl` that Renovate and Dependabot already understand.
-- **Generated inputs.** Variable files can be the output of any other Bazel
-  rule, such as a `genrule` that fetches secrets.
+## Quick start
 
-## Quick start 🚀
-
-Requires Bazel 8.5 or later on Linux or macOS.
-
-**1. Add the module.** Get the latest version from the
-[Bazel Central Registry](https://registry.bazel.build/modules/rules_tofu)
-or the [release notes](https://github.com/benbirt/rules_tofu/releases).
+**1. Add `rules_tofu` to `MODULE.bazel`.** Take the version from the
+[Bazel Central Registry](https://registry.bazel.build/modules/rules_tofu) or
+[GitHub releases](https://github.com/benbirt/rules_tofu/releases):
 
 ```python
 # MODULE.bazel
 bazel_dep(name = "rules_tofu", version = "X.Y.Z")
 
 tofu = use_extension("@rules_tofu//toolchain:extensions.bzl", "tofu")
-# tofu.version(version = "1.12.0")  # optional; a default is pinned
+# tofu.version(version = "1.12.0")
 use_repo(tofu, "tofu_toolchains")
 ```
 
-One `tofu` version serves the whole build. A `tofu.version` tag in the root
-module wins; otherwise your dependencies must agree on one, and with no tags
-at all the version pinned in [`toolchain/versions.bzl`](toolchain/versions.bzl)
-is used. Bazel downloads it: nothing needs installing. rules_tofu supports
-OpenTofu 1.12 and later.
+Leave out the `tofu` extension block to use the default OpenTofu version, which
+`rules_tofu` registers automatically. See [The `tofu` binary](#the-tofu-binary).
 
-**2. Declare targets.**
+**2. Write a configuration file and declare targets.**
+
+```hcl
+# hello/main.tf
+variable "name" {
+  type = string
+}
+
+output "greeting" {
+  value = "Hello, ${var.name}!"
+}
+```
 
 ```python
-# BUILD.bazel
+# hello/BUILD.bazel
 load("@rules_tofu//tf:defs.bzl", "tf_deploy", "tf_library")
 
 tf_library(
-    name = "network",
-    srcs = ["network.tf", "outputs.tf"],
+    name = "greet_lib",
+    srcs = ["main.tf"],
 )
 
 tf_deploy(
-    name = "prod",
-    srcs = ["backend.tf"],  # backend and provider config local to this deploy
-    deps = [":network"],
-    vars = {
-        "region": "us-east-1",
-        "env": "prod",
-    },
+    name = "hello",
+    allow_ephemeral_state = True,
+    vars = {"name": "world"},
+    deps = [":greet_lib"],
 )
 ```
 
-**3. Build, test, run.**
+Without a remote `backend` or `cloud` block, `apply` and `destroy` refuse to run
+unless `allow_ephemeral_state = True` is set. Real deploys declare a remote
+backend in `srcs`; see [State and backends](#state-and-backends). Configurations
+that use providers declare them in `MODULE.bazel` and list them in `providers`;
+see [Providers](#providers).
+
+**3. Build, test and run.**
 
 ```sh
-bazel build //...                      # tofu init + tofu validate, cached
-bazel test //...                       # tofu fmt checks
-bazel run //path/to:prod.plan
-bazel run //path/to:prod.apply         # prompts; add `-- --auto-approve` to skip
-bazel run //path/to:prod.destroy
+bazel build //...
+bazel test //...
+bazel run //hello:hello.plan
+bazel run //hello:hello.apply     # prompts; pass `-- -auto-approve` to skip
+bazel run //hello:hello.destroy
 ```
 
-[`examples/hello`](examples/hello) is this quick start, runnable, with no
-providers. To use providers, continue with [Providers](#providers).
+[`examples/hello`](examples/hello) has this setup alongside `tf_test` targets.
 
-## The rules
+## Rules
 
-The rules load from `@rules_tofu//tf:defs.bzl`. The full API reference,
-including the module extensions' tags, is on the
-[Bazel Central Registry](https://registry.bazel.build/modules/rules_tofu/latest/docs).
+Load `tf_library`, `tf_deploy` and `tf_test` from `@rules_tofu//tf:defs.bzl`.
+Full rule and module-extension reference is in the
+[API docs](https://registry.bazel.build/modules/rules_tofu/latest/docs).
 
 ### `tf_library`
 
-A reusable bundle of configuration files. A library carries no variable
-values and is not runnable on its own.
+A reusable bundle of configuration files with no variable values and no `.plan`,
+`.apply` or `.destroy` targets.
 
-| Attribute   | Purpose |
-|-------------|---------|
-| `srcs`      | `.tf`, `.tf.json`, `.tofu`, `.tofu.json`, `.tftpl` and `.hcl` files. A `.tofu` file is read in place of the `.tf` file of the same name ([`examples/tofu_files`](examples/tofu_files)). |
-| `deps`      | Dependency `tf_library` targets. |
-| `data`      | Extra files placed in the work tree for `file()` and `templatefile()`. |
-| `providers` | Providers the library's files require, as `@tf_providers//<namespace>/<name>`. |
-| `module_source` | The address by which other modules call this one, e.g. `git::https://example.com/acme/network.git?ref=v1.0.0`. See [Modules](#modules-). |
-| `module_version` | This module's version, required when `module_source` is a registry address. Defaults to the version of the Bazel module that holds the library. |
-| `fmt_test`  | Generate the `.fmt_check` test (default `True`). |
+| Attribute | Purpose |
+|-----------|---------|
+| `srcs` | `.tf`, `.tf.json`, `.tofu`, `.tofu.json`, `.tftpl` and `.hcl` files. `.tofu` and `.tofu.json` shadow `.tf` and `.tf.json` of the same name; see [`examples/tofu_files`](examples/tofu_files). |
+| `deps` | `tf_library` targets whose files, providers and `module_source` mappings propagate through this library. |
+| `data` | Files placed in the work tree for `file()` and `templatefile()`. |
+| `providers` | Providers required by `srcs`, as `@tf_providers//<namespace>/<name>`. |
+| `module_source` | Address by which HCL `module` blocks call this library when it lives in another Bazel repository. See [Modules](#modules). |
+| `module_version` | Version checked against callers' `version` constraints on a registry `module_source`. Defaults to the version of the Bazel module that holds the library when `module_source` is set; setting it without `module_source` is an error. |
+| `fmt_test` | Emit `:name.fmt_check` when `srcs` is non-empty. Defaults to `True`. |
 
 ### `tf_deploy`
 
-A root configuration: the deploy's own files plus dependency libraries,
-with variable values bound. This is the target `bazel run` plans, applies
-and destroys. Its root module is its own package, which must hold a
-configuration file: the deploy's `srcs`, or those of a library in the same
-package. Libraries in other packages are files in the work tree that the
-root's `module` blocks call: `deps` there alone deploy nothing, and such a
-deploy fails to build.
+A root configuration with variable values bound. Its own Bazel package is the
+root module and must contain at least one configuration file, either in `srcs`
+or in a same-package `tf_library`. Libraries in other packages sit at their own
+paths in the work tree and are reached only through `module` blocks; without a
+configuration file in the deploy's package, `bazel build` fails.
 
-| Attribute               | Purpose |
-|-------------------------|---------|
-| `srcs`                  | The deploy's own `.tf`, `.tf.json`, `.tofu`, `.tofu.json`, `.tftpl` and `.hcl` files, typically `backend` and provider blocks. |
-| `deps`                  | Dependency `tf_library` targets. |
-| `vars`                  | Variable values, as a dict of name to string. See [Variables and data files](#variables-and-data-files). |
-| `var_files`             | `.tfvars` or `.tfvars.json` files, including files generated by other rules. |
-| `data`                  | Extra files placed in the work tree for `file()` and `templatefile()`. |
-| `providers`             | Providers the deploy's own `srcs` require, as `@tf_providers//<namespace>/<name>`. |
-| `allow_ephemeral_state` | Let `apply` and `destroy` run with state under `bazel-bin`. See [State](#state-and-backends). |
-| `fmt_test`              | Generate the `.fmt_check` test (default `True`). |
+| Attribute | Purpose |
+|-----------|---------|
+| `srcs` | Deploy-local configuration files, typically `backend` and `provider` blocks, with the same allowed extensions as `tf_library.srcs`. |
+| `deps` | `tf_library` targets included in the work tree. |
+| `vars` | String dictionary of variable values written to `rules_tofu.auto.tfvars.json`. See [Variables and data files](#variables-and-data-files). |
+| `var_files` | `.tfvars` or `.tfvars.json` files passed via `-var-file`, including generated outputs. |
+| `data` | Files placed in the work tree for `file()` and `templatefile()`. |
+| `providers` | Providers required directly by `srcs`, combined with providers from `deps`. |
+| `allow_ephemeral_state` | Permit `apply` and `destroy` when state lives under `bazel-bin`. Defaults to `False`; see [State and backends](#state-and-backends). |
+| `fmt_test` | Emit `:name.fmt_check` when `srcs` is non-empty. Defaults to `True`. |
 
 ### `tf_test`
 
-A module's OpenTofu tests, the `.tftest.hcl` files `tofu test` runs, as a
-Bazel test. See [Tests](#tests-).
+Runs `tofu test` over a module's test files as a Bazel test. See
+[Tests](#tests).
 
-| Attribute       | Purpose |
-|-----------------|---------|
-| `srcs`          | The test files: `.tftest.hcl`, `.tofutest.hcl`, `.tftest.json` and `.tofutest.json`, all in one directory. |
-| `module`        | The `tf_library` or `tf_deploy` under test. |
-| `deps`          | Helper `tf_library` targets that `run { module { ... } }` blocks load. |
-| `providers`     | Providers the tests need beyond the module's and helpers' own. |
-| `var_files`     | `.tfvars` or `.tfvars.json` files passed with `-var-file`. |
-| `data`          | Extra files placed in the work tree. |
-| `allow_network` | Let the tests reach the network (default `False`; see [Tests](#tests-)). |
-| `fmt_test`      | Generate the `.fmt_check` test (default `True`). |
+| Attribute | Purpose |
+|-----------|---------|
+| `srcs` | `.tftest.hcl`, `.tofutest.hcl`, `.tftest.json` and `.tofutest.json` files in one directory at or below `module`'s package. `.tofutest.*` shadows `.tftest.*`. |
+| `module` | The `tf_library` or `tf_deploy` under test. |
+| `deps` | Helper `tf_library` targets loaded by `run { module { ... } }` blocks. |
+| `providers` | Providers needed beyond those of `module` and `deps`. |
+| `var_files` | `.tfvars` or `.tfvars.json` files passed via `-var-file`. |
+| `data` | Files placed in the work tree. |
+| `allow_network` | Allow network access during tests instead of blocking it in the sandbox. Defaults to `False`. |
+| `fmt_test` | Emit `:name.fmt_check`. Defaults to `True`. |
 
 ### Generated targets
 
-| Target             | Rule    | Command      | Does |
-|--------------------|---------|--------------|------|
-| `:name`            | library, deploy | `bazel build`| Materialises the work tree and runs `tofu init -backend=false && tofu validate`. |
-| `:name`            | test    | `bazel test` | Runs `tofu test` offline against the module under test; `bazel build` validates it with the test files. |
-| `:name.fmt_check`  | all     | `bazel test` | Fails if the `.tf`, `.tofu`, `.tftest.hcl` and `.tofutest.hcl` files in `srcs` are not `tofu fmt` clean. |
-| `:name.fmt`        | all     | `bazel run`  | Reformats those files in place. |
-| `:name.plan`       | deploy  | `bazel run`  | `tofu plan`, saving the plan to the state directory. |
-| `:name.apply`      | deploy  | `bazel run`  | `tofu apply`. Prompts for confirmation unless the command is followed by `-- --auto-approve`. |
-| `:name.destroy`    | deploy  | `bazel run`  | `tofu destroy`. Prompts for confirmation unless the command is followed by `-- --auto-approve`. |
+| Target | Rule | Command | Behaviour |
+|--------|------|---------|-----------|
+| `:name` | `tf_library`, `tf_deploy` | `bazel build` | Materialises the work tree and runs `tofu init -backend=false && tofu validate`. |
+| `:name` | `tf_test` | `bazel test` | Runs `tofu test` offline; `bazel build` validates the module and test files. |
+| `:name.fmt_check` | all | `bazel test` | Checks `tofu fmt` formatting of `.tf`, `.tofu`, `.tftest.hcl` and `.tofutest.hcl` files in `srcs`, including generated and external files. |
+| `:name.fmt` | all | `bazel run` | Reformats main-repository `.tf`, `.tofu`, `.tftest.hcl` and `.tofutest.hcl` source files in `srcs` in place. |
+| `:name.plan` | `tf_deploy` | `bazel run` | Runs `tofu plan`, saving the plan file to `<state-dir>/tfplan`. |
+| `:name.apply` | `tf_deploy` | `bazel run` | Runs a fresh `tofu apply` without reading `tfplan`. Prompts unless `-- -auto-approve` is passed. |
+| `:name.destroy` | `tf_deploy` | `bazel run` | Runs `tofu destroy`. Prompts unless `-- -auto-approve` is passed. |
 
-There is no separate `:name.validate` target. If the rule builds
-successfully, the configuration is valid.
+Each deploy launcher, such as `bazel-bin/<pkg>/<name>.apply.sh`, can also be run
+directly from any working directory. It locates its runfiles and state directory
+relative to its own path, so do not copy or symlink the script elsewhere. Extra
+arguments after `--`, or passed directly to the `.sh` script, are forwarded to
+`tofu` in the deploy's shared run directory. See [How it works](#how-it-works).
 
-`:name.plan`, `:name.apply` and `:name.destroy` are ordinary executables:
-besides `bazel run`, the built `bazel-bin/<pkg>/<name>.apply.sh` can be run
-directly, from any directory. Either way tofu runs in the deploy's run
-directory under `bazel-bin` (see [How it works](#how-it-works)), not in your
-shell's directory. `:name.fmt` rewrites files in the checkout, so it does
-need `bazel run`.
+`:name.fmt` and `:name.fmt_check` are emitted when `srcs` is non-empty. They act
+only on the files in `srcs`, including those in subdirectories; other files in
+the package are left alone.
 
-`:name.fmt` and `:name.fmt_check` exist only when `srcs` is non-empty. Both
-name the files in `srcs` one by one, so a file in a subdirectory of the
-package counts and a file in the package that isn't in `srcs` is left
-alone. `.fmt` rewrites source files of the main repository; a generated
-file in `srcs` is checked but never rewritten.
+## Providers
 
-## Providers 📦
+BUILD files name providers as `@tf_providers//<namespace>/<name>` in lower case
+and without a version; for example, `PostHog/posthog` becomes
+`@tf_providers//posthog/posthog`. Only providers required by built targets are
+downloaded. `tofu init` runs offline against them, while providers still call
+their own APIs during `plan`, `apply`, `destroy` and networked tests.
 
-Providers are downloaded by Bazel and handed to the rules that use them.
-BUILD files name a provider as `@tf_providers//<namespace>/<name>`, never
-with a version, and only the providers a build uses are fetched.
+Archives come from `registry.opentofu.org` unless `url_template` is set. That
+includes OpenTofu's builds of `hashicorp/` providers, whose checksums differ
+from `releases.hashicorp.com`; see [Restrictions](#restrictions) for registry
+scope.
 
-Versions come from one of two places:
-
-- **A lock file** (recommended): a standard `.terraform.lock.hcl` plus a
-  `versions.tf`, exactly as in a plain OpenTofu project. Renovate and
-  Dependabot keep it current.
-- **Tags in `MODULE.bazel`**: for what a lock can't express, such as
-  digests you pin yourself or a download mirror.
-
-The two can be mixed, but a provider can't be both tagged in the root module
-and locked: if one is, builds that use it fail, naming the conflict, until
-`bazel run @tf_providers//:pin` has rewritten the lock without it (tagged
-providers are left out) or the tag is removed. Every tag and attribute is
-described in the
-[`tf_providers` reference](https://registry.bazel.build/modules/rules_tofu/latest/docs/tf/providers/extensions.bzl).
+Versions come from `.terraform.lock.hcl` via `from_lock` or from `provider` tags
+in `MODULE.bazel`. The two can be mixed across providers, but pinning the same
+provider in both the lock and a root tag fails when that provider is fetched.
+Remove the tag, or run `bazel run @tf_providers//:pin` to rewrite the lock
+without root-tagged providers. Full tag reference is in the
+[API docs](https://registry.bazel.build/modules/rules_tofu/latest/docs).
 
 ### Pinning with a lock file
 
@@ -202,447 +190,160 @@ tf_providers.from_lock(lock_file = "//:.terraform.lock.hcl")
 use_repo(tf_providers, "tf_providers")
 ```
 
-The lock is named by a label, so its directory must be a Bazel package: if
-there is neither a `BUILD.bazel` nor a `BUILD` file beside the lock, add a
-`BUILD.bazel`, which may be empty. Write the label as a string literal, as
-above, so that Dependabot can find the lock (see
-[Keeping the lock up to date](#keeping-the-lock-up-to-date-)).
+`lock_file` is required and must name a `.terraform.lock.hcl` file in the main
+repository, such as `"//:.terraform.lock.hcl"` or
+`"//infra:.terraform.lock.hcl"`. Its directory must be a Bazel package with a
+`BUILD.bazel` or `BUILD` file, which may be empty. Write `lock_file` as a string
+literal so Dependabot can find the lock; see
+[Keeping the lock up to date](#keeping-the-lock-up-to-date).
 
-Name each provider in the `providers` of the libraries and deploys that use
-it, then write the lock with:
+Add `@tf_providers//<namespace>/<name>` to `providers` on the targets requiring
+each provider, then write the lock:
 
 ```sh
 bazel run @tf_providers//:pin
 ```
 
-`pin` locks every provider that any `tf_library` or `tf_deploy` in the
-workspace requires, or any library they depend on (from `tf_modules` or
-another Bazel repository: the module itself, its `modules/`, the submodules
-they call with `//<subdir>`, and what those call locally, but not its
-examples), for `linux_amd64`, `linux_arm64`, `darwin_amd64`, `darwin_arm64`
-and `windows_amd64` (`-platform=<os>_<arch>` chooses others).
-Each provider is locked at the newest version that satisfies every
-`required_providers` constraint in the workspace. Constraints are combined
-by the provider's source, never by the local name, so two targets in one
-package can each require a provider in a file of their own. If the
-constraints conflict, `pin` lists them by directory and leaves the lock
-unchanged.
+`pin` collects `required_providers` across the workspace's `tf_library`,
+`tf_deploy` and `tf_test` targets and their external `deps`, leaving out
+directories of a fetched module outside `modules/` that nothing calls, such as
+its `examples/`. It resolves the newest version satisfying every constraint and
+writes `.terraform.lock.hcl`; conflicting constraints fail without changing the
+lock.
 
-**Recommended: pin exact versions in a `versions.tf` beside the lock.** This
-is optional, and follows
-[OpenTofu's advice](https://opentofu.org/docs/language/providers/requirements/#best-practices-for-provider-versions):
-the root configuration pins exact versions, and reusable modules declare at
-most a `>=` floor. Here the whole workspace is the root configuration.
-`versions.tf` belongs to a `tf_library` like any other `.tf` source:
+By default, `pin` locks the five platforms that `from_lock` resolves:
+`linux_amd64`, `linux_arm64`, `darwin_amd64`, `darwin_arm64` and
+`windows_amd64`. If a provider is not published for all five, pass `-platform`
+after `--` to replace that list:
+
+```sh
+bazel run @tf_providers//:pin -- -platform=linux_amd64 -platform=darwin_arm64
+```
+
+Without exact constraints, re-running `pin` upgrades every provider to the
+newest allowed version. Reusable libraries declare `>=` floors under
+[OpenTofu's provider version guidance](https://opentofu.org/docs/language/providers/requirements/#best-practices-for-provider-versions),
+so put exact pins in a `versions.tf` target to hold versions steady across `pin`
+runs; see [`examples/lock`](examples/lock):
 
 ```hcl
-# versions.tf: the only place versions are pinned
+# versions.tf
 terraform {
   required_providers {
-    aws = { source = "hashicorp/aws", version = "6.2.0" }
+    aws = {
+      source  = "hashicorp/aws"
+      version = "6.2.0"
+    }
   }
 }
 ```
 
-```python
-# BUILD.bazel
-tf_library(
-    name = "versions",
-    srcs = ["versions.tf"],
-    providers = ["@tf_providers//hashicorp/aws"],
-)
+Only the root module's `from_lock` is read; `from_lock` in a `bazel_dep` is
+ignored. Lock files written by `terraform` against `registry.terraform.io` are
+rejected until regenerated with `pin`. When `required_providers` drifts from the
+lock, `bazel build` fails and points to `pin`.
 
-tf_library(
-    name = "network",
-    srcs = ["main.tf"],  # may declare `version = ">= 6.0"`
-    providers = ["@tf_providers//hashicorp/aws"],
-)
-```
+#### Keeping the lock up to date
 
-With a `versions.tf`, each upgrade is a reviewable two-line change: the pin
-in `versions.tf` and the matching lock entry. Without one, the lock is the
-only record of the versions in use, and re-running `pin` upgrades every
-provider to the newest version the constraints allow.
+Locked providers record nothing in `MODULE.bazel.lock`, so updating
+`versions.tf` and `.terraform.lock.hcl` needs no Bazel command:
 
-A few rules follow from OpenTofu's own model:
+- Renovate's built-in `terraform` manager updates `versions.tf` and
+  `.terraform.lock.hcl` together.
+- Dependabot requires `package-ecosystem: "opentofu"` rather than `"terraform"`,
+  `directory` set to the lock's directory, and a `.tf` file such as
+  `versions.tf` alongside the lock.
 
-- One lock per workspace, and one version of each provider across the build.
-- Only the root module's lock counts. A `from_lock` in a Bazel module you
-  depend on is ignored: libraries constrain, the root decides.
-- If the lock no longer satisfies a library's constraints, building that
-  library fails and tells you to run `pin`.
-- `from_lock` reads the lock with a small Go helper compiled by the Go SDK
-  rules_go selects for the host. A workspace that configures no Go SDK uses
-  the one rules_tofu pins; one that registers its own (or whose earlier
-  `bazel_dep` does) must select a Go at least as new as the `go` directive in
-  rules_tofu's [`go.mod`](go.mod), or the helper fails to build, saying so.
-
-[`examples/lock`](examples/lock) is a complete example.
-
-#### Keeping the lock up to date 🤖
-
-- **Renovate** works with its default `terraform` manager. With a
-  `versions.tf` Renovate updates the pin and the lock in one PR; without one
-  only the lock changes.
-- **Dependabot** needs `package-ecosystem: "opentofu"` (not `terraform`),
-  with `directory` set to the lock's directory. Dependabot only reads `.tf`
-  files in that directory, so a `versions.tf` there is required in practice.
-  Dependabot's `bazel` ecosystem, which updates `MODULE.bazel`, doesn't
-  clone the repository either: it fetches `MODULE.bazel`, the Bazel files at the
-  root, and the files `MODULE.bazel` names in attributes it recognises,
-  `lock_file` among them, with the `BUILD` file beside each. It then
-  regenerates `MODULE.bazel.lock`, which runs `from_lock`, so it finds the
-  lock only if `lock_file = "..."` is written out in `MODULE.bazel`, not
-  built from a variable.
+Dependabot's `bazel` ecosystem updates `MODULE.bazel` without cloning the
+repository. It fetches `MODULE.bazel`, the root Bazel files, and the files
+`MODULE.bazel` names in recognised attributes such as `lock_file`, together with
+the `BUILD.bazel` or `BUILD` file beside each. It then regenerates
+`MODULE.bazel.lock`, which runs `from_lock`. Dependabot finds the lock only when
+`lock_file = "..."` is a string literal in `MODULE.bazel` rather than built from
+a variable.
 
 ### Pinning with tags
 
-Use a `provider` tag when you want to pin digests yourself or download from
-a mirror:
+Use `tf_providers.provider` to pin zip SHA256 digests in `MODULE.bazel` or to
+download from a mirror; see [`examples/aws`](examples/aws),
+[`examples/gcp`](examples/gcp) and [`examples/posthog`](examples/posthog):
 
 ```python
 tf_providers = use_extension("@rules_tofu//tf/providers:extensions.bzl", "tf_providers")
 tf_providers.provider(
     source = "hashicorp/aws",
     version = "5.70.0",
-    sha256 = {  # optional: omit to trust the registry's digests
-        "linux_amd64":  "157ec2424b34ba3a2208ce39763528131d5600daffd72e8f47b08cbd7feebbd4",
-        "linux_arm64":  "47eba28f2c35d71d73dd2d0c2a09c89bdcc99136a5484904b59cc9c299f1a5aa",
-        "darwin_amd64": "cad9a818e27739e0dcfb78c9170ce5e1b4619d48be7ec529618198633ec5bb63",
+    sha256 = {  # optional when downloading from registry.opentofu.org
+        "linux_amd64": "157ec2424b34ba3a2208ce39763528131d5600daffd72e8f47b08cbd7feebbd4",
         "darwin_arm64": "59894534729ed071176f794d25d1cb7aecdcffd6825fbb6100e815ba6e12ec10",
     },
 )
 use_repo(tf_providers, "tf_providers")
 ```
 
-- Without `sha256`, the OpenTofu registry's digests are used and recorded in
-  `MODULE.bazel.lock`. Commit that file and run CI with
-  `--lockfile_mode=error`.
-- With `sha256`, a digest that disagrees with the registry fails the fetch
-  and reports the registry's value. Get a digest with:
+- Without `sha256`, digests for whichever of the five default platforms the
+  provider is published for are recorded in `MODULE.bazel.lock`; commit it and
+  run CI with `--lockfile_mode=error`.
+- With `sha256`, every listed platform is downloaded when the provider is
+  fetched, so list each `<os>_<arch>` you build on; accepted keys are in the
+  [API docs](https://registry.bazel.build/modules/rules_tofu/latest/docs).
+  Without `url_template`, a digest that differs from `registry.opentofu.org`
+  fails the fetch and reports the registry's value, which you can also query
+  with
+  `curl -s https://registry.opentofu.org/v1/providers/hashicorp/aws/5.70.0/download/linux/amd64 | jq -r .shasum`.
+- `url_template` downloads from a mirror using `{namespace}`, `{name}`,
+  `{version}`, `{os}` and `{arch}` placeholders, and requires `sha256`. See the
+  [API docs](https://registry.bazel.build/modules/rules_tofu/latest/docs) for an
+  example.
 
-  ```sh
-  curl -s https://registry.opentofu.org/v1/providers/hashicorp/aws/5.70.0/download/linux/amd64 | jq -r .shasum
-  ```
+Across Bazel modules, the root module's lock or tag wins; otherwise an agreed
+version or the highest plain numeric version is selected. Non-numeric version
+and digest conflict rules are in the
+[API docs](https://registry.bazel.build/modules/rules_tofu/latest/docs).
 
-- `url_template` downloads from a mirror and then requires `sha256`.
-  Placeholders are `{namespace}`, `{name}`, `{version}`, `{os}` and
-  `{arch}`:
+## Modules
 
-  ```python
-  tf_providers.provider(
-      source = "PostHog/posthog",
-      version = "1.0.24",
-      url_template = "https://github.com/PostHog/terraform-provider-posthog/releases/download/v{version}/terraform-provider-{name}_{version}_{os}_{arch}.zip",
-      sha256 = {...},
-  )
-  ```
-
-Tagged providers are named like any other and are left out of the lock by
-`pin`. When several Bazel modules tag the same provider, the root module's
-tag or lock wins; otherwise the version they agree on is used, or the
-highest of those they ask for. Versions that differ must be plain numeric
-ones to be ordered: for a prerelease such as `2.0.0-rc1`, a build that uses
-the provider fails, asking the root module to choose with a tag or, where
-it pins with a lock, by running `pin`. See
-[`examples/aws`](examples/aws), [`examples/gcp`](examples/gcp) and
-[`examples/posthog`](examples/posthog).
-
-### How vendoring works
-
-Providers come from the [OpenTofu registry](https://search.opentofu.org/)
-unless a tag gives a `url_template`. These are the same builds that
-`tofu init` installs; for `hashicorp/` providers they are OpenTofu's builds,
-so their checksums differ from releases.hashicorp.com. Sources are
-case-insensitive and named in lower case: `PostHog/posthog` becomes
-`@tf_providers//posthog/posthog`.
-
-The checks `tofu init` and `tofu validate` would make online run offline
-during `bazel build`. The `plan`, `apply` and `destroy` targets use the
-vendored plugins too, though the providers themselves still talk to their
-own APIs. A `.terraform.lock.hcl` in `srcs` or `data` is rejected; use
-`from_lock`.
-
-## The `tofu` binary
-
-Bazel downloads the OpenTofu release for the machine it runs on, checked
-against the digest pinned in
-[`toolchain/versions.bzl`](toolchain/versions.bzl), and registers it as a
-toolchain. Those digests are copied from each release's `SHA256SUMS` only
-after its cosign signature has been verified, by
-`bazel run //tools:update_versions`. To use a release that isn't pinned yet,
-open a PR that runs it, or bring your own binary.
-
-### Bringing your own binary
-
-`opentofu_toolchain` wraps any `tofu` executable of OpenTofu 1.12 or later:
-one you vendor, one you patched, or one built from source with `rules_go`.
-An older one is not supported: the rules pass flags it lacks, `tofu test
--json-into` for one, and nothing checks the binary's version first, so the
-failure is tofu's own. Bazel consults the root
-module's `register_toolchains` before those of its dependencies, so a
-toolchain registered there is the one every rule uses:
-
-```python
-# BUILD.bazel
-load("@rules_tofu//toolchain:toolchain.bzl", "opentofu_toolchain")
-
-opentofu_toolchain(
-    name = "tofu_impl",
-    binary = ":tofu",              # a file, a go_binary, any executable
-    version = "1.12.0",
-    platform_key = "linux_amd64",  # <os>_<arch> of the provider builds it runs
-)
-
-toolchain(
-    name = "tofu_toolchain",
-    toolchain = ":tofu_impl",
-    toolchain_type = "@rules_tofu//toolchain:toolchain_type",
-)
-```
-
-```python
-# MODULE.bazel
-register_toolchains("//:tofu_toolchain")
-```
-
-For a source build, a `go_binary` of `github.com/opentofu/opentofu/cmd/tofu`
-needs `pure = "on"` and
-`x_defs = {"github.com/opentofu/opentofu/version.dev": "no"}`; without the
-latter `tofu version` reports a `-dev` prerelease, which fails
-`required_version` constraints. Expect OpenTofu's three hundred Go modules
-to join your module graph, and its `replace` of `hashicorp/hcl/v2` with
-`opentofu/hcl/v2` to need repeating in your own `go.mod`.
-
-rules_tofu itself deliberately ships the download rather than a source
-build. The pinned download is already hermetic, and a bundled source build
-would put those modules and that `replace` into every downstream build.
-
-## Variables and data files
-
-`vars` is the common case. `var_files` adds `.tfvars` or `.tfvars.json`
-files, which can be generated by other rules:
-
-```python
-genrule(
-    name = "secrets",
-    outs = ["secrets.tfvars.json"],
-    cmd = "$(location //tools:fetch-secrets) > $@",
-    tools = ["//tools:fetch-secrets"],
-)
-
-tf_deploy(
-    name = "prod",
-    deps = [":network"],
-    vars = {"region": "us-east-1"},
-    var_files = [":secrets"],
-)
-```
-
-Every value in `vars` is a string. OpenTofu converts it to the variable's
-declared type where it can, so `"3"` sets a `number` and `"true"` a `bool`; a
-variable with no `type` keeps the string. A list, map or object can't be
-given this way, and since `tofu validate` reads no variable values, the
-mistake shows at `plan`, not at `bazel build`. Put such values in a
-`var_files` entry.
-
-Variable keys must be unique across `vars` and every `var_files` entry. A
-build action checks this, so an overlap fails `bazel build`, not the run.
-
-`data` places arbitrary files in the work tree at their workspace-relative
-path, for `file()` and `templatefile()`:
-
-```python
-tf_deploy(
-    name = "prod",
-    deps = [":network"],
-    data = ["//config:tls_cert.pem"],  # file("config/tls_cert.pem")
-)
-```
-
-## Tests 🧪
-
-`tofu test` runs a module's `.tftest.hcl` files: `run` blocks that plan or
-apply the module and check `assert` conditions, with mock providers and
-helper modules as fixtures. `tf_test` runs them with `bazel test`, offline,
-against the vendored providers:
-
-```python
-tf_test(
-    name = "network_test",
-    srcs = glob(["tests/*.tftest.hcl"]),
-    module = ":network",                 # the tf_library or tf_deploy under test
-    deps = ["//network/tests/fixtures:subnet_names"],  # a tf_library a run block loads
-)
-```
-
-```hcl
-# tests/subnets.tftest.hcl
-run "names" {
-  module {
-    source = "./tests/fixtures"   # relative to the module's directory, network/
-  }
-}
-
-run "plans_a_subnet_per_name" {
-  command = plan
-
-  variables {
-    subnet_names = run.names.names
-  }
-
-  assert {
-    condition     = length(aws_subnet.this) == length(run.names.names)
-    error_message = "expected one subnet per name"
-  }
-}
-```
-
-The test files go in `srcs` of the `tf_test`, never of a `tf_library` or
-`tf_deploy`: tofu reads them from the root module's directory, so a test in
-a library's `srcs` would be shipped to and loaded by every dependant. They
-may be in the module's own directory or one subdirectory of it (`tests/`,
-tofu's default, or another, passed as `-test-directory`), and a `tf_test`
-holds one directory's files. The tests can live in a Bazel package of their
-own, as [`examples/hello/tests`](examples/hello/tests) does. A `.tofutest.hcl`
-is read in place of the `.tftest.hcl` of the same name.
-
-**Helper modules.** A `run` block's `module { source = ... }` loads a module
-in place of the one under test. Like every module, it comes from a
-`tf_library` in `deps`: by a path relative to the module under test's
-directory, or by its `module_source`, including a `@tf_modules//...` module.
-Nothing is fetched; the module manifest records what tofu would have
-installed.
-
-**Providers.** The test's plugin tree holds the module's providers, the
-helpers' and any in `providers`. A `mock_provider` still needs the real
-provider package, for its schema, so a mocked test is offline but not
-provider-free.
-
-**Variables.** Testing a `tf_deploy`, its `vars` and `var_files` are in
-force. The test's own `var_files` come after them, and a test file's
-`variables` blocks win over both.
-
-**Real infrastructure.** A `run` block applies by default, which creates real
-resources. A `tf_test` carries Bazel's `block-network` tag, so plans and
-mocked applies run in the sandbox while a run that reaches a cloud API fails
-fast. Set `allow_network = True` for tests that must apply real
-infrastructure: the test then carries `external` and `requires-network`, so
-it is never cached.
-
-**Output.** `tofu test`'s JSON log is in the test's undeclared outputs as
-`tofu-test.json`. When a run's destroy fails, tofu writes the resources it
-could not remove to `errored_test.tfstate` and still exits 0; the test fails
-and keeps that file with its outputs. Extra arguments reach `tofu test`
-through `--test_arg`, as in
-`bazel test //network:network_test --test_arg=-verbose`.
-
-## State and backends 🔒
-
-A deploy that manages real infrastructure should declare a remote
-`backend "..." {}` or a `cloud {}` block in its own `srcs`. The runner then
-defers to that backend entirely.
-
-The runner never rewrites a backend block. tofu reads it and resolves it
-itself, from the deploy's run directory,
-`bazel-bin/<pkg>/<name>.rules_tofu-state/work/<pkg>`, which `.plan`, `.apply`
-and `.destroy` share (see [How it works](#how-it-works)). So two kinds of
-deploy keep their state under `bazel-bin`:
-
-- one with no backend block, whose state the runner puts at
-  `bazel-bin/<pkg>/<name>.rules_tofu-state/terraform.tfstate`;
-- one with a `backend "local"` block, unless its `path` and `workspace_dir`
-  are both literal absolute paths outside Bazel's output tree. A relative
-  path, or the default of one left unset (`terraform.tfstate`,
-  `terraform.tfstate.d`), leads into the run directory, and the runner can't
-  tell where an expression leads.
-
-State under `bazel-bin` is disposable by construction: `bazel clean` deletes
-it, a different build configuration forks it, and it is local to one
-machine. Losing it orphans whatever was applied. So `apply` and `destroy`
-**refuse to run** against such a deploy, naming where the state would go and
-the fix. `plan` is never gated.
-
-Where disposable state is the point, opt in:
-
-```python
-tf_deploy(
-    name = "sandbox",
-    allow_ephemeral_state = True,
-    deps = [":lib"],
-)
-```
-
-That suits demos, throwaway sandboxes and bootstrapping the bucket that will
-hold real state. For the bootstrap case, add the backend block once the
-bucket exists, migrate with `tofu init -migrate-state`, then drop the
-attribute.
-
-A `backend "local"` that names absolute paths is not gated, though its state
-is still local to one machine:
-
-```hcl
-terraform {
-  backend "local" {
-    path          = "/var/lib/tofu/prod/terraform.tfstate"
-    workspace_dir = "/var/lib/tofu/prod/workspaces"
-  }
-}
-```
-
-## Modules 🧩
-
-`tofu init` never fetches a module. Every module a configuration calls is a
-`tf_library` in `deps`, and rules_tofu records where each call's files are in
-`.terraform/modules/modules.json`, as `tofu init` does after installing
-modules, then runs `tofu init -get=false`.
+`tofu init` never fetches modules. Every called module is a `tf_library` in
+`deps`; `rules_tofu` generates the module manifest at build time, installs it at
+`.terraform/modules/modules.json`, and runs `tofu init -get=false`. See
+[How it works](#how-it-works).
 
 ### In the workspace
 
-Every `.tf` file is materialised at its workspace-relative path, so
-same-package files see each other bare and sibling packages are a relative
-hop away:
+Workspace files are materialised at their workspace-relative paths, so files in
+the same package see each other directly. Call modules in other workspace
+packages by relative paths starting with `./` or `../`; OpenTofu parses any
+other prefix as a registry address:
 
 ```hcl
 module "dns" {
-  source = "../dns"
+  source = "../../infra/dns"
 }
 ```
 
-Terraform treats any `source` that doesn't start with `./` or `../` as a
-registry address. To reach across the tree, climb to the workspace root and
-back down, for example `../../infra/dns`.
-
 ### From a registry, git or an archive
 
-Declare each module in `MODULE.bazel`, and call it from HCL by the same
-`source`:
+Declare external modules in `MODULE.bazel`, add their `@tf_modules` labels to
+`deps`, and call them in HCL by the same `source`; see
+[`examples/modules/label`](examples/modules/label),
+[`examples/modules/stack`](examples/modules/stack) and
+[`examples/modules/git`](examples/modules/git):
 
 ```python
 # MODULE.bazel
 tf_modules = use_extension("@rules_tofu//tf/modules:extensions.bzl", "tf_modules")
 tf_modules.module(source = "terraform-aws-modules/vpc/aws", version = "5.8.1")
-tf_modules.module(
-    name = "acme_vpc",
-    source = "git::https://github.com/acme/infra.git//vpc?ref=v1.2.0",
-)
-tf_modules.module(
-    name = "acme_dns",
-    source = "https://example.com/dns-1.0.0.tar.gz",
-    sha256 = "...",
-)
+tf_modules.module(name = "acme_vpc", source = "git::https://github.com/acme/infra.git//vpc?ref=v1.2.0")
+tf_modules.module(name = "acme_dns", source = "https://example.com/dns-1.0.0.tar.gz", sha256 = "...")
 use_repo(tf_modules, "tf_modules")
 ```
 
-```starlark
+```python
 # BUILD.bazel
 tf_library(
     name = "network",
     srcs = ["main.tf"],
-    deps = [
-        "@tf_modules//terraform-aws-modules/vpc/aws",
-        "@tf_modules//acme_vpc",
-    ],
+    deps = ["@tf_modules//terraform-aws-modules/vpc/aws"],
 )
 ```
 
@@ -655,70 +356,50 @@ module "vpc" {
 module "endpoints" {
   source = "terraform-aws-modules/vpc/aws//modules/vpc-endpoints"
 }
-
-module "acme_vpc" {
-  source = "git::https://github.com/acme/infra.git//vpc?ref=v1.2.0"
-}
 ```
 
-A registry module is labelled `@tf_modules//<namespace>/<name>/<system>`, in
-lower case, with the host in front for a registry other than
-`registry.opentofu.org` (`@tf_modules//example.com/acme/vpc/aws`). It needs
-an exact `version` of the form `X.Y.Z`, which a call's `version` constraint
-must accept; a prerelease such as `1.2.0-rc1` is not accepted there, and can
-be pinned as a git or archive module instead. A git or archive module is
-labelled by its `name`. Submodules are called with `//<subdir>` and come with
-the module's label.
+- Registry modules take `source = "[<host>/]<namespace>/<name>/<system>"`
+  without `//<subdir>`. They are labelled
+  `@tf_modules//<namespace>/<name>/<system>` in lower case, or
+  `@tf_modules//example.com/acme/vpc/aws` for a non-default `modules.v1` host.
+  `version` must be an exact `X.Y.Z` rather than a constraint or a prerelease
+  such as `1.2.0-rc1`; fetch prereleases via git or an archive. Call submodules
+  in HCL with `//<subdir>` while depending on the parent module's label.
+- Git modules take `git::https://...`, `github.com/<owner>/<repo>` or `git@...`,
+  with optional `//<subdir>` and `?ref=`. They are labelled
+  `@tf_modules//<name>` and require `git` on `PATH`.
+- Archive modules take `https://...`, `http://...` or `file://...` archive URLs,
+  with optional `//<subdir>` or `?archive=`. They are labelled
+  `@tf_modules//<name>` and require `sha256`. Full URL forms, archive
+  extensions, `name` rules and cross-module resolution are in the
+  [API docs](https://registry.bazel.build/modules/rules_tofu/latest/docs).
 
-Each module is pinned, so a tag that moves later changes nothing:
+Every fetch is pinned:
 
-| Source | Pinned by |
-|--------|-----------|
-| Registry address | The commit (or archive digest) the registry gives for the version, recorded in `MODULE.bazel.lock`. |
-| `git::<url>` or `github.com/<owner>/<repo>` | `commit`, or the commit that `?ref=` names when first fetched, recorded in `MODULE.bazel.lock`. |
-| Archive URL | `sha256`, which is required. |
+- Registry modules record their download location and git commit or archive
+  `sha256` in `MODULE.bazel.lock`.
+- Git modules fetch `commit` when set on the tag, or resolve `?ref=`, defaulting
+  to `HEAD`, on first fetch and record the commit in `MODULE.bazel.lock`. Commit
+  IDs in `commit` or `?ref=` must be full 40- or 64-character lowercase hex
+  hashes.
+- Archive modules verify `sha256`.
 
-git sources are fetched with `git`, which must be on the `PATH`. A commit,
-in `commit` or in `?ref=`, is given in full: an abbreviation can't be looked
-up without fetching the whole repository, and in `?ref=` is taken for a
-branch or tag that the repository doesn't have.
-Fetched modules are described by a small Go helper compiled, like
-`from_lock`'s, by the host Go SDK rules_go selects, which must be at least as
-new as the `go` directive in rules_tofu's [`go.mod`](go.mod) when the
-workspace registers a Go SDK of its own.
+Unpacking removes upstream Bazel files, `.git/`, `.terraform/`, lock files and
+auto-loaded `.tfvars` files. Symlinks to directories, missing targets or paths
+outside the tree are also removed, and `//<subdir>` cannot be a symlink. Git
+submodules are not fetched; see [Known gaps](#known-gaps).
 
-A module's files are its own. A symlink to a file of the module is kept and
-read as that file; a symlink to a directory, to nothing or to anything
-outside the module is removed when the module is fetched, as are any Bazel
-files it ships. A module can't therefore be declared by a `//<subdir>` that
-is a symlink: the fetch fails, naming the directory to declare instead. Git
-submodules are not fetched (see [Known gaps](#known-gaps)). Any
-`.terraform.lock.hcl`, `terraform.tfvars[.json]` and `*.auto.tfvars[.json]`
-a module ships are left out of its library: OpenTofu reads none of them from
-a module that is called, and no rule accepts them (see
-[Restrictions](#restrictions)).
+Each generated `tf_library` carries the providers required by the module's root,
+its `modules/` subdirectories, and directories it calls itself. If only your
+configuration calls a `//<subdir>` outside `modules/`, add that submodule's
+providers to your target's `providers`; `bazel build` names any missing labels,
+and `pin` still locks them. External modules called transitively must also be
+declared with `tf_modules.module`.
 
-A module's `tf_library` carries the providers its `required_providers`
-name, its `modules/` submodules', and those of any other directory of its
-own that it calls, by a relative path or by its own address with
-`//<subdir>`, so callers don't list them. A submodule outside `modules/`
-that only you call by `//<subdir>` is different: the library is generated
-when the module is fetched, before anything calls it, so its providers go
-in the caller's `providers`. The build fails naming the
-`@tf_providers//<namespace>/<name>` to add when one is missing. The root
-module still pins them all, with tags or in its lock, which `pin` writes to
-cover them, those submodules included. A module that calls
-other modules by address needs them declared too: fetching it fails
-otherwise, naming the `tf_modules.module` to add. Its calls to its own
-address need nothing more. Each module has one
-version per build. For a registry module the root module's tag wins, else
-the highest version requested.
+#### Keeping modules up to date
 
-#### Keeping modules up to date 🤖
-
-Renovate updates registry modules with a regex manager for `MODULE.bazel`.
-Grouping it with Renovate's own `terraform` manager, which updates the
-`version` in HCL, puts both in one PR:
+Renovate updates registry modules in `MODULE.bazel` with a regex manager paired
+with its `terraform` manager so HCL constraints update in the same PR:
 
 ```json
 {
@@ -735,40 +416,33 @@ Grouping it with Renovate's own `terraform` manager, which updates the
     }
   ],
   "packageRules": [
-    {
-      "matchDatasources": ["terraform-module"],
-      "groupName": "OpenTofu modules",
-      "registryUrls": ["https://registry.opentofu.org"]
-    }
+    { "matchDatasources": ["terraform-module"], "groupName": "OpenTofu modules", "registryUrls": ["https://registry.opentofu.org"] }
   ]
 }
 ```
 
-A new version's commit is recorded in `MODULE.bazel.lock`, so the PR is
-complete only once `bazel mod deps --lockfile_mode=update` has run, and a
-build with `--lockfile_mode=error` fails until then. Self-hosted Renovate
-can run it as a `postUpgradeTasks` command; otherwise, run it on the PR's
-branch. Dependabot doesn't update `tf_modules.module` tags.
+Registry commits live in `MODULE.bazel.lock`, so run
+`bazel mod deps --lockfile_mode=update` after a version bump before CI runs with
+`--lockfile_mode=error`. Self-hosted Renovate can run this in
+`postUpgradeTasks`; otherwise run it on the PR branch. Dependabot does not
+update `tf_modules.module` tags.
 
 ### From other Bazel repositories
 
-A `tf_library` that another Bazel repository ships, for example through a
-`bazel_dep`, can't be reached by a relative path. Such a library sets
-`module_source`, the address that users outside Bazel would write, and
-callers use that address:
+A `tf_library` in another Bazel repository, such as a `bazel_dep`, cannot be
+called by a relative path. Give each exported library its own Bazel package and
+set `module_source` to the address HCL callers write:
 
-```starlark
-# BUILD.bazel in the repository that ships the module
+```python
+# BUILD.bazel in @acme_infra//vpc
 tf_library(
     name = "vpc",
     srcs = glob(["**/*.tf"]),
     module_source = "git::https://github.com/acme/infra.git//vpc?ref=v1.2.0",
     visibility = ["//visibility:public"],
 )
-```
 
-```starlark
-# BUILD.bazel in the caller
+# BUILD.bazel in caller
 tf_library(
     name = "network",
     srcs = ["main.tf"],
@@ -776,141 +450,260 @@ tf_library(
 )
 ```
 
-For a registry address, the library also needs a version, which a call's
-`version` constraint must accept: `module_version`, which defaults to the
-version of the Bazel module that holds it, so a module released to the BCR
-needn't repeat it. The library's directory is its package, so give each
-such library a package of its own.
+A registry `module_source` also needs `module_version` set to a version that
+callers' `version` constraints accept. When `module_source` is set,
+`module_version` defaults to the version of the Bazel module that holds the
+library; setting `module_version` without `module_source` is an error.
 
-### How calls are matched
+Every `module` block's `source` must be a literal string. Non-local calls match
+a `tf_library` in `deps` by `module_source`, either exact or leaving the
+shortest `//<subdir>` suffix. Direct `module_source` dependencies unused by the
+target's own configuration fail `bazel build`. Full call-matching rules are in
+the [API docs](https://registry.bazel.build/modules/rules_tofu/latest/docs).
 
-A call matches the library in `deps` (direct or transitive) whose
-`module_source` is its `source`, or the one whose `module_source` plus
-`//<subdir>` is. When several do, the most specific wins, the one that
-leaves the shortest `//<subdir>`: a submodule declared by itself provides
-the calls into it, not the module that contains it. `tf_modules` sets
-`module_source` to the tag's `source`. Sources are read as OpenTofu reads
-them: a registry address matches with or without the default
-`registry.opentofu.org/` host, and the `github.com/<owner>/<repo>` shorthand
-matches the git URL it stands for. Other addresses must match exactly,
-`?ref=` included. A `source` must be a literal string.
+## Variables and data files
 
-A module may call its own address with `//<subdir>`, as some do rather than
-use a relative path: a library with `module_source` provides those calls
-itself.
+`vars` sets string-valued variables inline. `var_files` passes `.tfvars` or
+`.tfvars.json` files, including generated outputs, via `-var-file`. `data`
+symlinks files at workspace-relative paths for `file()` and `templatefile()`:
 
-The build fails when:
+```python
+genrule(
+    name = "secrets",
+    outs = ["secrets.tfvars.json"],
+    cmd = "$(location //tools:fetch-secrets) > $@",
+    tools = ["//tools:fetch-secrets"],
+)
 
-- a call's `source` matches no library in `deps`;
-- a library in `deps` with `module_source` is called neither by the root's
-  own configuration (its package's directories) nor by a relative `source`
-  from there into the library's package, and is not in the root's package;
-  a call from inside another library doesn't count, since that library
-  lists its own `deps`;
-- two libraries have the same `module_source`;
-- a call's `version` constraint rejects the matching version;
-- a module, the root's own or one it calls, requires a provider that nothing
-  in `providers` supplies, directly or through `deps`; the error names the
-  `@tf_providers//<namespace>/<name>` to add.
+tf_deploy(
+    name = "prod",
+    data = ["//config:tls_cert.pem"],  # file("config/tls_cert.pem")
+    vars = {"region": "us-east-1"},
+    var_files = [":secrets"],
+    deps = [":network"],
+)
+```
+
+`tf_deploy` writes `vars` to `rules_tofu.auto.tfvars.json` in its package
+directory. OpenTofu converts string values such as `"3"` or `"true"` when a
+variable is typed `number` or `bool`, while untyped variables receive the string
+as written. Put lists, maps and objects in `var_files` instead. Because
+`tofu validate` ignores variable values, a type mismatch in `vars` surfaces at
+`plan` rather than `bazel build`.
+
+Variable keys must not overlap across `vars` and `var_files` on a `tf_deploy`;
+`bazel build` fails on duplicates.
+
+## State and backends
+
+A deploy managing real infrastructure should declare a remote `backend "..." {}`
+or `cloud {}` block in `srcs`. The runner never rewrites backend blocks; `tofu`
+resolves them from the deploy's run directory,
+`bazel-bin/<pkg>/<name>.rules_tofu-state/work/<pkg>`.
+
+State lands inside `bazel-bin` in two cases:
+
+- No `backend` or `cloud` block: state is stored at
+  `bazel-bin/<pkg>/<name>.rules_tofu-state/terraform.tfstate`.
+- `backend "local"` without literal absolute paths outside `bazel-out` for both
+  `path` and `workspace_dir`. Those attributes default to `terraform.tfstate`
+  and `terraform.tfstate.d` in the run directory. Even with paths outside
+  `bazel-out`, local backend state remains single-machine.
+
+State under `bazel-bin` is machine-local, forks across build configurations and
+is deleted by `bazel clean`, so `apply` and `destroy` refuse to run against it
+by default. `plan` is never gated. Set `allow_ephemeral_state = True` only for
+demos, throwaway sandboxes or state-bucket bootstrap. After bootstrapping a
+state bucket, add the remote `backend` block, run `tofu init -migrate-state`,
+and remove `allow_ephemeral_state`.
+
+## Tests
+
+`tf_test` runs `tofu test` offline against vendored providers and modules:
+
+```python
+tf_test(
+    name = "network_test",
+    srcs = glob(["tests/*.tftest.hcl"]),
+    module = ":network",
+    deps = ["//network/tests/fixtures:subnet_names"],
+)
+```
+
+```hcl
+# tests/subnets.tftest.hcl
+run "names" {
+  module {
+    source = "./tests/fixtures" # relative to :network's package directory
+  }
+}
+
+run "plans_a_subnet_per_name" {
+  command = plan
+  variables {
+    subnet_names = run.names.names
+  }
+  assert {
+    condition     = length(aws_subnet.this) == length(run.names.names)
+    error_message = "expected one subnet per name"
+  }
+}
+```
+
+- Tests can live in a sub-package, and `module` may be an `alias`; see
+  [`examples/hello/tests`](examples/hello/tests). When `srcs` sits in a
+  subdirectory, `tofu test` still reads any test files in `module`'s root
+  directory.
+- Helper modules in `run` blocks come from `deps`, reached by a path relative to
+  `module`'s package directory or by `module_source`.
+- Available providers combine `module`, `deps` and `providers`. `mock_provider`
+  still needs the provider package for its schema. If `module`'s root directory
+  has no configuration files, `tofu init` installs no providers; add a file
+  declaring `required_providers` there when helper modules need providers.
+- `tf_test` initialises with `-backend=false`, ignoring any backend on a tested
+  `tf_deploy`. The deploy's `vars` and `var_files` still apply;
+  `tf_test.var_files` may override them, and `variables` blocks in test files
+  take precedence over both.
+- `run` blocks apply by default. `tf_test` adds Bazel's `block-network` tag so
+  accidental cloud calls fail in the sandbox while plans and mocked applies run
+  offline. Setting `allow_network = True` switches to `external` and
+  `requires-network`, and disables test caching.
+- `tofu-test.json` is written to Bazel's undeclared test outputs. If a `run`
+  block's destroy fails, `tofu test` writes `errored_test.tfstate` and exits 0;
+  `tf_test` fails the test and copies that file into undeclared outputs. Pass
+  extra flags with `--test_arg=-verbose`.
+
+## The `tofu` binary
+
+Bazel downloads the OpenTofu release for the execution platform, verifies its
+SHA256 against [`toolchain/versions.bzl`](toolchain/versions.bzl), and registers
+it as `@rules_tofu//toolchain:toolchain_type`. One version serves the whole
+build. A single `tofu.version` tag in the root module wins, and declaring more
+than one in the root module is an error. Without a root tag, any dependencies
+that tag a version must agree on it; with no tags anywhere, the default in
+`toolchain/versions.bzl` is used.
+
+To use a release that is not in `toolchain/versions.bzl`, either open a PR that
+adds it with `bazel run //tools:update_versions`, or register your own binary.
+`update_versions` verifies the cosign signature on `SHA256SUMS`.
+
+### Bringing your own binary
+
+`opentofu_toolchain` wraps any OpenTofu 1.12+ executable, whether vendored,
+patched or built with `rules_go`. Older releases lack flags such as
+`tofu test -json-into`, and `rules_tofu` does not check the binary's version.
+Root-module `register_toolchains` calls take precedence over the default:
+
+```python
+# BUILD.bazel; register in MODULE.bazel with `register_toolchains("//:tofu_toolchain")`
+load("@rules_tofu//toolchain:toolchain.bzl", "opentofu_toolchain")
+
+opentofu_toolchain(
+    name = "tofu_impl",
+    binary = ":tofu",
+    version = "1.12.0",
+    platform_key = "linux_amd64",  # <os>_<arch> matching provider packages
+)
+
+toolchain(
+    name = "tofu_toolchain",
+    toolchain = ":tofu_impl",
+    toolchain_type = "@rules_tofu//toolchain:toolchain_type",
+)
+```
+
+When building `github.com/opentofu/opentofu/cmd/tofu` with `rules_go`, set
+`pure = "on"` and `x_defs = {"github.com/opentofu/opentofu/version.dev": "no"}`;
+without `x_defs`, `tofu version` reports `-dev` and fails `required_version`
+constraints. Go and `go_deps` ignore `replace` directives in non-root modules,
+so your root `go.mod` must also repeat OpenTofu's `replace` of
+`github.com/hashicorp/hcl/v2` with `github.com/opentofu/hcl/v2`. Because a
+`bazel_dep` cannot apply that `replace` and a source build pulls roughly three
+hundred Go modules into every consumer's graph, `rules_tofu` ships verified
+downloads instead.
 
 ## How it works
 
-`tf_deploy` symlinks every transitive `.tf` file, plus `data` and
-`var_files`, into `bazel-bin/<pkg>/<name>.work/` at its workspace-relative
-path, and writes `vars` to `rules_tofu.auto.tfvars.json` there. Building
-the target runs `tofu init -backend=false && tofu validate` over that tree
-as a cached action.
+`tf_library` and `tf_deploy` assemble a work tree in
+`bazel-bin/<pkg>/<name>.work/`, symlinking main-repository sources, `data` and
+`var_files` at workspace-relative paths and external repositories under
+`external/<repository>/`. `tf_deploy` writes `vars` to
+`rules_tofu.auto.tfvars.json`. Both rules symlink exec-platform provider
+packages into `bazel-bin/<pkg>/<name>.plugins/` and write the module manifest to
+`bazel-bin/<pkg>/<name>.modules.json`. `bazel build` copies the work tree into a
+scratch directory, installs that manifest at
+`<pkg>/.terraform/modules/modules.json`, and runs
+`tofu init -backend=false -get=false -plugin-dir=... && tofu validate` as a
+cached action.
 
-Files from other Bazel repositories go under `external/<repository>/` in the
-work tree, and a generated `.terraform/modules/modules.json` records the
-directory of every module call.
+`.plan`, `.apply` and `.destroy` locate their runfiles and state directory from
+`$0` and mirror the work tree as symlinks into
+`bazel-bin/<pkg>/<name>.rules_tofu-state/work/`. They run `tofu` inside `<pkg>`
+there so `path.module`, `path.cwd`, `.terraform/` and relative local state stay
+consistent across runs until `bazel clean`. If a leftover regular file in the
+state tree collides with a configuration path, the runner fails rather than
+overwriting it. Each run installs `<name>.modules.json` at
+`.terraform/modules/modules.json`, pins `TF_DATA_DIR` to `.terraform`, and
+unsets `TF_PLUGIN_CACHE_DIR`. It then runs
+`tofu init -input=false -get=false -reconfigure -plugin-dir=...` to re-read the
+backend block without migrating state, followed by the command with `-var-file`
+flags.
 
-`.plan`, `.apply` and `.destroy` are launcher scripts that find their
-runfiles beside themselves, so each works under `bazel run` and when the
-built file is run directly, from any directory. The launcher starts a small
-Go runner, which makes the deploy's run directory,
-`bazel-bin/<pkg>/<name>.rules_tofu-state/work/`, a symlink mirror of the work
-tree and runs tofu in `<pkg>` there. All three commands share that one
-directory, so a relative path, `path.module` or `path.cwd` means the same to
-each, and what tofu writes (`.terraform/`, its lock file, a local backend's
-relative state) stays out of the trees Bazel owns and survives until
-`bazel clean`. Each run re-links the mirror to the current build and leaves
-every other file alone; a leftover file where the configuration now has one
-of the same name fails the run, naming it.
-
-In the run directory the runner runs
-`tofu init -input=false -get=false -reconfigure -plugin-dir=<vendored providers>`,
-which disables module and plugin installation and re-reads the backend block
-rather than the copy a previous run saved, then the requested command. It
-never rewrites the backend block.
-`var_files` are passed to every command with `-var-file`. tofu runs with
-`TF_DATA_DIR` set to the run directory's own `.terraform` and without any
-`TF_PLUGIN_CACHE_DIR`, so a shell's settings can't move the module manifest
-or bypass the vendored providers.
-
-A `tf_test` builds the same work tree for the module under test, with the
-test files and the helper libraries in `deps` added, validates it with the
-test directory, and at test time copies it into `$TEST_TMPDIR`, runs the
-same offline `tofu init` with `-backend=false` (`tofu test` keeps its state
-in memory and ignores backends), then `tofu test`.
+`tf_test` validates `module` and `srcs` during `bazel build`. During
+`bazel test`, it copies the work tree into `$TEST_TMPDIR`, installs
+`<name>.modules.json`, and runs `tofu init -backend=false` followed by
+`tofu test`. Both phases pass `-test-directory` when `srcs` is in a
+subdirectory of `module`'s package.
 
 ## Restrictions
 
-- `srcs` accepts `.tf`, `.tf.json`, `.tofu`, `.tofu.json`, `.tftpl` and
-  `.hcl` only. Variable files are rejected there: values come through
-  `vars` or `var_files`. Test files are rejected too: they go in a
-  `tf_test`, whose `srcs` must be in one directory.
-- `data` rejects the variables files OpenTofu loads by itself,
-  `terraform.tfvars[.json]` and `*.auto.tfvars[.json]`, in any directory: one
-  would set variables where nothing checks it against `vars` and
-  `var_files`. List such a file in the `var_files` of a `tf_deploy` or
-  `tf_test`, which pass it with `-var-file`; a `tf_deploy` checks it against
-  `vars` and its other `var_files` first.
-- A `tf_deploy` needs a configuration file (`.tf`, `.tf.json`, `.tofu` or
-  `.tofu.json`) in its own package's directory, from its `srcs` or from a
-  library there: OpenTofu refuses to plan an empty root module. A
-  `tf_library` or a `tf_test` may have an empty one, as a bundle of files
-  for others to call, or as tests whose runs load other modules. OpenTofu
-  installs no providers for an empty root module, though: when the modules
-  such a test loads need some, give the root a file whose
-  `required_providers` names them.
-- `apply` and `destroy` need a backend that keeps state outside `bazel-bin`,
-  or `allow_ephemeral_state`.
-- A deploy's `.plan`, `.apply` and `.destroy` share one run directory and
-  take no lock on it: run one at a time.
-- A module call can't use a relative path to reach files in another Bazel
-  repository; it uses the library's `module_source`.
+- OpenTofu ignores dot-prefixed filenames in `srcs`.
+- Test files belong in `tf_test.srcs`, not `tf_library` or `tf_deploy`.
+- `.terraform.lock.hcl` is rejected in `srcs` and `data`; pass lock files via
+  `tf_providers.from_lock`.
+- `rules_tofu.auto.tfvars.json` is reserved in a `tf_deploy` package for `vars`.
+- `data` rejects `terraform.tfvars`, `terraform.tfvars.json`, `*.auto.tfvars`
+  and `*.auto.tfvars.json` in any directory because OpenTofu auto-loads them
+  outside the duplicate-key check; pass variable files via `var_files`.
+- `.plan`, `.apply` and `.destroy` take no lock on their shared run directory;
+  run one command at a time per deploy.
+- Providers must belong to `registry.opentofu.org` or built-in
+  `terraform.io/builtin/*`, even when `url_template` downloads archives from a
+  mirror.
+- `tf_modules.module` does not support S3, GCS, Bitbucket, Mercurial or
+  `X-Terraform-Get` module sources.
+- `tf_providers.from_lock` and `tf_modules.module` compile Go helpers with
+  `rules_go`'s host Go SDK and fetch Go module dependencies via `GOPROXY`;
+  honoured proxy variables are listed in the
+  [API docs](https://registry.bazel.build/modules/rules_tofu/latest/docs).
+  Workspaces without a Go SDK use `rules_tofu`'s pinned SDK, while workspaces or
+  earlier `bazel_dep`s that register one must select at least the `go` version
+  in [`go.mod`](go.mod).
 
 ## Non-goals
 
-- **Running Terraform.** rules_tofu runs OpenTofu only. The vast majority
-  of Terraform configuration runs under OpenTofu unchanged, providers and
-  modules included, so for a `.tf` tree this rarely matters; OpenTofu's
+- Running `terraform`. `rules_tofu` drives `tofu` only. Most Terraform `.tf`
+  configurations, providers and modules work unchanged under OpenTofu; OpenTofu's
   [migration guide](https://opentofu.org/docs/intro/migration/) lists the
-  exceptions, mostly features tied to HashiCorp's own services such as HCP
-  Terraform and Stacks. Driving the `terraform` binary is not planned: the
-  two tools expand provider addresses to different registry hostnames, which
-  rules_tofu bakes into the vendored plugin tree and the
-  `.terraform.lock.hcl` it writes, so swapping the binary would be the
-  smallest part of the work. Registering a `terraform` binary as described
-  above is untested and breaks at the provider mirror.
-- **Building OpenTofu from source.** See [The `tofu` binary](#the-tofu-binary).
+  exceptions, such as HCP Terraform and Stacks. `rules_tofu` bakes
+  `registry.opentofu.org` into its plugin directory layout and lock files, so
+  wrapping a `terraform` binary in `opentofu_toolchain` fails at provider
+  resolution.
+- Building OpenTofu from source. See [The `tofu` binary](#the-tofu-binary).
 
 ## Known gaps
 
-- The build host must match the run host: validation and the launcher both
-  use the exec-platform provider binaries.
-- Windows: downloads work, but the launcher is bash-only.
-- Git submodules of a module's repository are not fetched, which OpenTofu
-  does: their directories are left out. That goes for every module fetched
-  with git, the registry modules whose source is a git repository included.
-  Fetching fails, naming the submodule, when the module's own directory is
-  in one or its own `module` calls lead into one. A submodule that nothing
-  calls is no obstacle, but one that only supplies files, to `file()` say,
-  or that another module calls by `//<subdir>`, is missed without a message
-  until the plan or the caller's build fails for want of it.
+- Validation and runtime launchers both use exec-platform provider binaries, so
+  the build host must match the run host.
+- Provider and toolchain downloads support Windows, but generated launcher
+  scripts require `bash`.
+- `tf_modules` does not fetch git submodules, including for git-backed registry
+  modules. If the module's root directory is a git submodule or its own `module`
+  calls enter one, fetching fails and names the submodule. A submodule reached
+  only via `file()` or an external `//<subdir>` call is omitted at fetch time
+  and fails when read or called.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the repository layout, test
-suites and release process. Released under the [MIT License](LICENSE).
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the repository layout, test suites
+and release process. Released under the [MIT License](LICENSE).

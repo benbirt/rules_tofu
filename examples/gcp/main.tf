@@ -26,9 +26,8 @@ provider "google" {
   project = var.project
   region  = var.region
 
-  # Credentials are resolved at plan/apply time via the usual GCP provider
-  # lookup (GOOGLE_APPLICATION_CREDENTIALS, gcloud ADC, etc.). `tofu validate`
-  # — which rules_tofu runs at `bazel build` time — does not contact GCP.
+  # GCP credentials are read at plan and apply time from the usual provider
+  # sources. `bazel build` runs `tofu validate` offline without contacting GCP.
 }
 
 resource "google_storage_bucket" "example" {

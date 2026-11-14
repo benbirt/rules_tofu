@@ -2,9 +2,10 @@ load("@rules_tofu//tf:defs.bzl", "tf_deploy", "tf_library")
 
 package(default_visibility = ["//visibility:public"])
 
-# OpenTofu reads `main.tofu` in place of `main.tf`, so a module can ship
-# OpenTofu-specific configuration beside Terraform-compatible files. If both
-# were read, the duplicate `greeting` output would fail validation.
+# OpenTofu reads main.tofu in place of main.tf, so a module can ship
+# OpenTofu-specific configuration beside Terraform-compatible files. It also
+# reads .tofu.json files such as variables.tofu.json. If both main.tf and
+# main.tofu were loaded, the duplicate greeting output would fail validation.
 tf_library(
     name = "greet_lib",
     srcs = [
@@ -14,6 +15,8 @@ tf_library(
     ],
 )
 
+# This is a demo, so it keeps disposable state under bazel-bin; a real deploy
+# declares a remote backend instead.
 tf_deploy(
     name = "greet",
     allow_ephemeral_state = True,

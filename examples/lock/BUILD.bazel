@@ -1,9 +1,9 @@
 load("@rules_tofu//tf:defs.bzl", "tf_library")
 
-# The workspace's provider pins: versions.tf, and the .terraform.lock.hcl
-# beside it that `tf_providers.from_lock` in MODULE.bazel reads. Building
-# this checks the two agree, so a pin bumped by hand without
-# `bazel run @tf_providers//:pin` fails the build.
+# versions.tf holds exact provider version pins beside .terraform.lock.hcl,
+# which MODULE.bazel loads with tf_providers.from_lock. Building this target
+# checks that the lock satisfies versions.tf. Run `bazel run @tf_providers//:pin`
+# to update the lock after editing provider constraints.
 tf_library(
     name = "versions",
     srcs = ["versions.tf"],

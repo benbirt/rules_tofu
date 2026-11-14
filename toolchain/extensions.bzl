@@ -1,10 +1,11 @@
-"""The tofu module extension, which provides the OpenTofu binary rules_tofu runs.
+"""Bzlmod module extension that downloads OpenTofu and provides `@tofu_toolchains`.
 
-Downloads a pinned OpenTofu release for each supported platform and
-registers it as the toolchain every rules_tofu target uses:
+`rules_tofu` registers `@tofu_toolchains//:all` at the default OpenTofu
+version automatically. Call the extension only when choosing a specific
+version:
 
     tofu = use_extension("@rules_tofu//toolchain:extensions.bzl", "tofu")
-    # tofu.version(version = "1.12.0")  # optional; a default is pinned
+    tofu.version(version = "1.12.0")
     use_repo(tofu, "tofu_toolchains")
 """
 
@@ -128,11 +129,11 @@ _tofu_hub = repository_rule(
 # ---- Module extension --------------------------------------------------------
 
 _version_tag = tag_class(
-    doc = "Choose the OpenTofu version the build runs.",
+    doc = "Select the OpenTofu version for the build.",
     attrs = {
         "version": attr.string(
-            doc = "OpenTofu version, e.g. `\"1.12.0\"`. It must be one rules_tofu has digests " +
-                  "for, listed in `KNOWN_VERSIONS` in " +
+            doc = "OpenTofu version string, 1.12 or later, e.g. `\"1.12.0\"`. Must appear in " +
+                  "`KNOWN_VERSIONS` in " +
                   "[toolchain/versions.bzl](https://github.com/benbirt/rules_tofu/blob/main/toolchain/versions.bzl).",
             mandatory = True,
         ),
@@ -191,18 +192,19 @@ def _tofu_extension_impl(module_ctx):
     )
 
 tofu = module_extension(
-    doc = """Downloads OpenTofu and registers it as a toolchain.
+    doc = """Downloads OpenTofu releases and exposes `@tofu_toolchains`.
 
-One OpenTofu version serves the whole build. A `tofu.version` tag in the root
-module decides it, whatever dependencies ask for, and the root may have only
-one. Without a root tag, modules that tag a version must all ask for the same
-one, or the build fails naming them. With no tags at all, the default pinned
-in rules_tofu is used.
+One OpenTofu version serves the whole build. A single `tofu.version` tag in the
+root module wins over dependency requests, and declaring more than one in the
+root module is an error. Without a root tag, dependencies that tag a version
+must all name the same one; with no tags, the default in `toolchain/versions.bzl`
+is used.
 
-Only `tofu_toolchains` needs a `use_repo`, and the toolchain is registered
-for you. A root module that wants another `tofu` binary, patched or built from
-source, registers its own `opentofu_toolchain` instead; see "The `tofu` binary"
-in the README.
+`rules_tofu` already registers `@tofu_toolchains//:all`, so a consumer module
+needs `use_extension` and `use_repo(tofu, "tofu_toolchains")` only when calling
+`tofu.version`. To use a custom binary instead, register an `opentofu_toolchain`
+in the root module; see
+[The `tofu` binary](https://github.com/benbirt/rules_tofu#the-tofu-binary).
 """,
     implementation = _tofu_extension_impl,
     tag_classes = {"version": _version_tag},
