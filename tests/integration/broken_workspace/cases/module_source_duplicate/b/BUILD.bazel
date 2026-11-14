@@ -1,5 +1,6 @@
 load("@rules_tofu//tf:defs.bzl", "tf_library")
 
+# Differs only in case from //cases/module_source_duplicate/a's module_source; keep mixed case.
 tf_library(
     name = "b",
     srcs = ["main.tf"],

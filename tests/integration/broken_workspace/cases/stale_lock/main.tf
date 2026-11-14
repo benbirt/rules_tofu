@@ -1,6 +1,6 @@
 terraform {
   required_providers {
-    # The lock pins 3.2.4, as if this pin were bumped without re-pinning.
+    # Deliberately disagrees with 3.2.4 in //lock:.terraform.lock.hcl; do not bump.
     null = {
       source  = "hashicorp/null"
       version = "3.2.3"

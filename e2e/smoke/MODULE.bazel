@@ -1,14 +1,14 @@
-"""Minimal downstream module that consumes rules_tofu exactly as the README
-quick-start documents. This is the BCR presubmit test module: it validates that
-the *published* artifact builds and that `tf_library` / `tf_deploy` work for a
-real consumer, offline and without credentials.
+"""Minimal downstream module that consumes rules_tofu as the README quick-start
+documents. This is the BCR presubmit test module: it checks that the published
+archive builds and that tf_library, tf_deploy and tf_test work for a real
+consumer, offline and without credentials.
 
-`local_path_override` points at the repo root so the same module also runs
+local_path_override points at the repo root so the same module also runs
 locally via `cd e2e/smoke && bazel build //... && bazel test //...`. Under BCR
-presubmit the override stays active but is equivalent: presubmit vendors the
-module source from the registry entry (release archive + any BCR patches) and
-runs this test module from e2e/smoke *inside* that vendored tree, so `../..`
-resolves to exactly the bits the registry serves.
+presubmit the override stays active but is equivalent: presubmit unpacks the
+module source from the registry entry (release archive plus any BCR patches)
+and runs this test module from e2e/smoke inside that unpacked tree, so ../..
+resolves to the exact files the registry serves.
 """
 
 bazel_dep(name = "rules_tofu", version = "0.0.0")
