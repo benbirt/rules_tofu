@@ -3,7 +3,7 @@
 // `tofu providers lock`.
 //
 // Flags and environment:
-//   - --tofu=<path>: path to the `tofu` binary.
+//   - --tofu=<path>: path to the tofu binary.
 //   - --lock-dir=<dir>: workspace-relative directory of .terraform.lock.hcl,
 //     or "" for the workspace root.
 //   - --platform=<os>_<arch>: default platform passed as -platform= to
@@ -36,22 +36,24 @@
 //     build time instead.
 //   - Providers excluded via --exclude-source are dropped. When that leaves
 //     nothing, pin writes an empty lock containing only tofu's header comment
-//     without running `tofu`, so a provider moved from the lock to a tag stops
+//     without running tofu, so a provider moved from the lock to a tag stops
 //     conflicting with it.
 //   - Otherwise pin writes a scratch configuration in a temporary directory
 //     with one child module per directory. OpenTofu combines the constraints
 //     as it would for nested modules: exact pins in a versions.tf decide the
 //     versions, and without one OpenTofu picks the newest version every
 //     constraint accepts.
-//   - `tofu get` and `tofu providers lock` run in that scratch directory from
-//     scratch, since `tofu providers lock` keeps versions from an existing
-//     lock and has no -upgrade flag. The resulting lock replaces
+//   - `tofu get` and `tofu providers lock` run in that scratch directory with
+//     no existing lock, since `tofu providers lock` keeps versions from an
+//     existing lock and has no -upgrade flag. The resulting lock replaces
 //     <workspace>/<lock-dir>/.terraform.lock.hcl.
 //
 // Progress and errors go to stderr. When `tofu providers lock` fails, OpenTofu
 // does not report which module contributed each constraint, so pin prints
-// every directory's constraints by provider and exits with `tofu`'s exit code,
-// or 1 on other errors.
+// every directory's constraints by provider. When `bazel query` fails other
+// than with partial-result exit code 3, or when `tofu get` or
+// `tofu providers lock` exits non-zero, pin exits with that subprocess's exit
+// code. Unrecognised or malformed flags exit 2, and other errors exit 1.
 package main
 
 import (
@@ -106,7 +108,7 @@ const emptyLock = "# This file is maintained automatically by \"tofu init\".\n" 
 // module holds one directory's merged provider requirements, sorted by source
 // (see requirements).
 type module struct {
-	Dir  string // workspace-relative with "" for the workspace root, or `@<repo>//<dir>`
+	Dir  string // workspace-relative with "" for the workspace root, or @<repo>//<dir>
 	Reqs []tfconfig.Requirement
 }
 
@@ -205,7 +207,7 @@ func run(workspace, lockDir, tofu, bazel string, defaultPlatforms, excludedSourc
 	return nil
 }
 
-// withoutSources drops the requirements on the given `<namespace>/<name>`
+// withoutSources drops the requirements on the given <namespace>/<name>
 // sources. Sources compare as tofu does: case-insensitively, with the default
 // registry host optional.
 func withoutSources(reqs []tfconfig.Requirement, sources []string) []tfconfig.Requirement {
@@ -231,7 +233,7 @@ func withoutSources(reqs []tfconfig.Requirement, sources []string) []tfconfig.Re
 // The files need not belong to one module: two tf_deploy targets in a package,
 // each with its own srcs, may require providers under the same local name with
 // the same or different sources (issue #99). Entries are therefore grouped by
-// source rather than local name. Local names matter only for `_override`
+// source rather than local name. Local names matter only for _override
 // files, where an override entry replaces every earlier entry of its name.
 func requirements(files []string) ([]tfconfig.Requirement, error) {
 	declared, err := tfconfig.ReadRequirements(files)
@@ -269,9 +271,9 @@ func requirements(files []string) ([]tfconfig.Requirement, error) {
 }
 
 // localNames gives each requirement in a scratch module a unique local name
-// derived from the provider type, such as `null` for
-// `registry.opentofu.org/hashicorp/null`, numbering collisions as `aws-2` and
-// so on. OpenTofu accepts only letters, digits and non-leading, non-trailing
+// derived from the provider type, such as null for
+// registry.opentofu.org/hashicorp/null, numbering collisions as aws-2 and so
+// on. OpenTofu accepts only letters, digits and non-leading, non-trailing
 // dashes in local names, so underscores are invalid; the lock file itself
 // records provider sources rather than local names.
 func localNames(reqs []tfconfig.Requirement) []string {
@@ -332,18 +334,18 @@ const queryPartialExitCode = 3
 // tf_deploy and tf_test in the main repository and their transitive tf_library
 // deps. It returns absolute file paths grouped by directory:
 // workspace-relative with "" for the workspace root in the main repository,
-// and `@<repo>//<dir>` in external repositories.
+// and @<repo>//<dir> in external repositories.
 //
 // Every file in the main repository counts. A library from another repository
 // may include unserved files in its data, such as examples in a fetched
 // module. Its files count only in the directories it serves (see
 // library.serves), expanding iteratively as counted files and tf_test `run`
-// blocks call external submodules with `//<subdir>` (see lookup). Test files
+// blocks call external submodules with //<subdir> (see lookup). Test files
 // hold no required_providers themselves.
 //
-// The query runs with --keep_going because `deps()` also follows each rule's
+// The query runs with --keep_going because deps() also follows each rule's
 // providers into @tf_providers, which cannot load before providers are locked:
-// before the first pin `@tf_providers//<ns>/<name>` has no package, and an
+// before the first pin @tf_providers//<ns>/<name> has no package, and an
 // unusable lock entry makes its provider's repo fail when fetched. Neither has
 // .tf files to find, and pin is how both are fixed.
 func queryConfigFiles(bazel, workspace string, log io.Writer) (map[string][]string, error) {
@@ -448,11 +450,11 @@ func newLibrary(t target) *library {
 //
 // A library with no configuration in its own directory and no module_source
 // serves none. It is an aggregate of deps, which serve theirs: nothing
-// outside its repository can call into it, and a `modules/` directory below
-// its package is other libraries', whose examples must not reach the lock
-// through it. With a module_source it is a bundle: callers reach its
-// subdirectories with `//<subdir>`, which the manifest tool resolves, so
-// those and its `modules/` are served like any module's (issue #123).
+// outside its repository can call into it, and a modules/ directory below its
+// package is other libraries', whose examples must not reach the lock through
+// it. With a module_source it is a bundle: callers reach its subdirectories
+// with //<subdir>, which the manifest tool resolves, so those and its
+// modules/ are served like any module's (issue #123).
 func (l *library) serves() ([]string, error) {
 	if l.ModuleSource == "" {
 		own, err := tfconfig.ConfigFiles(filepath.Join(l.root, filepath.FromSlash(l.Package)))

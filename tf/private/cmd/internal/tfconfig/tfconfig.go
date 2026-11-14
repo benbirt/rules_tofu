@@ -19,7 +19,7 @@ import (
 )
 
 // Call is a module call from a `module` block or a test file's `run` block.
-// Name is the module or run label, and Range is the `source` attribute's
+// Name is the module or run label, and Range is the source attribute's
 // location.
 type Call struct {
 	Name   string
@@ -101,8 +101,8 @@ func ConfigFiles(dir string) ([]string, error) {
 
 // ignored reports whether tofu passes over a file of this name when it reads
 // a directory: one that starts with a dot. OpenTofu also passes over editors'
-// `name~` and `#name#` backup files, which no configuration or test file name
-// can match.
+// name~ and #name# backup files, which no configuration or test file name can
+// match.
 func ignored(name string) bool {
 	return strings.HasPrefix(name, ".")
 }
@@ -156,8 +156,8 @@ func parse(parser *hclparse.Parser, file string) (*hcl.File, error) {
 }
 
 // ReadCalls parses the module blocks of the configuration files in dir. An
-// `_override` file's `source` replaces the one in the primary file, as tofu
-// merges it. Duplicate primary calls and missing or non-literal `source`
+// _override file's source replaces the one in the primary file, as tofu
+// merges it. Duplicate primary calls and missing or non-literal source
 // attributes return an error.
 func ReadCalls(dir string) ([]Call, error) {
 	primary, overrides, err := configFiles(dir)
@@ -252,7 +252,7 @@ type Requirement struct {
 	Version string `json:"version,omitempty"`
 }
 
-// RequiredProviders returns the normalised `source` of every
+// RequiredProviders returns the normalised source of every
 // required_providers entry in dir's configuration files, sorted. Two primary
 // entries of one local name return an error.
 func RequiredProviders(dir string) ([]string, error) {
@@ -289,7 +289,7 @@ type Declared struct {
 
 // ReadRequirements returns every required_providers entry in files, which
 // share a directory, after filtering with Effective: the primary files' in
-// file name order, then the `_override` files', each file's in the order
+// file name order, then the _override files', each file's in the order
 // written. Nothing is merged and nothing rejected: files in one directory may
 // belong to several root modules, such as two tf_deploy targets in a package,
 // so two entries of one name needn't be a mistake. ReadRequiredProviders reads
@@ -436,15 +436,14 @@ func LiteralString(expr hcl.Expression) (string, bool) {
 // ModuleDirs lists the directories that a module's library serves, relative to
 // repo, sorted. An empty string stands for repo itself:
 //   - moduleDir itself, relative to repo, if it holds configuration;
-//   - every directory below `<moduleDir>/modules` that holds configuration;
+//   - every directory below <moduleDir>/modules that holds configuration;
 //   - each directory in called, relative to repo, that holds configuration;
-//   - every directory inside repo that those reach through local `source`
+//   - every directory inside repo that those reach through local source
 //     paths.
 //
-// `modules/` is the standard place for submodules; examples and tests are left
+// modules/ is the standard place for submodules; examples and tests are left
 // out unless something calls them. The called list supplies submodules outside
-// `modules/` that callers reach with `//<subdir>`, which only the callers
-// know.
+// modules/ that callers reach with //<subdir>, which only the callers know.
 //
 // A readable moduleDir that holds no configuration is a bundle of submodules
 // and serves the rest all the same (issue #123). Whether such a module is

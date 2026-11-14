@@ -10,12 +10,12 @@ import (
 	"github.com/benbirt/rules_tofu/tf/private/cmd/internal/tfconfig"
 )
 
-// runTest implements `--command=test`: `tofu test` for a tf_test target, run
-// as a Bazel test, so --state-dir and --output-root play no part.
+// runTest implements --command=test: `tofu test` for a tf_test target, run as
+// a Bazel test, so --state-dir and --output-root play no part.
 //
 // The work tree is copied into TEST_TMPDIR, or a temporary directory when
-// unset, because the runfiles tree is Bazel's and tofu writes `.terraform/`
-// and the lock beside the configuration. The provider plugin tree is read in
+// unset, because the runfiles tree is Bazel's and tofu writes .terraform/ and
+// the lock beside the configuration. The provider plugin tree is read in
 // place when present. Init runs with -backend=false: `tofu test` keeps state
 // in memory and ignores backend and cloud blocks, so no backend is contacted.
 // When a run's destroy fails, tofu writes the resources it could not remove to

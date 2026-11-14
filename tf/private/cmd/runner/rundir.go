@@ -18,11 +18,11 @@ import (
 // path to a different file, in a tree Bazel prunes; and the declared one under
 // bazel-bin is an input to build actions, which must not find tofu's files in
 // it. The run directory is the runner's own, one per deploy, and holds
-// whatever tofu writes beside the configuration: `.terraform/`, the lock and
+// whatever tofu writes beside the configuration: .terraform/, the lock and
 // the state of a `backend "local"` with relative paths.
 //
 // The links are what the runner put there, and the only links in the run
-// directory outside tofu's `.terraform/`, so bringing it up to date needs no
+// directory outside tofu's .terraform/, so bringing it up to date needs no
 // record of earlier runs: remove every link, then link the current work tree.
 // Regular files are tofu's or the user's and are never touched, bar the two
 // stale ones noted below. One in the way of a link is an error: it would
@@ -49,7 +49,7 @@ func syncRunDir(workTree, runRoot, cwd string) error {
 	}
 
 	// Left by an earlier run, and wrong for this one: the lock tofu wrote
-	// records the provider versions of that build, and `.terraform/providers`
+	// records the provider versions of that build, and .terraform/providers
 	// links into that launcher's plugin tree, which init relinks.
 	// installLockFile writes any managed lock after this.
 	if err := os.Remove(filepath.Join(cwd, ".terraform.lock.hcl")); err != nil && !errors.Is(err, fs.ErrNotExist) {

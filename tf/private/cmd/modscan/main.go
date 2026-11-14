@@ -17,7 +17,7 @@
 // configuration files.
 //   - --module=<label>=<source>: a declared tf_modules.module tag, repeatable.
 //   - --self=<label>: label of the module being scanned, so calls to
-//     `<self>//<subdir>` are scanned as internal submodules rather than deps.
+//     <self>//<subdir> are scanned as internal submodules rather than deps.
 //   - --git-submodule=<path>: repository-relative path of an unfetched git
 //     submodule, repeatable. OpenTofu fetches git submodules and rules_tofu
 //     does not. If <module dir> or any call from its served directories
@@ -25,19 +25,21 @@
 //     a caller's build to fail on a missing directory.
 //
 // modscan walks the directories returned by tfconfig.ModuleDirs together with
-// any subdirectories reached by `<self>//<subdir>` calls, leaving uncalled
+// any subdirectories reached by <self>//<subdir> calls, leaving uncalled
 // examples and tests out. It writes a JSON Result to stdout:
-//   - providers: sorted canonical `<host>/<namespace>/<name>` addresses of
-//     required providers, or `[]` when none.
+//   - providers: sorted canonical <host>/<namespace>/<name> addresses of
+//     required providers, or [] when none.
 //   - deps: sorted labels of other declared modules that calls match via
-//     tfconfig.BestMatch, as the modules manifest resolves each call, or `[]`
+//     tfconfig.BestMatch, as the modules manifest resolves each call, or []
 //     when none. Self-calls add no dep.
 //   - undeclared: non-local calls that no declared module matches, sorted by
 //     source, each with source, where and a suggested tf_modules.module tag,
-//     or `[]` when none.
+//     or [] when none.
 //
-// Scan mode exits 2 on invalid flags or arguments and 1 on scan or I/O errors
-// after printing the error to stderr.
+// Scan mode exits 2 on unrecognised or malformed flags, the wrong number of
+// arguments or a --module value without =. Either mode prints the error to
+// stderr and exits 1 on a scan or I/O error; `modscan parse` exits 0 even when
+// sources fail to parse.
 package main
 
 import (
@@ -144,7 +146,7 @@ func scan(repo, moduleDir string, modules []Module, self string, submodules []st
 	}
 	// A fetched module is declared by the directory callers call, which must
 	// hold configuration. tfconfig.ModuleDirs itself allows an unconfigured
-	// root because to pin such a library is a bundle of submodules.
+	// root because pin treats such a library as a bundle of submodules.
 	if !tfconfig.HasConfig(filepath.Join(repo, filepath.FromSlash(moduleDir))) {
 		return nil, fmt.Errorf("%q holds no .tf, .tf.json, .tofu or .tofu.json files", "/"+moduleDir)
 	}
@@ -164,7 +166,7 @@ func scan(repo, moduleDir string, modules []Module, self string, submodules []st
 	}
 
 	// Directories of its own that the module calls by address with
-	// `<self>//<subdir>` are part of what the library serves, like a
+	// <self>//<subdir> are part of what the library serves, like a
 	// directory a local path reaches (issue #95). They may call others in
 	// turn, so repeat until no call adds one. Marking each directory before
 	// reading it ensures cycles and directories without configuration still

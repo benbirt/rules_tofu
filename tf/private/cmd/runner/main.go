@@ -10,8 +10,8 @@
 //     required for every invocation. --command is "plan", "apply", "destroy" or
 //     "test".
 //   - --state-dir and --output-root: required for plan, apply and destroy.
-//   - --package-dir: workspace-relative directory of the root module within
-//     --work-tree, or "" when the target is in the workspace root package.
+//   - --package-dir: root module directory relative to --work-tree, or "" for
+//     the workspace root package.
 //   - --lock-file: .terraform.lock.hcl from tf_providers.from_lock.
 //   - --var-file: .tfvars or .tfvars.json file passed via -var-file,
 //     repeatable.
@@ -20,7 +20,7 @@
 //   - --allow-ephemeral-state: permit apply and destroy when state would live
 //     under --output-root.
 //
-// Trailing arguments after flags are forwarded verbatim to `tofu`.
+// Trailing arguments after flags are forwarded verbatim to tofu.
 //
 // For plan, apply and destroy, runner performs these steps in order:
 //   - Refuse apply and destroy without --allow-ephemeral-state when the root
@@ -31,26 +31,29 @@
 //     deploy's .plan, .apply and .destroy share that directory so OpenTofu
 //     resolves every relative path itself and each launcher sees the same
 //     files.
-//   - Copy --modules-manifest and any --lock-file into
-//     <state-dir>/work/<package-dir>, and run `tofu init -input=false
-//     -get=false -reconfigure -plugin-dir=<plugin-dir>` there with TF_DATA_DIR
-//     fixed to its `.terraform`.
+//   - Copy --modules-manifest to .terraform/modules/modules.json and any
+//     --lock-file to .terraform.lock.hcl in <state-dir>/work/<package-dir>, and
+//     run `tofu init -input=false -get=false -reconfigure
+//     -plugin-dir=<plugin-dir>` there with TF_DATA_DIR fixed to its .terraform.
 //   - Without a backend or cloud block, pass -state and -state-out for
 //     <state-dir>/terraform.tfstate; with one, pass no state flags so OpenTofu
 //     owns state placement.
 //   - For plan, write <state-dir>/tfplan via -out and print
-//     `rules_tofu: plan saved to <path>` to stdout.
+//     rules_tofu: plan saved to <path> to stdout.
 //   - For apply and destroy, run `tofu apply` or `tofu destroy`.
 //
 // For test, runner copies --work-tree into TEST_TMPDIR or a temporary
 // directory, initialises with -backend=false and runs `tofu test` there (see
-// test.go). When TEST_UNDECLARED_OUTPUTS_DIR is set, it writes JSON test output
-// there and preserves any errored_test.tfstate left by a failed destroy.
+// test.go). If a failed destroy leaves errored_test.tfstate behind, runner
+// fails the test even though `tofu test` exits 0. When
+// TEST_UNDECLARED_OUTPUTS_DIR is set, runner writes tofu-test.json there and
+// copies any errored_test.tfstate into it.
 //
-// If `tofu` exits non-zero, runner exits with that code; other errors exit 1,
-// or 2 on invalid flags. Configuration validation via TofuValidate on
-// tf_library, tf_deploy and tf_test and duplicate-variable checks via dupcheck
-// happen at `bazel build` time, not here.
+// When a tofu subprocess exits non-zero, runner exits with that code unless
+// errored_test.tfstate supersedes it with exit code 1. Unrecognised or
+// malformed flags exit 2, and other errors exit 1. Configuration validation
+// via TofuValidate on tf_library, tf_deploy and tf_test and duplicate-variable
+// checks via dupcheck happen at `bazel build` time, not here.
 package main
 
 import (
@@ -197,7 +200,7 @@ func run() error {
 	if err := installModulesManifest(*modulesManifest, cwd); err != nil {
 		return err
 	}
-	// -reconfigure resets the backend settings saved in `.terraform/` from
+	// -reconfigure resets the backend settings saved in .terraform/ from
 	// earlier runs without migrating state; without it, init refuses an edited
 	// backend block until `bazel clean`.
 	if err := runTofu(env, cwd, "init", "-input=false", "-get=false", "-reconfigure", "-plugin-dir="+*pluginDir); err != nil {
@@ -536,8 +539,8 @@ var localBackendAttrs = []struct{ name, def string }{
 // resolves it from the run directory, which is under bazel-bin, so anything
 // relative lands there and goes with `bazel clean`.
 //
-// State is provably outside only when both `path` and `workspace_dir` are set
-// to literal absolute paths that do not lead into outputRoot once symlinks are
+// State is provably outside only when both path and workspace_dir are set to
+// literal absolute paths that do not lead into outputRoot once symlinks are
 // followed, such as a checkout's bazel-bin convenience link. An unset
 // attribute takes tofu's relative default; a non-literal expression, which
 // OpenTofu 1.8 allows, cannot be evaluated statically here.

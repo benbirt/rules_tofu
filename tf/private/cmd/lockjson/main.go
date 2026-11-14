@@ -6,7 +6,7 @@
 // //tf/private:host_tools.bzl, as Gazelle builds its own helpers. It parses
 // the file and checks each entry's address the way tofu does when reading a
 // lock in OpenTofu's depsfile package: the address must be a full
-// `hostname/namespace/name`, must not be a built-in or legacy provider and
+// hostname/namespace/name, must not be a built-in or legacy provider and
 // must be written in its canonical normalised form. What else an entry must
 // contain to be usable is decided by //tf/providers:lock.bzl, where it can be
 // unit-tested.
@@ -20,10 +20,10 @@
 //	{"providers": [{"address": "...", "host": "...", "namespace": "...",
 //	                "name": "...", "version": "...", "hashes": ["..."]}, ...]}
 //
-// The providers slice and each hashes slice encode as `[]`, never `null`, and
-// constraints and unknown HCL attributes or blocks are omitted. On bad usage
-// it exits 2; on a read error, HCL syntax error or invalid provider address it
-// prints diagnostics to stderr and exits 1.
+// The providers slice and each hashes slice encode as [], never null, and
+// constraints and unknown HCL attributes or blocks are omitted. It exits 2
+// unless given a single argument. On an I/O error, invalid HCL or an invalid
+// provider address it writes the error to stderr and exits 1.
 package main
 
 import (

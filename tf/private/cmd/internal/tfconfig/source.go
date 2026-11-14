@@ -19,18 +19,17 @@ const (
 	KindArchive  = "archive"
 )
 
-// Source is a module `source` address, read as OpenTofu reads it
+// Source is a module source address, read as OpenTofu reads it
 // (addrs.ParseModuleSource in OpenTofu):
 //
-//   - a local path, starting `./`, `../`, `.\` or `..\`;
+//   - a local path, starting ./, ../, .\ or ..\;
 //   - else a module registry address, if OpenTofu's registry-address library
 //     can parse it as one;
 //   - else a remote address, which OpenTofu hands to go-getter's detectors.
-//     rules_tofu reads only the remote forms it can fetch: git (`git::<url>`,
-//     `git://`, `github.com/<owner>/<repo>`, `git@<host>:<path>`) and
-//     archives over http(s) or from a file:// URL. Other go-getter forms such
-//     as Bitbucket, S3, GCS, Mercurial and HTTP X-Terraform-Get redirects are
-//     rejected.
+//     rules_tofu reads only the remote forms it can fetch: git (git::<url>,
+//     git://, github.com/<owner>/<repo>, git@<host>:<path>) and archives over
+//     http(s) or from a file:// URL. Other go-getter forms such as Bitbucket,
+//     S3, GCS, Mercurial and HTTP X-Terraform-Get redirects are rejected.
 type Source struct {
 	Kind string `json:"kind"`
 
@@ -96,7 +95,7 @@ func ParseSource(raw string) (Source, error) {
 
 // Package is the identity of the package a source's module is in, without
 // its subdirectory, in a form two sources can be compared by: registry
-// packages as `<host>/<namespace>/<name>/<system>` in lower case, as the
+// packages as <host>/<namespace>/<name>/<system> in lower case, as the
 // registry treats them; git as the repository and ref; archives as their URL
 // and archive type; local paths as Path.
 func (s Source) Package() string {
@@ -199,7 +198,7 @@ func SplitSubdir(source string) (string, string) {
 	return base, subdir
 }
 
-// archiveTypes maps archive extensions and `?archive=` values that OpenTofu
+// archiveTypes maps archive extensions and ?archive= values that OpenTofu
 // unpacks as a module package to the types Bazel's download_and_extract names
 // them by.
 var archiveTypes = map[string]string{

@@ -1,8 +1,7 @@
-// Command modules writes the `.terraform/modules/modules.json` manifest for a
+// Command modules writes the .terraform/modules/modules.json manifest for a
 // materialised work tree, the record `tofu init` keeps of installed module
 // calls. With the manifest in place, `tofu init -get=false` fetches and
-// installs nothing and still checks each call's `source` and `version` against
-// it.
+// installs nothing and still checks each call's source and version against it.
 //
 // It runs as a Bazel build action for tf_library, tf_deploy and tf_test.
 //
@@ -14,7 +13,7 @@
 //     modules lists tf_library deps that set module_source, each with label,
 //     source, version, work-tree-relative dir and direct. When the library
 //     being built sets module_source, it appears too with direct false so its
-//     files can call its own address with `//<subdir>`. packages lists the
+//     files can call its own address with //<subdir>. packages lists the
 //     work-tree-relative directory of every transitive tf_library package in
 //     deps.
 //   - --provider=<address>: canonical <host>/<namespace>/<name> address of a
@@ -27,30 +26,30 @@
 //   - --out=<path>: manifest path to write, required.
 //
 // Starting at --root, modules walks every `module` block and any test `run`
-// modules and writes `{"Modules":[...]}` sorted by Key to --out. Local calls
-// are recorded too, since `tofu init -get=false` installs none.
+// modules and writes {"Modules":[...]} sorted by Key to --out. Local calls are
+// recorded too, since `tofu init -get=false` installs none.
 //
-// On failure it prints `rules_tofu: <error>` to stderr and exits 1:
-//   - a local source starting with `./`, `../`, `.\` or `..\` leaves the work
-//     tree, crosses into or out of external/<repo> or names a directory absent
-//     from the work tree;
+// It rejects the build when:
+//   - a local source starting with ./, ../, .\ or ..\ leaves the work tree,
+//     crosses into or out of external/<repo> or names a directory absent from
+//     the work tree;
 //   - a non-local source matches no dep (see tfconfig.BestMatch), matches a
 //     registry dep that omits module_version or lands in a directory with no
 //     configuration files;
 //   - two deps claim the same normalised module_source;
 //   - module calls form a cycle;
 //   - a direct dep is used by no call;
-//   - a walked module's `required_providers` names a provider that no
+//   - a walked module's required_providers names a provider that no
 //     --provider supplies, since `tofu init -plugin-dir` would fail to find
 //     it.
 //
-// Missing-provider errors name the `@tf_providers//<namespace>/<name>` label
-// to add to the rule's providers. Built-in providers under
-// terraform.io/builtin/ and opentofu.org/builtin/ need no plugin and are
-// skipped. A tf_library carries the providers from its own scanned files,
-// whereas a fetched module's library is generated at fetch time and cannot
-// know which `//<subdir>` paths outside `modules/` callers will use (issue
-// #76), so callers must list those providers themselves.
+// Missing-provider errors name the @tf_providers//<namespace>/<name> label to
+// add to the rule's providers. Built-in providers under terraform.io/builtin/
+// and opentofu.org/builtin/ need no plugin and are skipped. A tf_library
+// carries the providers listed on it and its deps, checked from its own root
+// module; for a fetched module, modscan populates that list from its served
+// directories. Neither reads //<subdir> paths outside modules/ that only
+// callers reach (issue #76), so callers must list those providers themselves.
 //
 // A direct dep counts as used only when the root's own configuration calls it:
 // the root module, or a local module in the root's own package. Deps in the
@@ -61,6 +60,10 @@
 // leaves the root's configuration, since calls from there belong to that
 // library's own deps. A module_source call that lands in the root's own
 // package stays in the root's configuration like a local call.
+//
+// Unrecognised or malformed flags exit 2. Missing required flags, unreadable
+// or invalid JSON or HCL, I/O errors or any failed check print
+// rules_tofu: <error> to stderr and exit 1.
 package main
 
 import (
@@ -540,8 +543,8 @@ func checkLocal(workTree, parent, child string) error {
 }
 
 // repoOf is the Bazel repository a work-tree directory belongs to: "" for the
-// main repository, the name under `external/` for external repositories or "/"
-// for `external` itself so `../external` never matches the main repository.
+// main repository, the name under external/ for external repositories or "/"
+// for external itself so ../external never matches the main repository.
 func repoOf(dir string) string {
 	rest, ok := strings.CutPrefix(dir, "external/")
 	if !ok {

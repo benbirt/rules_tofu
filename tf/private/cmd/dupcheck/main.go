@@ -1,21 +1,22 @@
 // Command dupcheck checks at build time that variable names do not collide
-// across a tf_deploy's `vars` dict and its `var_files` entries.
+// across a tf_deploy's vars dict and its var_files entries.
 //
-// tf_deploy invokes it as a Bazel build action when `var_files` is non-empty:
-//   - --vars-key=<name>, repeatable: one entry per key in the deploy's `vars`
+// tf_deploy invokes it as a Bazel build action when var_files is non-empty:
+//   - --vars-key=<name>, repeatable: one entry per key in the deploy's vars
 //     dict, known statically.
-//   - --var-file=<path>, repeatable: a `.tfvars.json` or `.tfvars` file whose
+//   - --var-file=<path>, repeatable: a .tfvars.json or .tfvars file whose
 //     top-level variable assignments are checked.
 //   - --var-file-label=<label>, repeatable: display name for the --var-file
 //     at the same position, typically its workspace-relative path. Must be
 //     given once per --var-file. The two travel separately because a colon is
-//     legal in a Bazel target name, and so in both, which makes a `label:path`
+//     legal in a Bazel target name, and so in both, which makes a label:path
 //     string ambiguous (issue #62).
 //   - --stamp=<path>, required: empty file written on success.
 //
-// On success it writes --stamp and prints nothing. On a duplicate key, an
-// unreadable or malformed file or invalid flags, it prints `rules_tofu: <err>`
-// to stderr and exits 1 without writing --stamp.
+// On success it writes --stamp and prints nothing. Unrecognised or malformed
+// flags exit 2. Missing --stamp, a mismatched --var-file-label count, a
+// duplicate key, an unreadable or malformed file or a --stamp write error
+// prints rules_tofu: <err> to stderr and exits 1.
 package main
 
 import (

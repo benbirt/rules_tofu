@@ -211,7 +211,7 @@ func TestConfigFiles_TofuShadowsTf(t *testing.T) {
 
 // OpenTofu ignores dotfiles and directories whose names end in configuration
 // or test extensions. Checked on OpenTofu 1.12.0: `tofu init` treats a
-// directory holding only `.hidden.tf` as "an empty directory", and
+// directory holding only .hidden.tf as "an empty directory", and
 // `tofu validate` ignores the file's contents.
 func TestConfigFiles_IgnoresDotfilesAndDirectories(t *testing.T) {
 	dir := t.TempDir()
@@ -299,7 +299,7 @@ func TestReadCalls_Tofu(t *testing.T) {
 }
 
 // pin hands ReadRequirements, which ReadRequiredProviders reads through, the
-// files Bazel lists, both halves of a shadowed pair included; the `.tf` one
+// files Bazel lists, both halves of a shadowed pair included; the .tf one
 // must not count.
 func TestReadRequiredProviders_TofuShadowsTf(t *testing.T) {
 	dir := t.TempDir()

@@ -1302,7 +1302,7 @@ func TestRunner_Test_EnvAndInitFlags(t *testing.T) {
 	}
 }
 
-// runDir returns the deploy's run directory, `<state-dir>/work`, which mirrors
+// runDir returns the deploy's run directory, <state-dir>/work, which mirrors
 // the work tree.
 func runDir(t *testing.T, cmd *exec.Cmd) string {
 	t.Helper()
@@ -1552,9 +1552,9 @@ func TestRunner_RunDir_FileInTheWay(t *testing.T) {
 	assertLink(t, filepath.Join(cwd, "was_a_dir"), filepath.Join(argValue(t, cmd, "--work-tree"), "mypkg", "was_a_dir"))
 }
 
-// Of the `.terraform/` an earlier run left, `providers` goes and the rest
-// stays: `providers` links into that launcher's plugin tree and init relinks
-// it, while the workspace selection in `environment` is the user's.
+// Of the .terraform/ an earlier run left, providers goes and the rest stays:
+// providers links into that launcher's plugin tree and init relinks it, while
+// the workspace selection in environment is the user's.
 func TestRunner_RunDir_DataDirAcrossRuns(t *testing.T) {
 	cmd, _, _ := setup(t, map[string]any{"region": "us-east-1"})
 	dataDir := filepath.Join(runDir(t, cmd), "mypkg", ".terraform")
@@ -1632,13 +1632,13 @@ func assertLocalBackendLeftToTofu(t *testing.T, invs []invocation, command strin
 }
 
 // One rule decides whether a `backend "local"` needs allow_ephemeral_state for
-// apply and destroy: its state is durable only when `path` and `workspace_dir`
-// are both literal absolute paths that do not lead into Bazel's output tree.
-// Any unset attribute, relative path, non-literal expression or path into the
-// output tree, directly or through a symlink and existing yet or not, is
-// ephemeral. Ephemeral state is refused without the opt-in, naming the block
-// and the attribute, and allowed with it. plan always runs, and the runner
-// never overrides the block in HCL or JSON.
+// apply and destroy: its state is durable only when path and workspace_dir are
+// both literal absolute paths that do not lead into Bazel's output tree. Any
+// unset attribute, relative path, non-literal expression or path into the
+// output tree, directly or through a symlink and whether it exists yet or not,
+// is ephemeral. Ephemeral state is refused without the opt-in, naming the
+// block and the attribute, and allowed with it. plan always runs, and the
+// runner never overrides the block in HCL or JSON.
 func TestRunner_LocalBackend_Gate(t *testing.T) {
 	type file struct {
 		json    bool
