@@ -115,9 +115,10 @@ def _tf_test_impl(ctx):
     plugin_outputs = _materialize_plugin_tree(ctx, providers_depset)
     lock = _provider_lock(ctx, providers_depset)
 
-    # The module under test counts as a dep the test lists: its run blocks
-    # may load the module's own directories. The root module's files are the
-    # module's, held to its lists, so the test lists what its run blocks load.
+    # `module` counts as a dep the test lists: its run blocks may load
+    # `module`'s own directories and call its `module_source`. The files of
+    # the root module belong to `module` and are held to its lists, so the
+    # test lists only what its run blocks load.
     infos = [under_test.manifest] + [d[TfLibraryInfo] for d in ctx.attr.deps]
     manifest = _modules_manifest(
         ctx,
@@ -301,8 +302,9 @@ def tf_test(name, srcs, module, deps = None, data = None, providers = None, var_
       deps: Helper `tf_library` targets loaded by
           `run { module { source = ... } }` blocks, reached by a path relative
           to `module`'s package directory or by `module_source`. A `run` block
-          may load only these and `module`'s own directories; what `module`
-          lists in its `deps` does not count.
+          may load only these and `module` itself, by one of its own
+          directories or its `module_source`; what `module` lists in its
+          `deps` does not count.
       data: Files placed in the work tree at their workspace-relative paths for
           `file()` and `templatefile()`. `terraform.tfvars`,
           `terraform.tfvars.json`, `*.auto.tfvars` and `*.auto.tfvars.json` are

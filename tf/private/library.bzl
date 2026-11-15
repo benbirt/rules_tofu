@@ -40,7 +40,8 @@ def _tf_library_impl(ctx):
     ]
     providers_depset = depset(direct = direct_providers, transitive = transitive_providers)
 
-    module = _library_module(ctx.label, ctx.attr.module_source, ctx.attr.module_version)
+    dirs = _own_dirs(ctx.files.srcs + ctx.files.data)
+    module = _library_module(ctx.label, ctx.attr.module_source, ctx.attr.module_version, dirs)
     modules = depset(
         direct = [module] if module else [],
         transitive = [d[TfLibraryInfo].modules for d in ctx.attr.deps],
@@ -80,7 +81,7 @@ def _tf_library_impl(ctx):
             providers = providers_depset,
             module = module,
             modules = modules,
-            dirs = _own_dirs(ctx.files.srcs + ctx.files.data),
+            dirs = dirs,
             package_dir = _package_dir(ctx.label),
         ),
     ]
@@ -193,7 +194,7 @@ def tf_library(name, srcs = None, deps = None, data = None, providers = None, mo
       - A `required_providers` entry missing from `providers` or `deps`, or
         outside `registry.opentofu.org`. Built-in providers such as
         `terraform.io/builtin/terraform` are exempt.
-      - A dependency this target's own `srcs` use and the target does not
+      - A dependency this target's own files use and the target does not
         list itself: a `required_providers` entry absent from `providers`, a
         `module_source` call to a library absent from `deps`, or a `./` or
         `../` call to a directory that holds neither this target's files nor

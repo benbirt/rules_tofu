@@ -353,10 +353,10 @@ func TestBuild_SelfCall(t *testing.T) {
 	})
 }
 
-// A direct dep is used by a call from one of the rule's own files, in the
-// root module or below it. A dep in the root module's directory is used (its
-// files are the root module's), and so is a dep whose package a local call
-// enters, from below it or above it (#57).
+// A direct dep is used by a call from one of the rule's own files. A dep in
+// the root module's directory is used (its files are the root module's), and
+// so is a dep with files in the directory a local call names, from below it
+// or above it (#57).
 func TestBuild_DirectUse(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -394,7 +394,7 @@ func TestBuild_DirectUse(t *testing.T) {
 				"net/subnet/main.tf": ``,
 			},
 			root: "net/app",
-			deps: []dep{{Label: "//net", Source: "github.com/acme/net", Dir: "net", Direct: true}},
+			deps: []dep{{Label: "//net", Source: "github.com/acme/net", Dir: "net", Dirs: []string{"net/subnet"}, Direct: true}},
 		},
 		{
 			name: "example calling the repository's root package",
@@ -442,7 +442,7 @@ func TestBuild_TransitiveCallDoesNotUseDirectDep(t *testing.T) {
 			})
 			deps := []dep{{Label: "@tf_modules//mod_b", Source: "acme/b/aws", Version: "1.0.0", Dir: "external/mod_b+", Direct: true, Callable: true}}
 			if tc.source != "" {
-				deps = append(deps, dep{Label: "//mod_a", Source: tc.source, Dir: dir, Direct: true, Callable: true})
+				deps = append(deps, dep{Label: "//mod_a", Source: tc.source, Dir: dir, Dirs: []string{dir}, Direct: true, Callable: true})
 			}
 			mine := own{srcs: []string{"app/main.tf"}, depDirs: []string{dir}}
 			_, err := buildManifest(tree, "app", "//app", deps, nil, "", mine)
@@ -805,6 +805,9 @@ func buildLenient(workTree, root, label string, deps []dep, provided []string, t
 	callable := make([]dep, len(deps))
 	for i, d := range deps {
 		d.Callable = true
+		if d.Dirs == nil {
+			d.Dirs = []string{d.Dir}
+		}
 		callable[i] = d
 	}
 	mine := own{providers: provided}
@@ -859,6 +862,7 @@ func TestBuildManifest_StrictDeps(t *testing.T) {
 		provided []string
 		own      own
 		testDir  string
+		root     string
 		want     string
 	}{
 		{
@@ -866,7 +870,7 @@ func TestBuildManifest_StrictDeps(t *testing.T) {
 			files:    map[string]string{"app/main.tf": requires("random") + `module "lib" { source = "../lib" }`, "lib/main.tf": requires("random") + requires("null")},
 			provided: []string{random, null},
 			own:      own{srcs: []string{"app/main.tf"}, depDirs: []string{"lib"}},
-			want: `//app: its own files require these providers, which only its deps list; a target lists the providers its own files require:
+			want: `//app: its own files require these providers, which its deps list and its providers do not:
     app/main.tf:3 requires hashicorp/random
 Add "@tf_providers//hashicorp/random" to the providers of //app.`,
 		},
@@ -905,7 +909,7 @@ Add "@tf_providers//hashicorp/random" to the providers of //app.`,
 			own:      own{srcs: []string{"app/main.tf"}},
 			want: "//app: nothing in its providers or deps supplies these providers, so `tofu init` would not find them:\n" +
 				"    the root module requires hashicorp/random\n" +
-				"//app: its own files require these providers, which only its deps list; a target lists the providers its own files require:\n" +
+				"//app: its own files require these providers, which its deps list and its providers do not:\n" +
 				"    app/main.tf:8 requires hashicorp/null\n" +
 				`Add "@tf_providers//hashicorp/random", "@tf_providers//hashicorp/null" to the providers of //app.`,
 		},
@@ -914,7 +918,7 @@ Add "@tf_providers//hashicorp/random" to the providers of //app.`,
 			files: map[string]string{"app/main.tf": `module "net" { source = "acme/net/aws" }` + "\n" + `module "dns" { source = "acme/dns/aws" }`, "external/net+/main.tf": `module "dns" { source = "acme/dns/aws" }`, "external/dns+/main.tf": ``},
 			deps:  []dep{net, dns},
 			own:   own{srcs: []string{"app/main.tf"}},
-			want:  `//app: module "dns" (app/main.tf:2): source "acme/dns/aws" is provided by @dns, which is not in the deps of //app itself, only in those of its deps; add @dns to the deps of //app`,
+			want:  `//app: module "dns" (app/main.tf:2): source "acme/dns/aws" resolves to @dns, which only a dep of //app has in its deps; add "@dns" to the deps of //app`,
 		},
 		{
 			name:  "a dep calls its own dep",
@@ -926,7 +930,7 @@ Add "@tf_providers//hashicorp/random" to the providers of //app.`,
 			name:  "a relative call to a dep's dep's directory",
 			files: map[string]string{"app/main.tf": `module "a" { source = "../a" }` + "\n" + `module "b" { source = "../b" }`, "a/main.tf": `module "b" { source = "../b" }`, "b/main.tf": ``},
 			own:   own{srcs: []string{"app/main.tf"}, depDirs: []string{"a"}},
-			want:  `//app: module "b" (app/main.tf:2): source "../b" is a directory that neither the files of //app nor those of a tf_library in its deps are in; add the tf_library whose files are in that directory to the deps of //app`,
+			want:  `//app: module "b" (app/main.tf:2): source "../b" resolves to the directory "b", which holds no files of //app or of a tf_library in its deps; add the tf_library whose files are in "b" to the deps of //app`,
 		},
 		{
 			name:  "a dep calls its own dep's directory",
@@ -937,7 +941,7 @@ Add "@tf_providers//hashicorp/random" to the providers of //app.`,
 			name:  "another library's directory in a direct dep's package",
 			files: map[string]string{"app/main.tf": `module "p" { source = "../net/peering" }`, "net/vpc/main.tf": ``, "net/peering/main.tf": ``},
 			own:   own{srcs: []string{"app/main.tf"}, depDirs: []string{"net/vpc"}},
-			want:  `source "../net/peering" is a directory that neither the files of //app nor those of a tf_library in its deps are in`,
+			want:  `source "../net/peering" resolves to the directory "net/peering", which holds no files of //app or of a tf_library in its deps`,
 		},
 		{
 			name:  "a directory of the rule's own data",
@@ -948,7 +952,7 @@ Add "@tf_providers//hashicorp/random" to the providers of //app.`,
 			name:  "a directory of a dep's dep's data",
 			files: map[string]string{"app/main.tf": `module "t" { source = "../templates" }`, "templates/main.tf": ``},
 			own:   own{srcs: []string{"app/main.tf"}},
-			want:  `source "../templates" is a directory that neither the files of //app nor those of a tf_library in its deps are in`,
+			want:  `source "../templates" resolves to the directory "templates", which holds no files of //app or of a tf_library in its deps`,
 		},
 		{
 			name:    "a run block's module is the test's own call",
@@ -956,7 +960,36 @@ Add "@tf_providers//hashicorp/random" to the providers of //app.`,
 			deps:    []dep{dns},
 			own:     own{srcs: []string{"app/tests/x.tftest.hcl"}, depDirs: []string{"app"}},
 			testDir: "tests",
-			want:    `source "acme/dns/aws" is provided by @dns, which is not in the deps of //app itself`,
+			want:    `source "acme/dns/aws" resolves to @dns, which only a dep of //app has in its deps`,
+		},
+		{
+			name:    "a test file of the module under test is the module's",
+			files:   map[string]string{"app/main.tf": ``, "app/tests/x.tftest.hcl": "run \"r\" {\n  module {\n    source = \"acme/dns/aws\"\n  }\n}", "external/dns+/main.tf": ``},
+			deps:    []dep{dns},
+			own:     own{srcs: []string{"app/tests/mine.tftest.hcl"}, depDirs: []string{"app"}},
+			testDir: "tests",
+		},
+		{
+			name:  "an override in the rule's own file makes the call its own",
+			files: map[string]string{"app/main.tf": `module "m" { source = "acme/net/aws" }`, "app/m_override.tf": `module "m" { source = "acme/dns/aws" }`, "external/net+/main.tf": ``, "external/dns+/main.tf": ``},
+			deps:  []dep{{Label: "@net", Source: "acme/net/aws", Version: "1.0.0", Dir: "external/net+"}, dns},
+			own:   own{srcs: []string{"app/m_override.tf"}, depDirs: []string{"app"}},
+			want:  `module "m" (app/m_override.tf:1): source "acme/dns/aws" resolves to @dns, which only a dep of //app has in its deps`,
+		},
+		{
+			name:  "a generated library is named by its hub label",
+			files: map[string]string{"app/main.tf": `module "dns" { source = "acme/dns/aws" }`, "external/dns+/main.tf": ``},
+			deps:  []dep{{Label: "@@rules_tofu++tf_modules+tf_modules_dns//:_rules_tofu_module", Source: "acme/dns/aws", Version: "1.0.0", Dir: "external/dns+"}},
+			own:   own{srcs: []string{"app/main.tf"}},
+			want:  `add "@tf_modules//acme/dns/aws" to the deps of //app`,
+		},
+		{
+			name:  "a call into a direct dep's package uses only the dep whose files are there",
+			files: map[string]string{"net/app/main.tf": `module "s" { source = "./sub" }`, "net/app/sub/main.tf": ``, "net/main.tf": ``},
+			deps:  []dep{{Label: "//net", Source: "github.com/acme/net", Dir: "net", Dirs: []string{"net"}, Direct: true, Callable: true}},
+			own:   own{srcs: []string{"net/app/main.tf", "net/app/sub/main.tf"}},
+			root:  "net/app",
+			want:  `no module call uses //net`,
 		},
 		{
 			name:    "the root module's calls are not the test's",
@@ -967,7 +1000,11 @@ Add "@tf_providers//hashicorp/random" to the providers of //app.`,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := buildManifest(writeTree(t, tc.files), "app", "//app", tc.deps, tc.provided, tc.testDir, tc.own)
+			root := tc.root
+			if root == "" {
+				root = "app"
+			}
+			_, err := buildManifest(writeTree(t, tc.files), root, "//app", tc.deps, tc.provided, tc.testDir, tc.own)
 			switch {
 			case tc.want == "" && err != nil:
 				t.Fatal(err)

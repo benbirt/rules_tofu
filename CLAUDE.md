@@ -238,9 +238,10 @@ Then `bazel shutdown` so the new startup flags take effect.
   - Have a `tf_library` with `module_source` pass itself to `modules_manifest`
     as `own`, never `direct`, because direct deps must be called
     (`module_dep_unused`) whereas a module needn't call itself.
-  - Keep `childOwn` true when a `module_source` call lands back in the root's
-    package so calls inside a self-called submodule still count as using the
-    library's direct `deps`.
+  - Mark `own` as `callable` and never `direct` in `modules_manifest`, so the
+    library's own files may call its `module_source` with `//<subdir>`. Calls
+    inside a self-called submodule still count as using the library's direct
+    `deps`, because the submodule's files are the library's own.
   - Cross-calls between two tags over one repository form a Bazel dependency
     cycle and are not supported.
 - Materialise external-repository files under `external/<canonical repo>/`
@@ -310,6 +311,16 @@ Then `bazel shutdown` so the new startup flags take effect.
   - Keep checking every other file against the transitive sets, which also
     still feed the work tree, plugin tree and lock, so a `//<subdir>`
     submodule's providers stay the caller's to list (issue #76).
+  - Read a directory's calls from all of its files and attribute each to the
+    file its `source` is written in: an `_override` file in a rule's `srcs`
+    makes the call that rule's own. Hold a `tf_test` only to the `run` blocks
+    of its own test files, not to test files that came with `module`.
+  - Count a direct `module_source` dep as used by a relative call only when
+    the call names one of the dep's own directories (`module.dirs`), never by
+    `within` its package directory: the workspace root package contains
+    every directory.
+  - Name a `tf_modules` library by its `@tf_modules//...` hub label in advice
+    (`addLabel`): its own label is private and canonical.
   - Resolve a call against every module with `tfconfig.BestMatch` first, then
     require the match to be `callable`, so strictness never changes which
     library a call resolves to.

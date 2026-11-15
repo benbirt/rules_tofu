@@ -342,7 +342,7 @@ def plugin_tree_root(ctx):
 
 MODULES_BIN = "//tf/private/cmd/modules:modules"
 
-def library_module(label, module_source, module_version):
+def library_module(label, module_source, module_version, dirs):
     """`TfLibraryInfo.module` for a library with these attributes, or None."""
     if not module_source:
         if module_version:
@@ -353,6 +353,8 @@ def library_module(label, module_source, module_version):
         source = module_source,
         version = module_version,
         dir = package_dir(label),
+        # A tuple, since a depset carries the struct.
+        dirs = tuple(dirs),
     )
 
 def own_dirs(files):
@@ -391,8 +393,9 @@ def modules_manifest(ctx, work_tree_outputs, infos, providers_depset, strict, sr
     them all installed. The validate action and the runner copy the manifest
     into place. The action also fails when a module requires a provider that
     `providers_depset` lacks, naming the label to add: a submodule called by
-    `//<subdir>` outside `modules/` carries none of its own (issue #76). And
-    it fails when one of the rule's own files uses what `strict` lacks.
+    `//<subdir>` outside `modules/` carries none of its own (issue #76).
+    It also fails when one of the rule's own files uses a provider or a
+    module that `strict` lacks.
 
     Args:
       ctx: rule ctx. Must declare `_modules_bin` (cfg = "exec") on the rule.
@@ -433,6 +436,7 @@ def modules_manifest(ctx, work_tree_outputs, infos, providers_depset, strict, sr
                     source = m.source,
                     version = m.version,
                     dir = m.dir,
+                    dirs = m.dirs,
                     direct = m.label in direct,
                     callable = m.label in direct or (own != None and m.label == own.label),
                 )

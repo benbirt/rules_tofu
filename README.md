@@ -165,17 +165,19 @@ the package are left alone.
 
 Every target lists what its own files use, and nothing else. A target's own
 files are those in its `srcs` and `data`; for a `tf_test`, the `run` blocks of
-its test files count too. For them, `bazel build` fails unless:
+its test files count too, and `module` counts as an entry in `deps`. For them,
+`bazel build` fails unless:
 
 - every `required_providers` entry is in the target's `providers`;
 - every `module` call by `module_source` resolves to a library in the target's
   `deps`, or to the target's own `module_source` with `//<subdir>`;
 - every relative `module` call names a directory that holds the target's own
-  files or the own files of a library in its `deps`.
+  files or those of a library in its `deps`.
 
 What a library in `deps` lists never counts for the target's files, so a
 dependency that drops a provider or a module cannot break its dependants. The
-error names the label to add.
+error names the label to add, or for a relative call the directory whose
+library to add.
 
 Files are checked against the target that lists them, wherever they sit. When
 a `tf_deploy` depends on a library in its own package, the library's files join
@@ -332,8 +334,9 @@ and digest conflict rules are in the
 `tofu init` never fetches modules. Every called module is a `tf_library` in
 `deps`; `rules_tofu` generates the module manifest at build time, installs it at
 `.terraform/modules/modules.json`, and runs `tofu init -get=false`. See
-[How it works](#how-it-works). A target's own `module` blocks may call only the
-libraries in its own `deps`; see [Strict dependencies](#strict-dependencies).
+[How it works](#how-it-works). A target's own `module` blocks may call only its
+own directories, its own `module_source` with `//<subdir>` and the libraries in
+its own `deps`; see [Strict dependencies](#strict-dependencies).
 
 ### In the workspace
 
@@ -485,7 +488,8 @@ library; setting `module_version` without `module_source` is an error.
 Every `module` block's `source` must be a literal string. Non-local calls match
 a `tf_library` in `deps` by `module_source`, either exact or leaving the
 shortest `//<subdir>` suffix. The library must be in the calling target's own
-`deps`; see [Strict dependencies](#strict-dependencies). Direct `module_source`
+`deps`, unless the target calls its own `module_source` with `//<subdir>`; see
+[Strict dependencies](#strict-dependencies). Direct `module_source`
 dependencies that no call in the target's own files uses fail `bazel build`.
 Full call-matching rules are in the
 [API docs](https://registry.bazel.build/modules/rules_tofu/latest/docs).
@@ -583,8 +587,9 @@ run "plans_a_subnet_per_name" {
   [`examples/hello/tests`](examples/hello/tests). When `srcs` sits in a
   subdirectory, `tofu test` still reads any test files in `module`'s root
   directory.
-- Helper modules in `run` blocks come from the test's own `deps` or `module`'s
-  own directories, not from `module`'s `deps` (see
+- Helper modules in `run` blocks come from the test's own `deps` or from
+  `module` itself, by one of its own directories or its `module_source`, not
+  from `module`'s `deps` (see
   [Strict dependencies](#strict-dependencies)), reached by a path relative to
   `module`'s package directory or by `module_source`.
 - Available providers combine `module`, `deps` and `providers`. `mock_provider`
