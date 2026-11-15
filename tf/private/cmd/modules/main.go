@@ -9,15 +9,18 @@
 //   - --work-tree=<path>: work tree root, required.
 //   - --root=<dir>: root module directory relative to --work-tree, or "" for
 //     the workspace root package.
-//   - --modules=<path>: required JSON file with fields modules and packages.
-//     modules lists tf_library deps that set module_source, each with label,
-//     source, version, work-tree-relative dir and direct. When the library
-//     being built sets module_source, it appears too with direct false so its
-//     files can call its own address with //<subdir>. packages lists the
-//     work-tree-relative directory of every transitive tf_library package in
-//     deps.
+//   - --modules=<path>: required JSON file with fields modules, packages and
+//     direct_packages. modules lists tf_library deps that set module_source,
+//     each with label, source, version, work-tree-relative dir, direct and
+//     callable. When the library being built sets module_source, it appears
+//     too with direct false and callable true so its files can call its own
+//     address with //<subdir>. packages lists the work-tree-relative directory
+//     of every transitive tf_library package in deps, and direct_packages
+//     those the root's own configuration may call into by a relative path.
 //   - --provider=<address>: canonical <host>/<namespace>/<name> address of a
 //     provider in the rule's plugin tree, repeatable.
+//   - --direct-provider=<address>: address of a provider the root's own
+//     configuration may require, repeatable; each is also a --provider.
 //   - --test-dir=<dir>: for tf_test, the test directory relative to --root, or
 //     "." for --root itself. Each `run` block's module in test files in --root
 //     and in --test-dir is recorded under tfconfig.TestRunKey and walked like
@@ -41,7 +44,9 @@
 //   - a direct dep is used by no call;
 //   - a walked module's required_providers names a provider that no
 //     --provider supplies, since `tofu init -plugin-dir` would fail to find
-//     it.
+//     it;
+//   - the root's own configuration uses something the rule doesn't list
+//     itself (strict deps, below).
 //
 // Missing-provider errors name the @tf_providers//<namespace>/<name> label to
 // add to the rule's providers. Built-in providers under terraform.io/builtin/
@@ -60,6 +65,24 @@
 // leaves the root's configuration, since calls from there belong to that
 // library's own deps. A module_source call that lands in the root's own
 // package stays in the root's configuration like a local call.
+//
+// Strict deps (issue #135): what the root's own configuration uses, the rule
+// must list itself, so that a dep which stops using something can't break
+// the root. The rule's direct providers, deps and deps' packages count, and
+// so do those of the libraries in the root's own package that it reaches
+// through deps in that package, since their files are part of the root
+// module; for a tf_test, the module under test is such a library. The rule
+// passes the three sets, and the tool rejects:
+//   - a required_providers entry of the root's own configuration that no
+//     --direct-provider supplies;
+//   - a call from it by module_source that resolves to a dep which is not
+//     callable;
+//   - a relative call from it into the package of a library in packages
+//     that is not in direct_packages.
+//
+// Everything outside the root's own configuration is checked against the
+// transitive sets only: each library is held to its own direct deps when it
+// is built.
 //
 // Unrecognised or malformed flags exit 2. Missing required flags, unreadable
 // or invalid JSON or HCL, I/O errors or any failed check print
@@ -91,6 +114,7 @@ var (
 	label    = flag.String("label", "", "the target being built, for error messages")
 	out      = flag.String("out", "", "path of the modules.json to write")
 	provided = flags.StringList("provider", "canonical address of a provider in the plugin tree (repeatable)")
+	listed   = flags.StringList("direct-provider", "canonical address of a provider the root's own configuration may require: one the rule lists itself (repeatable)")
 	testDir  = flag.String("test-dir", "", "directory of the rule's test files, relative to the root module (\".\" for its own directory); when set, the module each run block of the test files there and in the root module's directory loads is recorded too")
 )
 
@@ -118,13 +142,15 @@ func run() error {
 		return err
 	}
 	var listing struct {
-		Modules  []dep    `json:"modules"`
-		Packages []string `json:"packages"`
+		Modules        []dep    `json:"modules"`
+		Packages       []string `json:"packages"`
+		DirectPackages []string `json:"direct_packages"`
 	}
 	if err := json.Unmarshal(data, &listing); err != nil {
 		return fmt.Errorf("parse %s: %w", *modules, err)
 	}
-	manifest, err := buildManifest(*workTree, *root, *label, listing.Modules, listing.Packages, *provided, *testDir)
+	manifest, err := buildManifest(*workTree, *root, *label, listing.Modules, listing.Packages, *provided, *testDir,
+		direct{packages: listing.DirectPackages, providers: *listed})
 	if err != nil {
 		return err
 	}
@@ -144,6 +170,18 @@ type dep struct {
 	// Direct is whether the root lists it in deps itself, rather than through
 	// another library. A direct dep must be used.
 	Direct bool `json:"direct"`
+	// Callable is whether the root's own configuration may call it: a direct
+	// dep, the library being built, or a direct dep of a library whose files
+	// are part of the root module (see the package doc).
+	Callable bool `json:"callable"`
+}
+
+// direct is what the root's own configuration may use beyond callable deps:
+// the package directories it may call into by a relative path, and the
+// providers it may require.
+type direct struct {
+	packages  []string
+	providers []string
 }
 
 // Manifest is tofu's `.terraform/modules/modules.json`.
@@ -161,17 +199,17 @@ type Record struct {
 	Dir     string `json:"Dir"`
 }
 
-// requirement is a provider a module requires that no --provider supplies.
+// requirement is a provider a module requires that no --provider supplies,
+// or that the root's own configuration requires and no --direct-provider
+// supplies.
 type requirement struct {
 	// module names the module: moduleName(key), then for a module_source
 	// call the dep's label and the `//<subdir>` used, in parentheses.
 	module   string
 	provider string
-}
-
-// build is buildManifest for a rule with no test files.
-func build(workTree, root, label string, deps []dep, packages []string, provided []string) (*Manifest, error) {
-	return buildManifest(workTree, root, label, deps, packages, provided, "")
+	// indirect is whether a --provider supplies it: the rule's deps list the
+	// provider and the rule itself does not.
+	indirect bool
 }
 
 // buildManifest constructs the manifest for the root module at root in
@@ -179,7 +217,8 @@ func build(workTree, root, label string, deps []dep, packages []string, provided
 // directory relative to root, with "." meaning root itself. When testDir is
 // non-empty, each `run` block's module in test files in root and in testDir
 // is recorded as `tofu init` records it and walked like a call from root.
-func buildManifest(workTree, root, label string, deps []dep, packages []string, provided []string, testDir string) (*Manifest, error) {
+// strict is what the root's own configuration may use.
+func buildManifest(workTree, root, label string, deps []dep, packages []string, provided []string, testDir string, strict direct) (*Manifest, error) {
 	bySource := map[string]*dep{}
 	var all []*dep
 	for i := range deps {
@@ -204,22 +243,32 @@ func buildManifest(workTree, root, label string, deps []dep, packages []string, 
 	for _, p := range provided {
 		supplied[p] = true
 	}
+	listed := map[string]bool{}
+	for _, p := range strict.providers {
+		listed[p] = true
+		supplied[p] = true
+	}
+	directPackage := map[string]bool{}
+	for _, p := range strict.packages {
+		directPackage[p] = true
+	}
 	var missing []requirement
 	// reported keeps a module that two calls reach from being reported twice.
 	reported := map[string]bool{}
-	// require records the providers that dir's configuration requires and no
-	// --provider supplies; module names the module (see requirement).
-	require := func(dir, module string) error {
+	// require records the providers that dir's configuration requires and
+	// nothing supplies: no --provider, or for the root's own configuration
+	// (own) no --direct-provider. module names the module (see requirement).
+	require := func(dir, module string, own bool) error {
 		providers, err := tfconfig.RequiredProviders(filepath.Join(workTree, filepath.FromSlash(dir)))
 		if err != nil {
 			return err
 		}
 		for _, p := range providers {
-			if supplied[p] || isBuiltin(p) || reported[dir+" "+p] {
+			if listed[p] || (supplied[p] && !own) || isBuiltin(p) || reported[dir+" "+p] {
 				continue
 			}
 			reported[dir+" "+p] = true
-			missing = append(missing, requirement{module: module, provider: p})
+			missing = append(missing, requirement{module: module, provider: p, indirect: supplied[p]})
 		}
 		return nil
 	}
@@ -243,9 +292,15 @@ func buildManifest(workTree, root, label string, deps []dep, packages []string, 
 			if err := checkLocal(workTree, dir, childDir); err != nil {
 				return fmt.Errorf("%s: %s: source %q %w", label, where, c.Source, err)
 			}
-			if pkg := packageOf(packages, root, childDir); pkg == root {
+			if pkg, isPackage := packageOf(packages, root, childDir); pkg == root {
 				childOwn = own
 			} else if own {
+				// A directory in no library's package came with the root's
+				// own files or with a dep's data, so no library owns it.
+				if isPackage && !directPackage[pkg] {
+					return fmt.Errorf("%s: %s: source %q is in the package of a tf_library that %s reaches only through its deps' deps; "+
+						"add the tf_library in that directory to the deps of %s", label, where, c.Source, label, label)
+				}
 				for _, d := range all {
 					if d.Dir == pkg {
 						used[d.Label] = true
@@ -258,13 +313,17 @@ func buildManifest(workTree, root, label string, deps []dep, packages []string, 
 				return fmt.Errorf("%s: %s: no dep provides source %q. %s", label, where, c.Source, missingHint(c.Source))
 			}
 			if own {
+				if !d.Callable {
+					return fmt.Errorf("%s: %s: source %q is provided by %s, which %s reaches only through its deps' deps; add %s to the deps of %s",
+						label, where, c.Source, d.Label, label, d.Label, label)
+				}
 				used[d.Label] = true
 			}
 			childDir = path.Join(d.Dir, subdir)
 			// A library's call to its own module_source with `//<subdir>`
 			// stays in its package, as a local path there would: what that
 			// module calls is still the root's own business.
-			if packageOf(packages, root, childDir) == root {
+			if pkg, _ := packageOf(packages, root, childDir); pkg == root {
 				childOwn = own
 			}
 			if subdir == "" {
@@ -300,7 +359,7 @@ func buildManifest(workTree, root, label string, deps []dep, packages []string, 
 	walk = func(key, dir, module string, own bool) error {
 		active[dir] = key
 		defer delete(active, dir)
-		if err := require(dir, module); err != nil {
+		if err := require(dir, module, own); err != nil {
 			return err
 		}
 		calls, err := tfconfig.ReadCalls(filepath.Join(workTree, filepath.FromSlash(dir)))
@@ -405,16 +464,23 @@ func testRuns(workTree, root, testDir string) ([]testRun, error) {
 	return runs, nil
 }
 
-// missingProviders reports the providers that modules require and the plugin
-// tree lacks, naming the `@tf_providers//<namespace>/<name>` of each to add
-// to the rule's providers. A provider from another registry has no label:
-// rules_tofu vendors providers from registry.opentofu.org only, as the
-// tf_providers extension says of its tags.
+// missingProviders reports the providers that modules require and the rule
+// lacks, naming the `@tf_providers//<namespace>/<name>` of each to add to the
+// rule's providers. Those the plugin tree lacks come first, then those the
+// root's own configuration requires that only the rule's deps list. A
+// provider from another registry has no label: rules_tofu vendors providers
+// from registry.opentofu.org only, as the tf_providers extension says of its
+// tags.
 func missingProviders(label string, missing []requirement) error {
-	var lines, labels, foreign []string
+	var absent, indirect, labels, foreign []string
 	seen := map[string]bool{}
 	for _, m := range missing {
-		lines = append(lines, fmt.Sprintf("    %s requires %s", m.module, displayProvider(m.provider)))
+		line := fmt.Sprintf("    %s requires %s", m.module, displayProvider(m.provider))
+		if m.indirect {
+			indirect = append(indirect, line)
+		} else {
+			absent = append(absent, line)
+		}
 		if seen[m.provider] {
 			continue
 		}
@@ -425,6 +491,16 @@ func missingProviders(label string, missing []requirement) error {
 			foreign = append(foreign, m.provider)
 		}
 	}
+	var parts []string
+	if len(absent) > 0 {
+		parts = append(parts, fmt.Sprintf("%s: nothing in its providers or deps supplies these providers, so `tofu init` would not find them:\n%s",
+			label, strings.Join(absent, "\n")))
+	}
+	if len(indirect) > 0 {
+		parts = append(parts, fmt.Sprintf("%s: its own configuration requires these providers, which only its deps list; "+
+			"a target lists the providers of its own configuration itself:\n%s",
+			label, strings.Join(indirect, "\n")))
+	}
 	var advice []string
 	if len(labels) > 0 {
 		advice = append(advice, fmt.Sprintf("Add %s to the providers of %s.", strings.Join(labels, ", "), label))
@@ -433,8 +509,7 @@ func missingProviders(label string, missing []requirement) error {
 		advice = append(advice, fmt.Sprintf("rules_tofu can't vendor %s: it only vendors providers from %s.",
 			strings.Join(foreign, ", "), defaultProviderHost))
 	}
-	return fmt.Errorf("%s: nothing in its providers or deps supplies these providers, so `tofu init` would not find them:\n%s\n%s",
-		label, strings.Join(lines, "\n"), strings.Join(advice, " "))
+	return fmt.Errorf("%s\n%s", strings.Join(parts, "\n"), strings.Join(advice, " "))
 }
 
 // defaultProviderHost is the registry rules_tofu vendors providers from,
@@ -466,15 +541,15 @@ func providerLabel(provider string) (string, bool) {
 
 // packageOf is the package dir belongs to: the nearest of packages, or
 // root, at or above it, as Bazel gives a directory to the nearest package
-// above it.
-func packageOf(packages []string, root, dir string) string {
+// above it. It reports false, and "", for a directory in none of them.
+func packageOf(packages []string, root, dir string) (string, bool) {
 	best, found := "", false
 	for _, p := range append([]string{root}, packages...) {
 		if within(dir, p) && (!found || len(p) > len(best)) {
 			best, found = p, true
 		}
 	}
-	return best
+	return best, found
 }
 
 // within is whether dir is ancestor or inside it, "" being the work tree

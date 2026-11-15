@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -633,7 +634,7 @@ func TestBuildManifest_TestRuns(t *testing.T) {
 	deps := []dep{
 		{Label: "@infra//vpc", Source: "git::https://example.com/infra.git//vpc?ref=v1.0.0", Dir: "external/infra+/vpc", Direct: true},
 	}
-	got, err := buildManifest(tree, "app", "//app:app_test", deps, nil, nil, "tests")
+	got, err := buildLenient(tree, "app", "//app:app_test", deps, nil, nil, "tests")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -712,7 +713,7 @@ func TestBuildManifest_EmptyRootTestRuns(t *testing.T) {
 		"lib/main.tf":                 ``,
 		"empty/tests/main.tftest.hcl": "run \"lib\" {\n  module {\n    source = \"../lib\"\n  }\n}\n",
 	})
-	got, err := buildManifest(tree, "empty", "//empty:test", nil, []string{"lib"}, nil, "tests")
+	got, err := buildLenient(tree, "empty", "//empty:test", nil, []string{"lib"}, nil, "tests")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -734,7 +735,7 @@ func TestBuildManifest_TestRunsRootOnly(t *testing.T) {
 		"tests/y.tftest.hcl":   "run \"b\" {\n  module {\n    source = \"./nowhere\"\n  }\n}\n",
 		"tests/helper/main.tf": ``,
 	})
-	got, err := buildManifest(tree, "", "//:root_test", nil, nil, nil, ".")
+	got, err := buildLenient(tree, "", "//:root_test", nil, nil, nil, ".")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -786,9 +787,132 @@ func TestBuildManifest_TestRunErrors(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			tree := writeTree(t, tc.files)
-			_, err := buildManifest(tree, "app", "//app:app_test", tc.deps, nil, nil, "tests")
+			_, err := buildLenient(tree, "app", "//app:app_test", tc.deps, nil, nil, "tests")
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Errorf("err = %v, want containing %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// build is buildLenient for a rule with no test files.
+func build(workTree, root, label string, deps []dep, packages []string, provided []string) (*Manifest, error) {
+	return buildLenient(workTree, root, label, deps, packages, provided, "")
+}
+
+// buildLenient is buildManifest for a rule that lists everything itself:
+// every dep is callable, every package direct and every provider listed. Only
+// TestBuildManifest_StrictDeps is about strict deps.
+func buildLenient(workTree, root, label string, deps []dep, packages []string, provided []string, testDir string) (*Manifest, error) {
+	callable := make([]dep, len(deps))
+	for i, d := range deps {
+		d.Callable = true
+		callable[i] = d
+	}
+	return buildManifest(workTree, root, label, callable, packages, provided, testDir, direct{packages: packages, providers: provided})
+}
+
+// The root's own configuration, which is the root module, the local modules
+// in its package and a test's run blocks, may use only what the rule lists
+// itself: strict.providers, callable deps and strict.packages (#135). What a
+// dep's package uses is the dep's business, and the transitive sets do.
+func TestBuildManifest_StrictDeps(t *testing.T) {
+	const (
+		random = "registry.opentofu.org/hashicorp/random"
+		null   = "registry.opentofu.org/hashicorp/null"
+	)
+	requires := func(name string) string {
+		return fmt.Sprintf("terraform {\n  required_providers {\n    %s = { source = \"hashicorp/%s\" }\n  }\n}\n", name, name)
+	}
+	net := dep{Label: "@net", Source: "acme/net/aws", Version: "1.0.0", Dir: "external/net+", Direct: true, Callable: true}
+	dns := dep{Label: "@dns", Source: "acme/dns/aws", Version: "1.0.0", Dir: "external/dns+"}
+	for _, tc := range []struct {
+		name     string
+		files    map[string]string
+		deps     []dep
+		packages []string
+		provided []string
+		strict   direct
+		testDir  string
+		want     string
+	}{
+		{
+			name:     "a provider only deps list",
+			files:    map[string]string{"app/main.tf": requires("random") + `module "lib" { source = "../lib" }`, "lib/main.tf": requires("random") + requires("null")},
+			packages: []string{"lib"},
+			provided: []string{random, null},
+			strict:   direct{packages: []string{"lib"}},
+			want: `//app: its own configuration requires these providers, which only its deps list; a target lists the providers of its own configuration itself:
+    the root module requires hashicorp/random
+Add "@tf_providers//hashicorp/random" to the providers of //app.`,
+		},
+		{
+			name:     "a provider listed directly",
+			files:    map[string]string{"app/main.tf": requires("random") + `module "lib" { source = "../lib" }`, "lib/main.tf": requires("null")},
+			packages: []string{"lib"},
+			provided: []string{null},
+			strict:   direct{packages: []string{"lib"}, providers: []string{random}},
+		},
+		{
+			name:     "a local module in the root's package is its own configuration",
+			files:    map[string]string{"app/main.tf": `module "sub" { source = "./sub" }`, "app/sub/main.tf": requires("null")},
+			provided: []string{null},
+			want:     `    module "sub" requires hashicorp/null` + "\n",
+		},
+		{
+			name:     "absent and indirect providers are told apart",
+			files:    map[string]string{"app/main.tf": requires("random") + requires("null")},
+			provided: []string{null},
+			want: "//app: nothing in its providers or deps supplies these providers, so `tofu init` would not find them:\n" +
+				"    the root module requires hashicorp/random\n" +
+				"//app: its own configuration requires these providers, which only its deps list; a target lists the providers of its own configuration itself:\n" +
+				"    the root module requires hashicorp/null\n" +
+				`Add "@tf_providers//hashicorp/null", "@tf_providers//hashicorp/random" to the providers of //app.`,
+		},
+		{
+			name:  "a module_source call to a dep's dep",
+			files: map[string]string{"app/main.tf": `module "net" { source = "acme/net/aws" }` + "\n" + `module "dns" { source = "acme/dns/aws" }`, "external/net+/main.tf": `module "dns" { source = "acme/dns/aws" }`, "external/dns+/main.tf": ``},
+			deps:  []dep{net, dns},
+			want:  `//app: module "dns" (app/main.tf:2): source "acme/dns/aws" is provided by @dns, which //app reaches only through its deps' deps; add @dns to the deps of //app`,
+		},
+		{
+			name:  "a dep calls its own dep",
+			files: map[string]string{"app/main.tf": `module "net" { source = "acme/net/aws" }`, "external/net+/main.tf": `module "dns" { source = "acme/dns/aws" }`, "external/dns+/main.tf": ``},
+			deps:  []dep{net, dns},
+		},
+		{
+			name:     "a relative call into a dep's dep's package",
+			files:    map[string]string{"app/main.tf": `module "a" { source = "../a" }` + "\n" + `module "b" { source = "../b" }`, "a/main.tf": `module "b" { source = "../b" }`, "b/main.tf": ``},
+			packages: []string{"a", "b"},
+			strict:   direct{packages: []string{"a"}},
+			want:     `//app: module "b" (app/main.tf:2): source "../b" is in the package of a tf_library that //app reaches only through its deps' deps; add the tf_library in that directory to the deps of //app`,
+		},
+		{
+			name:     "a dep calls into its own dep's package",
+			files:    map[string]string{"app/main.tf": `module "a" { source = "../a" }`, "a/main.tf": `module "b" { source = "../b" }`, "b/main.tf": ``},
+			packages: []string{"a", "b"},
+			strict:   direct{packages: []string{"a"}},
+		},
+		{
+			name:     "a directory in no library's package",
+			files:    map[string]string{"app/main.tf": `module "d" { source = "../data" }`, "data/main.tf": ``, "a/main.tf": ``},
+			packages: []string{"a"},
+		},
+		{
+			name:    "a run block's module is the test's own call",
+			files:   map[string]string{"app/main.tf": ``, "app/tests/x.tftest.hcl": "run \"r\" {\n  module {\n    source = \"acme/dns/aws\"\n  }\n}", "external/dns+/main.tf": ``},
+			deps:    []dep{dns},
+			testDir: "tests",
+			want:    `source "acme/dns/aws" is provided by @dns, which //app reaches only through its deps' deps`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := buildManifest(writeTree(t, tc.files), "app", "//app", tc.deps, tc.packages, tc.provided, tc.testDir, tc.strict)
+			switch {
+			case tc.want == "" && err != nil:
+				t.Fatal(err)
+			case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
+				t.Fatalf("got\n%v\nwant an error containing\n%s", err, tc.want)
 			}
 		})
 	}

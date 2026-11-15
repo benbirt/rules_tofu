@@ -97,9 +97,9 @@ A reusable bundle of configuration files with no variable values and no `.plan`,
 | Attribute | Purpose |
 |-----------|---------|
 | `srcs` | `.tf`, `.tf.json`, `.tofu`, `.tofu.json`, `.tftpl` and `.hcl` files. `.tofu` and `.tofu.json` shadow `.tf` and `.tf.json` of the same name; see [`examples/tofu_files`](examples/tofu_files). |
-| `deps` | `tf_library` targets whose files, providers and `module_source` mappings propagate through this library. |
+| `deps` | `tf_library` targets that `srcs` call as modules, or that share this library's package. Their files, providers and `module_source` mappings reach dependants' work trees. See [Strict dependencies](#strict-dependencies). |
 | `data` | Files placed in the work tree for `file()` and `templatefile()`. |
-| `providers` | Providers required by `srcs`, as `@tf_providers//<namespace>/<name>`. |
+| `providers` | Every provider that `srcs` require, as `@tf_providers//<namespace>/<name>`. |
 | `module_source` | Address by which HCL `module` blocks call this library when it lives in another Bazel repository. See [Modules](#modules). |
 | `module_version` | Version checked against callers' `version` constraints on a registry `module_source`. Defaults to the version of the Bazel module that holds the library when `module_source` is set; setting it without `module_source` is an error. |
 | `fmt_test` | Emit `:name.fmt_check` when `srcs` is non-empty. Defaults to `True`. |
@@ -119,7 +119,7 @@ configuration file in the deploy's package, `bazel build` fails.
 | `vars` | String dictionary of variable values written to `rules_tofu.auto.tfvars.json`. See [Variables and data files](#variables-and-data-files). |
 | `var_files` | `.tfvars` or `.tfvars.json` files passed via `-var-file`, including generated outputs. |
 | `data` | Files placed in the work tree for `file()` and `templatefile()`. |
-| `providers` | Providers required directly by `srcs`, combined with providers from `deps`. |
+| `providers` | Every provider that `srcs` require, as `@tf_providers//<namespace>/<name>`. Those of `deps` are installed too. |
 | `allow_ephemeral_state` | Permit `apply` and `destroy` when state lives under `bazel-bin`. Defaults to `False`; see [State and backends](#state-and-backends). |
 | `fmt_test` | Emit `:name.fmt_check` when `srcs` is non-empty. Defaults to `True`. |
 
@@ -133,7 +133,7 @@ Runs `tofu test` over a module's test files as a Bazel test. See
 | `srcs` | `.tftest.hcl`, `.tofutest.hcl`, `.tftest.json` and `.tofutest.json` files in one directory at or below `module`'s package. `.tofutest.*` shadows `.tftest.*`. |
 | `module` | The `tf_library` or `tf_deploy` under test. |
 | `deps` | Helper `tf_library` targets loaded by `run { module { ... } }` blocks. |
-| `providers` | Providers needed beyond those of `module` and `deps`. |
+| `providers` | Providers needed beyond those of `module` and `deps`, such as one only the test files configure. |
 | `var_files` | `.tfvars` or `.tfvars.json` files passed via `-var-file`. |
 | `data` | Files placed in the work tree. |
 | `allow_network` | Allow network access during tests instead of blocking it in the sandbox. Defaults to `False`. |
@@ -160,6 +160,29 @@ arguments after `--`, or passed directly to the `.sh` script, are forwarded to
 `:name.fmt` and `:name.fmt_check` are emitted when `srcs` is non-empty. They act
 only on the files in `srcs`, including those in subdirectories; other files in
 the package are left alone.
+
+### Strict dependencies
+
+A target lists what its own configuration uses. Its own configuration is the
+root module in its package, including the files of same-package libraries in
+`deps`, and local modules below that package. For it, `bazel build` fails
+unless:
+
+- every `required_providers` entry is in the target's `providers`;
+- every `module` call by `module_source` resolves to a library in the target's
+  `deps`, or to the target's own `module_source` with `//<subdir>`;
+- every relative `module` call into another package names the package of a
+  library in the target's `deps`.
+
+What a library in `deps` lists does not count, so a dependency that drops a
+provider or a module cannot break its dependants. The error names the label to
+add. Two things do carry over, because the files share one root module: what a
+same-package library in `deps` lists, and for a `tf_test` what its `module`
+lists.
+
+Modules in other packages are checked when their own targets are built. Their
+providers and modules still reach the dependant's plugin tree and module
+manifest, so nothing has to be listed twice for `tofu init`.
 
 ## Providers
 
@@ -306,7 +329,8 @@ and digest conflict rules are in the
 `tofu init` never fetches modules. Every called module is a `tf_library` in
 `deps`; `rules_tofu` generates the module manifest at build time, installs it at
 `.terraform/modules/modules.json`, and runs `tofu init -get=false`. See
-[How it works](#how-it-works).
+[How it works](#how-it-works). A target's own `module` blocks may call only the
+libraries in its own `deps`; see [Strict dependencies](#strict-dependencies).
 
 ### In the workspace
 
@@ -457,8 +481,9 @@ library; setting `module_version` without `module_source` is an error.
 
 Every `module` block's `source` must be a literal string. Non-local calls match
 a `tf_library` in `deps` by `module_source`, either exact or leaving the
-shortest `//<subdir>` suffix. Direct `module_source` dependencies unused by the
-target's own configuration fail `bazel build`. Full call-matching rules are in
+shortest `//<subdir>` suffix. The library must be in the calling target's own
+`deps`; see [Strict dependencies](#strict-dependencies). Direct `module_source`
+dependencies unused by the target's own configuration fail `bazel build`. Full call-matching rules are in
 the [API docs](https://registry.bazel.build/modules/rules_tofu/latest/docs).
 
 ## Variables and data files

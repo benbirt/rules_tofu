@@ -1,0 +1,9 @@
+load("@rules_tofu//tf:defs.bzl", "tf_library")
+
+tf_library(
+    name = "mid",
+    srcs = ["main.tf"],
+    fmt_test = False,
+    visibility = ["//cases/strict_deps:__pkg__"],
+    deps = ["//cases/strict_deps/net"],
+)

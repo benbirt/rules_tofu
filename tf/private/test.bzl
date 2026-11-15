@@ -15,6 +15,7 @@ load(
     _modules_manifest = "modules_manifest",
     _plugin_tree_root = "plugin_tree_root",
     _provider_lock = "provider_lock",
+    _strict_deps = "strict_deps",
     _runfiles_path = "runfiles_path",
     _work_tree_path = "work_tree_path",
     _work_tree_root = "work_tree_root",
@@ -34,7 +35,13 @@ def _under_test(target):
         return struct(
             files = info.transitive_files,
             providers = info.providers,
-            manifest = struct(module = None, modules = info.modules, packages = info.packages),
+            manifest = struct(
+                module = None,
+                modules = info.modules,
+                packages = info.packages,
+                package_dir = info.package_dir,
+                strict = info.strict,
+            ),
             tfvars_content = info.tfvars_content,
             var_files = info.var_files,
             package_dir = info.package_dir,
@@ -105,17 +112,23 @@ def _tf_test_impl(ctx):
         tfvars_dir = root,
     )
 
+    direct_providers = [p[TfProviderInfo] for p in ctx.attr.providers]
     providers_depset = depset(
-        direct = [p[TfProviderInfo] for p in ctx.attr.providers],
+        direct = direct_providers,
         transitive = [under_test.providers] + [d[TfLibraryInfo].providers for d in ctx.attr.deps],
     )
     plugin_outputs = _materialize_plugin_tree(ctx, providers_depset)
     lock = _provider_lock(ctx, providers_depset)
+
+    # The root module is the module under test's, so what that may use the
+    # test may too: `strict_deps` joins it as a dep in the root's package.
+    infos = [under_test.manifest] + [d[TfLibraryInfo] for d in ctx.attr.deps]
     manifest = _modules_manifest(
         ctx,
         work_tree_outputs,
-        [under_test.manifest] + [d[TfLibraryInfo] for d in ctx.attr.deps],
+        infos,
         providers_depset,
+        _strict_deps(root, direct_providers, infos),
         root = root,
         test_dir = test_dir,
     )

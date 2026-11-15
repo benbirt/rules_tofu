@@ -3,7 +3,8 @@ load("@rules_tofu//tf:defs.bzl", "tf_deploy", "tf_library")
 package(default_visibility = ["//visibility:public"])
 
 # This library bundles main.tf with the Google Cloud provider it requires.
-# Targets that depend on storage_bucket_lib inherit its providers automatically.
+# The deploy below is in the same package, so main.tf joins its root module and
+# the library's providers cover it.
 tf_library(
     name = "storage_bucket_lib",
     srcs = ["main.tf"],

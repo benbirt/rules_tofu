@@ -290,6 +290,23 @@ Then `bazel shutdown` so the new startup flags take effect.
   cannot see which `//<subdir>` submodules outside `modules/` callers will
   reach (issue #76), and providers cannot be added automatically there because
   provider labels must be dependencies before analysis.
+- Enforce strict deps in the manifest action (issue #135; `README.md`,
+  "Strict dependencies"; `strict_deps_*` cases), on by default with no opt-out:
+  - Check only the root's own configuration (`own` in the walk) against the
+    rule's direct lists: `--direct-provider`, `callable` deps and
+    `direct_packages`. Keep checking everything else against the transitive
+    sets, which also still feed the work tree, plugin tree and lock, so a
+    `//<subdir>` submodule's providers stay the caller's to list (issue #76).
+  - Compute the direct lists with `strict_deps` and carry them in
+    `TfLibraryInfo.strict` and `TfDeployInfo.strict`. A dep in the root's own
+    package joins its lists to the dependant's, because its files are part of
+    the same root module (`examples/aws`); so does the module under test of a
+    `tf_test`. Don't join the lists of deps in other packages.
+  - Resolve a call against every module with `tfconfig.BestMatch` first, then
+    require the match to be `callable`, so strictness never changes which
+    library a call resolves to.
+  - Allow a relative call into a directory that belongs to no library's
+    package: it came with the root's own files or a dep's `data`.
 - Keep `examples/modules/{label,stack,git}` on lightweight providers alongside
   `//tests/integration:tf_modules_test` so CI exercises real upstream registry
   and git modules without ~170 MB cloud-provider downloads.
