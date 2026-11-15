@@ -242,8 +242,13 @@ def _tidy(repository_ctx, context):
             if through:
                 target = str(entry.path.realpath)
                 remedy = "declare and call the module by the directory the link leads to"
+                module_real = root_real + "/" + subdir if subdir else root_real
                 if subdir not in through:
-                    remedy = "name the directory the link leads to in `submodules`, and call that"
+                    # `submodules` takes a directory below the module's own.
+                    if within(target, module_real) and target != module_real:
+                        remedy = "name `{}` in `submodules` instead, and call that".format(target[len(module_real) + 1:])
+                    else:
+                        remedy = "declare the directory the link leads to as a module of its own"
                 fail(("{}: `{}` is a symlink in the fetched files, to {}; rules_tofu keeps no symlinks to " +
                       "directories, so {}").format(
                     context,
