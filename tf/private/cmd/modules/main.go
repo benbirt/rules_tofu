@@ -650,9 +650,11 @@ func checkProvided(workTree, dir, subdir string, generated bool) error {
 	if subdir == "" {
 		return errors.New("has no .tf, .tf.json, .tofu or .tofu.json files")
 	}
-	if generated {
-		return fmt.Errorf("does not include the configuration of %q, a directory outside modules/ that the module does not call itself; "+
-			"add %q to `submodules` on its tf_modules.module tag", subdir, subdir)
+	// A generated library has every configured directory below modules/, so
+	// only one outside it can be there upstream and missing here.
+	if generated && subdir != "modules" && !strings.HasPrefix(subdir, "modules/") {
+		return fmt.Errorf("has no configuration in %q. A fetched module's library leaves out directories outside modules/ "+
+			"that the module does not call itself: check the path, or add %q to `submodules` on its tf_modules.module tag", subdir, subdir)
 	}
 	if !isDir(workTree, dir) {
 		return fmt.Errorf("has no directory %q", subdir)

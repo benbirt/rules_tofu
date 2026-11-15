@@ -21,6 +21,8 @@
 #        in data.
 #      - .bazelignore naming vpc/modules would hide the subnet submodule if
 #        left in the fetched repository (issue #102).
+#      - Dot-prefixed files with a configuration extension (vpc/._main.tf,
+#        shared/.hidden.tofu) are data, which tofu passes over.
 #      - An uninitialised git submodule entry at vendor/shared is unused and
 #        not fetched (issue #94).
 #   2. //app plans offline across the git module (which calls a registry module
@@ -97,6 +99,11 @@ ln -s ../.. "${FIXTURES}/network.git/vpc/examples/complete/parent"
 ln -s ../../../missing.tf "${FIXTURES}/network.git/vpc/examples/complete/missing.tf"
 ln -s /dev/null "${FIXTURES}/network.git/vpc/examples/complete/outside"
 ln -s vpc/peering "${FIXTURES}/network.git/peering_link"
+# Dot-prefixed files that look like configuration, as macOS leaves beside
+# files in an archive. tofu passes over them, so they are data: in the
+# module's own directory and outside it.
+echo "not configuration" >"${FIXTURES}/network.git/vpc/._main.tf"
+echo "not configuration" >"${FIXTURES}/network.git/shared/.hidden.tofu"
 # Variables files that tofu loads by itself, as a module's root and its
 # examples often carry. No rule accepts one as data, so the generated
 # libraries must leave them out: every build below would fail otherwise.
@@ -151,6 +158,10 @@ for removed in .bazelignore vpc/examples/BUILD.bazel vpc/examples/complete/modul
   fi
 done
 [[ -f "${network_repo}/files" && -f "${network_repo}/vpc/module" ]] || fail "the module's own files named files and module were removed"
+for dot_file in vpc/._main.tf shared/.hidden.tofu; do
+  find -L "$(bazel info bazel-bin)/app/app.work" -path "*/${dot_file}" | grep -q . ||
+    fail "${dot_file}, a dot-prefixed file tofu passes over, is not in the work tree as data"
+done
 
 echo "--- 3. a submodule the tag doesn't name ---" >&2
 # An example's configuration is no part of the library, so it is in no work

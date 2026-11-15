@@ -214,9 +214,9 @@ def _tidy(repository_ctx, context):
     if they cycle to an ancestor, while symlinks outside the repository would
     make its contents depend on the host machine.
 
-    If `subdir` is or lies under a directory symlink, removing that symlink
-    leaves nowhere to write `//<subdir>/BUILD.bazel`, so fetching fails naming
-    the symlink target.
+    If `subdir` or a `submodules` directory is or lies under a directory
+    symlink, removing that symlink leaves nothing there to serve, so fetching
+    fails naming the symlink target.
     """
     root = repository_ctx.path(".")
     root_real = str(root.realpath)
@@ -238,13 +238,18 @@ def _tidy(repository_ctx, context):
     symlinks = [entry for entry in entries if entry.is_symlink and entry.path.basename not in _BAZEL_FILES]
     for entry in symlinks:
         if entry.path.exists and entry.path.is_dir:
-            if [d for d in needed if d == entry.rel or d.startswith(entry.rel + "/")]:
+            through = [d for d in needed if d == entry.rel or d.startswith(entry.rel + "/")]
+            if through:
                 target = str(entry.path.realpath)
+                remedy = "declare and call the module by the directory the link leads to"
+                if subdir not in through:
+                    remedy = "name the directory the link leads to in `submodules`, and call that"
                 fail(("{}: `{}` is a symlink in the fetched files, to {}; rules_tofu keeps no symlinks to " +
-                      "directories, so declare and call the module by the directory the link leads to").format(
+                      "directories, so {}").format(
                     context,
                     entry.rel,
                     target[len(root_real) + 1:] if within(target, root_real) and target != root_real else target,
+                    remedy,
                 ))
             repository_ctx.delete(entry.path)
     for entry in symlinks:

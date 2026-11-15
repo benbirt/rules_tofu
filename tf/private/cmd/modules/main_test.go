@@ -1008,3 +1008,38 @@ Add "@tf_providers//hashicorp/random" to the providers of //app.`,
 		})
 	}
 }
+
+// A call into a directory that a generated library lacks says how to add
+// one outside modules/, where the library leaves out what the module doesn't
+// call itself. Below modules/ the library has every configured directory, so
+// the path is simply wrong.
+func TestBuild_GeneratedLibraryLacksDirectory(t *testing.T) {
+	tree := writeTree(t, map[string]string{
+		"app/main.tf":                    ``,
+		"external/net+/main.tf":          ``,
+		"external/net+/wrappers/README":  ``,
+		"external/net+/modules/x/README": ``,
+	})
+	generated := dep{Label: "@@rules_tofu++tf_modules+tf_modules_net//:_rules_tofu_module", Source: "git::https://example.com/net.git?ref=v1", Dir: "external/net+", Direct: true}
+	written := dep{Label: "@net//:net", Source: "git::https://example.com/net.git?ref=v1", Dir: "external/net+", Direct: true}
+	for _, tc := range []struct {
+		name, subdir, want string
+		dep                dep
+	}{
+		{"outside modules/", "wrappers", `@tf_modules//net (module_source "git::https://example.com/net.git?ref=v1") has no configuration in "wrappers". A fetched module's library leaves out directories outside modules/ that the module does not call itself: check the path, or add "wrappers" to ` + "`submodules`" + ` on its tf_modules.module tag`, generated},
+		{"absent", "nowhere", `check the path, or add "nowhere" to`, generated},
+		{"below modules/", "modules/x", `has no .tf, .tf.json, .tofu or .tofu.json files in "modules/x"`, generated},
+		{"below modules/, absent", "modules/y", `has no directory "modules/y"`, generated},
+		{"a hand-written library", "wrappers", `has no .tf, .tf.json, .tofu or .tofu.json files in "wrappers"`, written},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := os.WriteFile(filepath.Join(tree, "app/main.tf"), []byte(`module "m" { source = "git::https://example.com/net.git//`+tc.subdir+`?ref=v1" }`), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			_, err := build(tree, "app", "//app", []dep{tc.dep}, nil)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("got %v, want an error containing %q", err, tc.want)
+			}
+		})
+	}
+}

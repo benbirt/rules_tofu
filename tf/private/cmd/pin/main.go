@@ -345,9 +345,6 @@ func queryConfigFiles(bazel, workspace string, log io.Writer) (map[string][]stri
 	}
 	byDir := map[string][]string{}
 	for _, f := range targets {
-		if f.Kind != "source file" {
-			continue
-		}
 		dir := path.Dir(path.Join(f.Package, f.Name))
 		if dir == "." {
 			dir = ""
@@ -360,18 +357,16 @@ func queryConfigFiles(bazel, workspace string, log io.Writer) (map[string][]stri
 	return byDir, nil
 }
 
-// target is one object of `bazel query --output=streamed_jsonproto`: a
-// source file or a rule, its label split up, and the absolute path of the
-// file it is or is declared in.
+// target is a source file from `bazel query --output=streamed_jsonproto`: its
+// label split up, and its absolute path.
 type target struct {
-	Kind, Label, Repo, Package, Name, Path string
+	Label, Repo, Package, Name, Path string
 }
 
-// queryFlags make the query print each target as a JSON object with what
-// parseTargets reads, and no more: none of a rule's attributes or inputs.
+// queryFlags make the query print each target as a JSON object.
 var queryFlags = []string{
 	"--keep_going", "--noimplicit_deps", "--notool_deps",
-	"--output=streamed_jsonproto", "--proto:output_rule_attrs=", "--proto:rule_inputs_and_outputs=false",
+	"--output=streamed_jsonproto",
 }
 
 // query runs a `bazel query`, accepting partial results.
@@ -393,12 +388,7 @@ func query(bazel, workspace, expr string, log io.Writer) ([]target, error) {
 // queryTarget holds the fields pin reads from a `bazel query
 // --output=streamed_jsonproto` Target JSON object.
 type queryTarget struct {
-	Type string `json:"type"`
-	Rule *struct {
-		Name      string `json:"name"`
-		RuleClass string `json:"ruleClass"`
-		Location  string `json:"location"`
-	} `json:"rule"`
+	Type       string `json:"type"`
 	SourceFile *struct {
 		Name     string `json:"name"`
 		Location string `json:"location"`
@@ -409,9 +399,8 @@ type queryTarget struct {
 var location = regexp.MustCompile(`^(.+):\d+:\d+$`)
 
 // parseTargets reads `bazel query --output=streamed_jsonproto` output, one
-// JSON object per target. `Kind` is "source file" for a file, else the rule's
-// class plus " rule", as `--output=label_kind` prints them. `Repo` is "" for
-// the main repository, else the repository's name as Bazel prints it.
+// JSON object per target, keeping the source files. `Repo` is "" for the main
+// repository, else the repository's name as Bazel prints it.
 func parseTargets(out []byte) ([]target, error) {
 	var targets []target
 	dec := json.NewDecoder(bytes.NewReader(out))
@@ -420,15 +409,10 @@ func parseTargets(out []byte) ([]target, error) {
 		if err := dec.Decode(&qt); err != nil {
 			return nil, fmt.Errorf("bazel query output: %w", err)
 		}
-		var t target
-		switch {
-		case qt.Type == "SOURCE_FILE" && qt.SourceFile != nil:
-			t = target{Kind: "source file", Label: qt.SourceFile.Name, Path: qt.SourceFile.Location}
-		case qt.Type == "RULE" && qt.Rule != nil:
-			t = target{Kind: qt.Rule.RuleClass + " rule", Label: qt.Rule.Name, Path: qt.Rule.Location}
-		default:
+		if qt.Type != "SOURCE_FILE" || qt.SourceFile == nil {
 			continue
 		}
+		t := target{Label: qt.SourceFile.Name, Path: qt.SourceFile.Location}
 		if m := location.FindStringSubmatch(t.Path); m != nil {
 			t.Path = m[1]
 		}

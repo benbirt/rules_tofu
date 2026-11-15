@@ -35,18 +35,17 @@ func TestParseTargets(t *testing.T) {
 	got, err := parseTargets([]byte(sourceFile("//:versions.tf", "/ws/versions.tf") + "\n" +
 		sourceFile("//net:vpc/extra.tf", "/ws/net/vpc/extra.tf") + "\n" +
 		sourceFile("@@//dash:main.tf", "/ws/dash/main.tf") + "\n" +
-		libraryRule("@@m+//vpc:module", "/ext/m+/vpc/BUILD.bazel") + "\n" +
-		libraryRule("@@dep+//lib:lib", "/ext/dep+/lib/BUILD.bazel") + "\n" +
+		sourceFile("@@m+//vpc:main.tf", "/ext/m+/vpc/main.tf") + "\n" +
+		`{"type":"RULE","rule":{"name":"@@dep+//lib:lib","ruleClass":"_tf_library","location":"/ext/dep+/lib/BUILD.bazel:3:11"}}` + "\n" +
 		`{"type":"PACKAGE_GROUP","packageGroup":{"name":"//:pkgs"}}` + "\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := []target{
-		{Kind: "source file", Label: "//:versions.tf", Repo: "", Package: "", Name: "versions.tf", Path: "/ws/versions.tf"},
-		{Kind: "source file", Label: "//net:vpc/extra.tf", Repo: "", Package: "net", Name: "vpc/extra.tf", Path: "/ws/net/vpc/extra.tf"},
-		{Kind: "source file", Label: "@@//dash:main.tf", Repo: "", Package: "dash", Name: "main.tf", Path: "/ws/dash/main.tf"},
-		{Kind: "_tf_library rule", Label: "@@m+//vpc:module", Repo: "m+", Package: "vpc", Name: "module", Path: "/ext/m+/vpc/BUILD.bazel"},
-		{Kind: "_tf_library rule", Label: "@@dep+//lib:lib", Repo: "dep+", Package: "lib", Name: "lib", Path: "/ext/dep+/lib/BUILD.bazel"},
+		{Label: "//:versions.tf", Repo: "", Package: "", Name: "versions.tf", Path: "/ws/versions.tf"},
+		{Label: "//net:vpc/extra.tf", Repo: "", Package: "net", Name: "vpc/extra.tf", Path: "/ws/net/vpc/extra.tf"},
+		{Label: "@@//dash:main.tf", Repo: "", Package: "dash", Name: "main.tf", Path: "/ws/dash/main.tf"},
+		{Label: "@@m+//vpc:main.tf", Repo: "m+", Package: "vpc", Name: "main.tf", Path: "/ext/m+/vpc/main.tf"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("parseTargets = %+v, want %+v", got, want)
@@ -62,13 +61,6 @@ func sourceFile(label, path string) string {
 	return fmt.Sprintf(`{"type":"SOURCE_FILE","sourceFile":{"name":%q,"location":"%s:1:1","visibilityLabel":["//visibility:private"]}}`, label, path)
 }
 
-// libraryRule is a tf_library as `bazel query --output=streamed_jsonproto`
-// prints it, declared in buildFile. The query asks for no rules; parseTargets
-// reads one all the same.
-func libraryRule(label, buildFile string) string {
-	return fmt.Sprintf(`{"type":"RULE","rule":{"name":%q,"ruleClass":"_tf_library","location":"%s:3:11"}}`, label, buildFile)
-}
-
 func TestModuleNames(t *testing.T) {
 	got := moduleNames([]module{{Dir: "examples/lock/greeting"}, {Dir: "1st"}, {Dir: "examples/lock.greeting"}})
 	want := []string{"examples_lock_greeting", "m_1st", "examples_lock_greeting_2"}
@@ -78,7 +70,7 @@ func TestModuleNames(t *testing.T) {
 }
 
 // fakeBazel writes a bazel stand-in whose query prints the given
-// main-repository source files of ws, and no libraries.
+// main-repository source files of ws.
 func fakeBazel(t *testing.T, ws string, labels ...string) string {
 	t.Helper()
 	var lines []string
@@ -90,7 +82,7 @@ func fakeBazel(t *testing.T, ws string, labels ...string) string {
 }
 
 // fakeBazelOutput writes a bazel stand-in whose query prints the given
-// targets (see sourceFile and libraryRule).
+// targets (see sourceFile).
 func fakeBazelOutput(t *testing.T, targets ...string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "bazel")

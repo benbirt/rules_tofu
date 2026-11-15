@@ -159,12 +159,12 @@ Then `bazel shutdown` so the new startup flags take effect.
   - Discover `required_providers` with one `bazel query`, never a filesystem
     walk, which would miss `.bazelignore`, deleted packages and nested
     workspaces. `$BAZEL` overrides the `bazel` binary.
-  - Pass `--output=streamed_jsonproto`, request no rule attributes, pass
-    `--keep_going`, and accept exit 3 because `deps()`
-    traverses `providers` into `@tf_providers` packages that don't exist yet.
+  - Pass `--output=streamed_jsonproto` and `--keep_going`, and accept exit 3
+    because `deps()` traverses `providers` into `@tf_providers` packages that
+    don't exist yet.
   - Count every configuration file the query returns, in any repository
-    (issues #60, #123 and #140). They are all some library's `srcs`, whose
-    providers that library lists, and Bazel loads each of those labels whether
+    (issues #60, #123 and #140). In an external repository they are all some
+    library's `srcs`, whose providers that library lists, and Bazel loads each of those labels whether
     or not anything calls the directory. `tf_modules` keeps a fetched module's
     examples out of every target, and so out of the lock (`tf_modules_test`).
     Don't bring back a filter on the directories a library serves: it left a
@@ -221,8 +221,8 @@ Then `bazel shutdown` so the new startup flags take effect.
   downstream host-tools build.
 - Leave `version` constraint checking against `module_version` to `tofu`, which
   checks each call against the manifest during `tofu init -get=false`.
-- Match module calls to declarations with `tfconfig.BestMatch` across
-  `modscan`, the manifest tool and `pin`, never in Starlark or by raw string
+- Match module calls to declarations with `tfconfig.BestMatch` in `modscan`
+  and the manifest tool, never in Starlark or by raw string
   comparison. The match leaving the shortest `//<subdir>` wins, so a
   submodule's own declaration beats its parent's regardless of spelling (issue
   #97).
@@ -407,15 +407,16 @@ Then `bazel shutdown` so the new startup flags take effect.
     cache.
   - Keep the validate script's guidance when an empty-root test fails for a
     missing provider (`empty_root_test_provider`).
-  - Don't make `tfconfig` treat missing directories as empty: `modscan` and
-    `pin` rely on the error.
+  - Don't make `tfconfig` treat missing directories as empty: `modscan` relies
+    on the error.
 - Reject an empty root in `tf_deploy` at analysis (`check_has_configuration`;
   `deploy_deps_only`, `deploy_subdirectory_only`), because `tofu` validates an
   empty directory and then refuses to plan it.
 - Keep `HAS_CONFIG` (validate script), `tfconfig.HasConfig` and
   `check_has_configuration` aligned on what counts as configuration: regular
   non-dot files with the four config extensions. `tfconfig.Effective` and
-  `EffectiveTests` drop dotfiles for all callers including `pin`.
+  `EffectiveTests` drop dotfiles for all callers; `pin` reads through
+  `Effective`.
 - Reject `TEST_SRC_EXTS` in `tf_library` and `tf_deploy` `srcs`
   (`check_no_test_files`; `test_file_in_srcs`). `ALLOWED_SRC_EXTS` admits
   `.hcl`, and `tofu` would otherwise load library test files in dependants.
