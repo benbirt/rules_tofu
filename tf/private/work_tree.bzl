@@ -389,8 +389,9 @@ def modules_manifest(ctx, work_tree_outputs, infos, providers_depset, strict, sr
     into place. The action also fails when a module requires a provider that
     `providers_depset` lacks, naming the label to add: a submodule called by
     `//<subdir>` outside `modules/` carries none of its own (issue #76).
-    It also fails when `srcs` or loaded `data` use a provider, module or
-    directory absent from `strict`.
+    It also fails when `srcs` or loaded `data` use a provider or module absent
+    from `strict`, other than `own`, or call a directory that holds no files
+    from `srcs`, `data` or `strict`.
 
     Args:
       ctx: rule ctx. Must declare `_modules_bin` (cfg = "exec") on the rule.
