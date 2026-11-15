@@ -12,15 +12,15 @@
 //   - --modules=<path>: required JSON file with fields modules, own_srcs,
 //     own_data and dep_dirs. modules lists tf_library deps that set
 //     module_source, each with label, source, version, work-tree-relative
-//     dir, the dirs of its own files, direct and callable. When the library being built sets
-//     module_source, it appears too with direct false and callable true so
-//     its files can call its own address with //<subdir>. own_srcs and
-//     own_data are the work-tree paths of the rule's own srcs and data, and
-//     dep_dirs the directories of each direct dep's own files.
+//     dir, dirs, direct and callable. When the library being built sets
+//     module_source, it appears with direct false and callable true so its
+//     files can call its address with //<subdir>. own_srcs and own_data are
+//     work-tree paths of the target's srcs and data. dep_dirs lists the
+//     work-tree directories of direct deps' srcs and data.
 //   - --provider=<address>: canonical <host>/<namespace>/<name> address of a
 //     provider in the rule's plugin tree, repeatable.
-//   - --direct-provider=<address>: address of a provider the rule lists
-//     itself, repeatable; each is also a --provider.
+//   - --direct-provider=<address>: canonical address of a provider in the
+//     target's providers attribute, repeatable. Also counts as --provider.
 //   - --test-dir=<dir>: for tf_test, the test directory relative to --root, or
 //     "." for --root itself. Each `run` block's module in test files in --root
 //     and in --test-dir is recorded under tfconfig.TestRunKey and walked like
@@ -41,12 +41,12 @@
 //     configuration files;
 //   - two deps claim the same normalised module_source;
 //   - module calls form a cycle;
-//   - a direct dep is used by no call in the rule's own files;
+//   - a direct dep outside --root is not used by any call in checked files;
 //   - a walked module's required_providers names a provider that no
 //     --provider supplies, since `tofu init -plugin-dir` would fail to find
 //     it;
-//   - one of the rule's own files uses something the rule doesn't list
-//     itself (strict deps, below).
+//   - the target's files use a provider, module or directory not declared
+//     directly on the target.
 //
 // Missing-provider errors name the @tf_providers//<namespace>/<name> label to
 // add to the rule's providers. Built-in providers under terraform.io/builtin/
@@ -56,28 +56,22 @@
 // directories. Neither reads //<subdir> paths outside modules/ that only
 // callers reach (issue #76), so callers must list those providers themselves.
 //
-// Strict deps (issue #135): what a rule's own files use, the rule lists
-// itself, so that a dep which stops using something can't break it. A file
-// is the rule's own when it is in the rule's srcs or data, whatever
-// directory it is in; the other files in the work tree, including those a
-// dep puts in the root module's own directory, are held to their own rule's
-// lists when that rule is built. For the rule's own configuration files the
-// tool rejects:
-//   - a required_providers entry that no --direct-provider supplies;
-//   - a call by module_source that resolves to a dep which is not callable;
-//   - a relative call to a directory that holds none of the rule's own
-//     files and none of a direct dep's (dep_dirs).
+// Strict deps (issue #135) checks the target's own_srcs and own_data against
+// its direct declarations. Files from deps are not re-checked here, even when
+// they sit in --root, because each dep is checked when built. Configuration
+// files in own_srcs are always checked. Configuration files in own_data are
+// checked only when the walk loads a module from their directory.
+// That skips uncalled examples in fetched modules. On tf_test, run blocks in
+// test files listed in own_srcs are checked as direct calls. Test files from
+// the module under test are not. In checked files, the build fails on:
+//   - a non-built-in required_providers entry with no matching
+//     --direct-provider;
+//   - a non-local call resolving to a dep with callable false;
+//   - a local call resolving to a directory outside own_srcs, own_data and
+//     dep_dirs.
 //
-// The run blocks of a tf_test's own test files are its own calls; a test
-// file that came with the module under test is that module's. Configuration files
-// in srcs are always checked; those in data only where a module was loaded
-// from their directory, since a glob brings along a fetched module's
-// examples, which nothing loads.
-//
-// A direct dep that sets module_source counts as used when one of the rule's
-// own files calls it by that source or by a relative path to a directory
-// of its own files. A dep in the root module's own directory is always used, since
-// its files are part of the root module.
+// A direct dep counts as used when its dir is --root, or when a checked file
+// calls it by module_source or by a local path to one of its dirs.
 //
 // Unrecognised or malformed flags exit 2. Missing required flags, unreadable
 // or invalid JSON or HCL, I/O errors or any failed check print
@@ -110,7 +104,7 @@ var (
 	label    = flag.String("label", "", "the target being built, for error messages")
 	out      = flag.String("out", "", "path of the modules.json to write")
 	provided = flags.StringList("provider", "canonical address of a provider in the plugin tree (repeatable)")
-	listed   = flags.StringList("direct-provider", "canonical address of a provider the rule lists itself, which its own files may require (repeatable)")
+	listed   = flags.StringList("direct-provider", "canonical address of a provider in the target's providers attribute (repeatable)")
 	testDir  = flag.String("test-dir", "", "directory of the rule's test files, relative to the root module (\".\" for its own directory); when set, the module each run block of the test files there and in the root module's directory loads is recorded too")
 )
 
@@ -164,23 +158,23 @@ type dep struct {
 	Source  string `json:"source"`
 	Version string `json:"version"`
 	Dir     string `json:"dir"`
-	// Dirs is the directories of the library's own files.
+	// Dirs lists the work-tree directories of the library's srcs and data.
 	Dirs []string `json:"dirs"`
-	// Direct is whether the root lists it in deps itself, rather than through
-	// another library. A direct dep must be used.
+	// Direct reports whether the target lists this library in deps. A direct
+	// dep must be used.
 	Direct bool `json:"direct"`
-	// Callable is whether the rule's own files may call it: a direct dep or
-	// the library being built (see the package doc).
+	// Callable reports whether checked files may call this library. It is true
+	// for direct deps and for the library being built.
 	Callable bool `json:"callable"`
 }
 
-// own is the rule's own files and what they may use (strict deps).
+// own holds the target's files and direct declarations for strict-deps checks.
 type own struct {
-	// srcs and data are the work-tree paths of the rule's own files.
+	// srcs and data are work-tree paths of the target's srcs and data.
 	srcs, data []string
-	// providers is the addresses of the providers the rule lists.
+	// providers holds canonical addresses from --direct-provider.
 	providers []string
-	// depDirs is the directories of its direct deps' own files.
+	// depDirs holds work-tree directories of direct deps' srcs and data.
 	depDirs []string
 }
 
@@ -199,17 +193,15 @@ type Record struct {
 	Dir     string `json:"Dir"`
 }
 
-// requirement is a provider a module requires that no --provider supplies,
-// or that one of the rule's own files requires and no --direct-provider
-// supplies.
+// requirement is a required provider missing from --provider or, for the
+// target's checked files, missing from --direct-provider.
 type requirement struct {
-	// module names the module: moduleName(key), then for a module_source
-	// call the dep's label and the `//<subdir>` used, in parentheses. For
-	// one of the rule's own files, it is the file and line instead.
+	// module names the caller. Walked modules use moduleName(key) with any dep
+	// label and //<subdir>. Strict-deps checks use file:line.
 	module   string
 	provider string
-	// indirect is whether a --provider supplies it: the rule's deps list the
-	// provider and the rule itself does not.
+	// indirect is true when --provider supplies provider and
+	// --direct-provider does not.
 	indirect bool
 }
 
@@ -218,7 +210,8 @@ type requirement struct {
 // directory relative to root, with "." meaning root itself. When testDir is
 // non-empty, each `run` block's module in test files in root and in testDir
 // is recorded as `tofu init` records it and walked like a call from root.
-// own is the rule's own files and what they may use.
+// own supplies the target's files and direct declarations for strict-deps
+// checks.
 func buildManifest(workTree, root, label string, deps []dep, provided []string, testDir string, own own) (*Manifest, error) {
 	bySource := map[string]*dep{}
 	var all []*dep
@@ -249,21 +242,22 @@ func buildManifest(workTree, root, label string, deps []dep, provided []string, 
 		listed[p] = true
 		supplied[p] = true
 	}
-	// directDir is the directories the rule's own files may call by a
-	// relative path: those of its own files and of its direct deps' own.
+	// directDir holds work-tree directories that checked files may call by
+	// relative path. It combines the target's srcs and data directories with
+	// depDirs.
 	directDir := map[string]bool{}
 	for _, dir := range own.depDirs {
 		directDir[dir] = true
 	}
-	// mine is the rule's own files, by their path on disk.
+	// mine holds absolute paths of the target's srcs and data.
 	mine := map[string]bool{}
 	for _, f := range append(append([]string{}, own.srcs...), own.data...) {
 		directDir[dirOf(f)] = true
 		mine[filepath.Join(workTree, filepath.FromSlash(f))] = true
 	}
 	var missing []requirement
-	// reported keeps a requirement that two calls reach, or that the walk and
-	// the rule's own files both show, from being reported twice.
+	// reported deduplicates missing-provider entries across calls and between
+	// the module walk and strict-deps checks.
 	reported := map[string]bool{}
 	// walked is every directory a module was loaded from.
 	walked := map[string]bool{}
@@ -283,9 +277,9 @@ func buildManifest(workTree, root, label string, deps []dep, provided []string, 
 		}
 		return nil
 	}
-	// resolve finds what the call c, made from dir, loads: its directory, and
-	// for a call by module_source the dep providing it and the subdirectory
-	// of that dep's directory. where names the call in errors.
+	// resolve returns the work-tree directory that c loads from dir. For
+	// non-local calls it also returns the matching dep and subdir within d.Dir.
+	// where formats the call site for errors.
 	resolve := func(c tfconfig.Call, where, dir string) (string, *dep, string, error) {
 		if tfconfig.IsLocal(c.Source) {
 			childDir := tfconfig.ResolveLocal(dir, c.Source)
@@ -307,9 +301,8 @@ func buildManifest(workTree, root, label string, deps []dep, provided []string, 
 		}
 		return childDir, d, subdir, nil
 	}
-	// direct checks the call c, which one of the rule's own files makes from
-	// dir, against what the rule lists itself (strict deps), and marks the
-	// direct dep it calls as used.
+	// direct checks a call from one of the target's files against strict deps
+	// and marks any direct dep it reaches as used.
 	direct := func(c tfconfig.Call, where, dir string) error {
 		childDir, d, _, err := resolve(c, where, dir)
 		if err != nil {
@@ -317,14 +310,14 @@ func buildManifest(workTree, root, label string, deps []dep, provided []string, 
 		}
 		if d != nil {
 			if !d.Callable {
-				return fmt.Errorf("%s: %s: source %q resolves to %q, which only a dep of %s has in its deps; add %q to the deps of %s",
+				return fmt.Errorf("%s: %s: source %q resolves to %q, which is not in the deps of %s; add %q to the deps of %s",
 					label, where, c.Source, hubLabel(d), label, hubLabel(d), label)
 			}
 			used[d.Label] = true
 			return nil
 		}
 		if !directDir[childDir] {
-			return fmt.Errorf("%s: %s: source %q resolves to the directory %q, which holds no files of %s or of a tf_library in its deps; "+
+			return fmt.Errorf("%s: %s: source %q resolves to the directory %q, which has no files from %s or from a tf_library in its deps; "+
 				"add the tf_library whose files are in %q to the deps of %s", label, where, c.Source, rootDir(childDir), label, rootDir(childDir), label)
 		}
 		for _, d := range all {
@@ -416,15 +409,12 @@ func buildManifest(workTree, root, label string, deps []dep, provided []string, 
 		if err != nil {
 			return nil, err
 		}
-		// A run's module is loaded from the root module's directory, as tofu
-		// resolves its source, and is the test's own call: the test lists
-		// what it loads, and a module it loads that calls back into the root
-		// is a cycle.
+		// OpenTofu resolves a run block's module source from the root module's
+		// directory. A helper module that calls back into root is a cycle.
 		active[root] = ""
 		for _, r := range runs {
 			where := fmt.Sprintf("run %q (%s)", r.Name, displayRange(workTree, r.Range))
-			// A test file that came with the module under test is the
-			// module's, as its configuration files are.
+			// Test files from the module under test are not in mine.
 			if mine[r.Range.Filename] {
 				if err := direct(r.Call, where, root); err != nil {
 					return nil, err
@@ -437,12 +427,11 @@ func buildManifest(workTree, root, label string, deps []dep, provided []string, 
 		delete(active, root)
 	}
 
-	// Strict deps: the rule's own configuration files, a directory at a
-	// time. Those in data count only where a module was loaded from their
-	// directory: a glob brings a fetched module's examples along too. A
-	// directory's calls are read from all of its files, since an _override
-	// file replaces the source of a call another file makes; a call is the
-	// rule's own when the file its source is written in is.
+	// Check the target's configuration files directory by directory. Files in
+	// data are checked only in walked directories so uncalled examples in a
+	// fetched module are ignored. ReadCalls reads the whole directory so
+	// _override files apply. mine then selects calls whose effective source is
+	// in one of the target's files.
 	byDir := map[string][]string{}
 	for i, files := range [][]string{own.srcs, own.data} {
 		for _, f := range files {
@@ -508,8 +497,8 @@ func buildManifest(workTree, root, label string, deps []dep, provided []string, 
 	return manifest, nil
 }
 
-// dirOf is the work-tree directory of the file at work-tree path f, "" for
-// the work tree root.
+// dirOf returns the work-tree directory of work-tree path f, or "" at the
+// root.
 func dirOf(f string) string {
 	if dir := path.Dir(f); dir != "." {
 		return dir
@@ -553,13 +542,11 @@ func testRuns(workTree, root, testDir string) ([]testRun, error) {
 	return runs, nil
 }
 
-// missingProviders reports the providers that modules require and the rule
-// lacks, naming the `@tf_providers//<namespace>/<name>` of each to add to the
-// rule's providers. Those the plugin tree lacks come first, then those the
-// rule's own files require that only its deps list. A
-// provider from another registry has no label: rules_tofu vendors providers
-// from registry.opentofu.org only, as the tf_providers extension says of its
-// tags.
+// missingProviders formats an error for missing provider plugins, naming each
+// @tf_providers//<namespace>/<name> label to add. Providers absent from the
+// plugin tree come before providers missing only from --direct-provider.
+// Providers outside registry.opentofu.org have no @tf_providers label because
+// rules_tofu vendors from registry.opentofu.org only.
 func missingProviders(label string, missing []requirement) error {
 	var absent, indirect, labels, foreign []string
 	seen := map[string]bool{}
@@ -586,7 +573,7 @@ func missingProviders(label string, missing []requirement) error {
 			label, strings.Join(absent, "\n")))
 	}
 	if len(indirect) > 0 {
-		parts = append(parts, fmt.Sprintf("%s: its own files require these providers, which its deps list and its providers do not:\n%s",
+		parts = append(parts, fmt.Sprintf("%s: its files require these providers, which are not in its providers:\n%s",
 			label, strings.Join(indirect, "\n")))
 	}
 	var advice []string
@@ -723,12 +710,12 @@ func lookup(deps []*dep, source string) (*dep, string) {
 	return deps[i], subdir
 }
 
-// hubLabel is the label by which BUILD files name d. A library that
-// tf_modules generated is private to the @tf_modules hub, in a repository
-// named `tf_modules_<name>` for a git or archive module (repo_name in
-// tf/modules/source.bzl, whose check_name keeps `+` and `/` out of names),
-// so its hub label is `@tf_modules//<name>`; a registry module's follows
-// from its address. Any other label is returned as it is.
+// hubLabel returns the public BUILD label for d. Libraries generated by
+// tf_modules have private canonical labels ending in :_rules_tofu_module.
+// Registry modules map to @tf_modules//<registry path>. Git and archive
+// modules live in repositories ending with +tf_modules_<name> and map to
+// @tf_modules//<name>. Module names cannot contain '+' or '/'. Other labels
+// are returned unchanged.
 func hubLabel(d *dep) string {
 	repo, target, ok := strings.Cut(d.Label, "//")
 	if !ok || !strings.HasSuffix(target, ":"+generatedTarget) {
@@ -743,12 +730,12 @@ func hubLabel(d *dep) string {
 	return d.Label
 }
 
-// generatedRepoPrefix precedes a module's name in the canonical name of the
-// repository tf_modules puts it in.
+// generatedRepoPrefix precedes a git or archive module's name in the canonical
+// name of the repository tf_modules creates for it.
 const generatedRepoPrefix = "+tf_modules_"
 
-// generatedTarget is the name tf_modules gives the tf_library of a fetched
-// module (_MODULE_TARGET in tf/modules/extensions.bzl).
+// generatedTarget is the target name tf_modules gives each generated
+// tf_library.
 const generatedTarget = "_rules_tofu_module"
 
 // registryPath is the path of a registry module under @tf_modules.

@@ -72,7 +72,7 @@ _CASES = [
     ("empty_root_test_provider", "broken_workspace", "//cases/empty_root_test:test", "`tofu init` installs no providers for one"),
     ("module_source_missing", "broken_workspace", "//cases/module_source_missing:lib", "no dep provides source"),
     ("module_dep_unused", "broken_workspace", "//cases/module_dep_unused:lib", "no module call uses"),
-    ("strict_deps_provider", "broken_workspace", "//cases/strict_deps:provider", "its own files require these providers, which its deps list and its providers do not"),
+    ("strict_deps_provider", "broken_workspace", "//cases/strict_deps:provider", "its files require these providers, which are not in its providers"),
     ("strict_deps_module", "broken_workspace", "//cases/strict_deps:module", "add \"//cases/strict_deps/net:net\" to the deps of //cases/strict_deps:module"),
     ("strict_deps_local", "broken_workspace", "//cases/strict_deps:local", "add the tf_library whose files are in \"cases/strict_deps/net\" to the deps of //cases/strict_deps:local"),
     ("module_source_duplicate", "broken_workspace", "//cases/module_source_duplicate:lib", "both have module_source"),

@@ -136,8 +136,8 @@ tf_deploy_rule = rule(
         ),
         "providers": attr.label_list(
             providers = [TfProviderInfo],
-            doc = "Every provider that `srcs` require, as `@tf_providers//<namespace>/<name>`. " +
-                  "Those of `deps` are installed too, and cover the libraries' own files.",
+            doc = "`@tf_providers//<namespace>/<name>` targets required by `srcs` or loaded " +
+                  "`data`. Providers from `deps` are also installed in the plugin tree.",
         ),
         "allow_ephemeral_state": attr.bool(
             default = False,
@@ -214,9 +214,9 @@ def tf_deploy(name, srcs = None, deps = None, vars = None, var_files = None, dat
           `file()` and `templatefile()`. `terraform.tfvars`,
           `terraform.tfvars.json`, `*.auto.tfvars` and `*.auto.tfvars.json` are
           rejected; use `vars` or `var_files`.
-      providers: `@tf_providers//<namespace>/<name>` targets for every
-          provider `srcs` require. Those of `deps` are installed too, and
-          cover the libraries' own files; see
+      providers: `@tf_providers//<namespace>/<name>` targets required by `srcs`
+          or loaded `data`. Providers from `deps` are also installed in the
+          plugin tree. See
           [Strict dependencies](https://github.com/benbirt/rules_tofu#strict-dependencies).
       allow_ephemeral_state: Permit `:<name>.apply` and `:<name>.destroy` when
           state lives under `bazel-bin`:

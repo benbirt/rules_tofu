@@ -97,9 +97,9 @@ _tf_library = rule(
         ),
         "deps": attr.label_list(
             providers = [TfLibraryInfo],
-            doc = "`tf_library` targets that `srcs` call as modules, or whose files share a " +
-                  "directory with them. Their files, providers and `module_source` mappings reach " +
-                  "dependants' work trees.",
+            doc = "`tf_library` targets whose files, providers and `module_source` mappings are " +
+                  "passed on to dependants. Other libraries called by `srcs` or loaded `data` must be " +
+                  "listed here directly.",
         ),
         "data": attr.label_list(
             allow_files = True,
@@ -110,9 +110,8 @@ _tf_library = rule(
         ),
         "providers": attr.label_list(
             providers = [TfProviderInfo],
-            doc = "Every provider that `srcs` require, as `@tf_providers//<namespace>/<name>` " +
-                  "targets from the `tf_providers` extension. Dependants' plugin trees include " +
-                  "them, but a dependant lists the providers of its own configuration itself.",
+            doc = "`@tf_providers//<namespace>/<name>` targets required by `srcs` or loaded " +
+                  "`data`. Also installed in dependants' plugin trees for this library's files.",
         ),
         "module_source": attr.string(
             doc = "Address by which HCL `module` blocks call this library or `//<subdir>` " +
@@ -179,10 +178,10 @@ def tf_library(name, srcs = None, deps = None, data = None, providers = None, mo
       - A local `./` or `../` call to a directory outside the work tree, in
         another Bazel repository, or absent from `deps`.
       - A non-local `module` call that no `tf_library` in `deps` matches.
-      - A direct `module_source` dependency that no call in this target's own
-        files uses. Calls in other libraries' files do not count, whereas a
-        `module_source` library in this target's own package or reached from
-        its files by `./` or `../` counts as used.
+      - A direct `module_source` dependency in another package that no call in
+        `srcs` or loaded `data` reaches, either by `module_source` or by `./`
+        or `../` to one of its directories. Calls in other targets' files do
+        not count.
       - Two libraries in `deps` with the same normalised `module_source`.
       - A registry `module` call whose library has an empty `module_version` or
         fails the caller's `version` constraint.
@@ -194,13 +193,12 @@ def tf_library(name, srcs = None, deps = None, data = None, providers = None, mo
       - A `required_providers` entry missing from `providers` or `deps`, or
         outside `registry.opentofu.org`. Built-in providers such as
         `terraform.io/builtin/terraform` are exempt.
-      - A dependency this target's own files use and the target does not
-        list itself: a `required_providers` entry absent from `providers`, a
-        `module_source` call to a library absent from `deps`, or a `./` or
-        `../` call to a directory that holds neither this target's files nor
-        those of a library in `deps`. What a library in `deps` lists never
-        counts for this target's files, and this target's lists never count
-        for that library's.
+      - A non-built-in `required_providers` entry in `srcs` or loaded `data`
+        missing from this target's `providers`, even when `deps` supply it.
+      - A non-local `module` call in `srcs` or loaded `data` to a library not
+        in direct `deps`, except self-calls to `//<subdir>`.
+      - A `./` or `../` call in `srcs` or loaded `data` to a directory with no
+        files from `srcs`, `data` or direct `deps`.
     See [Modules](https://github.com/benbirt/rules_tofu#modules) and
     [Strict dependencies](https://github.com/benbirt/rules_tofu#strict-dependencies).
 
@@ -221,17 +219,18 @@ def tf_library(name, srcs = None, deps = None, data = None, providers = None, mo
           same name. OpenTofu ignores dot-prefixed filenames.
           `.terraform.lock.hcl` is rejected in `srcs` and `data`, and test
           files belong in `tf_test.srcs`.
-      deps: `tf_library` targets that `srcs` call as modules, or whose files
-          share a directory with them. Their files, providers and `module_source`
-          mappings reach dependants' work trees.
+      deps: `tf_library` targets whose files, providers and `module_source`
+          mappings are passed on to dependants. Other libraries called by
+          `srcs` or loaded `data` must be listed here directly.
       data: Files placed in the work tree at their workspace-relative paths for
           `file()` and `templatefile()`. `terraform.tfvars`,
           `terraform.tfvars.json`, `*.auto.tfvars` and `*.auto.tfvars.json` are
           rejected; pass variable files via `var_files` on `tf_deploy` or
           `tf_test`.
-      providers: `@tf_providers//<namespace>/<name>` targets for every
-          provider `srcs` require. Dependants' plugin trees include them, but
-          a dependant lists the providers of its own configuration itself.
+      providers: `@tf_providers//<namespace>/<name>` targets required by `srcs`
+          or loaded `data`. Also installed in dependants' plugin trees for this
+          library's files. See
+          [Strict dependencies](https://github.com/benbirt/rules_tofu#strict-dependencies).
       module_source: Address by which HCL `module` blocks call this library or
           `//<subdir>` within it when it is in the caller's `deps`. Required to
           call a library from another Bazel repository.

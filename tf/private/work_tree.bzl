@@ -358,25 +358,20 @@ def library_module(label, module_source, module_version, dirs):
     )
 
 def own_dirs(files):
-    """`TfLibraryInfo.dirs`: the work-tree directories of `files`, a rule's own."""
+    """Sorted unique work-tree directories containing `files`."""
     return sorted({work_tree_path(f).rpartition("/")[0]: None for f in files}.keys())
 
 def strict_deps(providers, infos):
-    """What a rule's own files may use: only what the rule lists itself.
-
-    Strict deps (issue #135): a rule lists everything its own files use, so
-    that a dep which stops using something can't break it. Nothing carries
-    over from a dep, whose own files are held to its own lists.
+    """Collect the direct providers, modules and directories a target may use (issue #135).
 
     Args:
-      providers: list[TfProviderInfo], the rule's own `providers`.
-      infos: the rule's deps, as `modules_manifest` takes them.
+      providers: list[TfProviderInfo] from the target's `providers`.
+      infos: direct dependency structs as passed to `modules_manifest`.
 
     Returns:
-      struct(providers, modules, dirs) of lists of strings: provider addresses
-      the rule's own files may require, labels of the `module_source`
-      libraries they may call, and directories they may call by a relative
-      path, which are those of the deps' own files.
+      struct(providers, modules, dirs): string lists of direct provider
+      addresses, direct `module_source` labels, and work-tree directories of
+      direct dependencies' `srcs` and `data`.
     """
     return struct(
         providers = [p.address for p in providers],
@@ -394,20 +389,20 @@ def modules_manifest(ctx, work_tree_outputs, infos, providers_depset, strict, sr
     into place. The action also fails when a module requires a provider that
     `providers_depset` lacks, naming the label to add: a submodule called by
     `//<subdir>` outside `modules/` carries none of its own (issue #76).
-    It also fails when one of the rule's own files uses a provider or a
-    module that `strict` lacks.
+    It also fails when `srcs` or loaded `data` use a provider, module or
+    directory absent from `strict`.
 
     Args:
       ctx: rule ctx. Must declare `_modules_bin` (cfg = "exec") on the rule.
       work_tree_outputs: list[File], the work tree's files (`materialize`).
       infos: the rule's deps, each a `TfLibraryInfo` or a struct with its
-          `module`, `modules` and `dirs` fields.
-          The module under test of a `tf_test` comes first.
+          `module`, `modules` and `dirs` fields. The module under test of a
+          `tf_test` comes first.
       providers_depset: depset[TfProviderInfo], the providers in the rule's
           plugin tree.
-      strict: what the rule's own files may use (`strict_deps`).
-      srcs: list[File], the rule's own `srcs`.
-      data: list[File], the rule's other own files in the work tree.
+      strict: direct dependencies allowed by strict-deps checks (`strict_deps`).
+      srcs: list[File], the rule's `srcs`.
+      data: list[File], the rule's `data`.
       root: the root module's work-tree directory; the rule's own package by
           default. A `tf_test`'s is the module under test's.
       test_dir: for a `tf_test`, the test files' directory relative to `root`,

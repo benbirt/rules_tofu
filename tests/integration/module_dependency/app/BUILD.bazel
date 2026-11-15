@@ -9,8 +9,8 @@ tf_deploy(
 
 # The deploy's test loads the dns module from a `.tofutest.hcl` run block,
 # so building it checks the manifest key tofu uses for that extension. The
-# driver runs it too, on every pinned tofu. The run block loads the dns module
-# itself, so the test lists it: the deploy only reaches it through vpc.
+# driver runs it too, on every pinned tofu. Because the deploy reaches dns
+# only through vpc, app_test adds @dns_module//:dns to deps.
 tf_test(
     name = "app_test",
     srcs = ["tests/dns.tofutest.hcl"],

@@ -1,10 +1,11 @@
 load("@rules_tofu//tf:defs.bzl", "tf_library")
 
-# Strict deps (issue #135): each target's own file uses something that only
-# reaches it through `mid` or `random`, so each fails naming what to add. Do
-# not add the missing `providers` or `deps` here.
+# Strict-deps failure cases for issue #135. Each target uses a provider or
+# module declared only on its dependency. Building it fails and names what to
+# add. Keep these targets broken.
 
-# provider.tf requires hashicorp/random, which only the dep lists.
+# provider.tf requires hashicorp/random, listed only on
+# //cases/strict_deps/random.
 tf_library(
     name = "provider",
     srcs = ["provider.tf"],
@@ -12,7 +13,7 @@ tf_library(
     deps = ["//cases/strict_deps/random"],
 )
 
-# module.tf calls `net` by its module_source, and only `mid` has it in deps.
+# module.tf calls net by module_source, listed only in mid's deps.
 tf_library(
     name = "module",
     srcs = ["module.tf"],
@@ -20,8 +21,7 @@ tf_library(
     deps = ["//cases/strict_deps/mid"],
 )
 
-# local.tf calls `net`'s directory by a relative path, and only `mid` has it
-# in deps.
+# local.tf calls ./net, whose library is only in mid's deps.
 tf_library(
     name = "local",
     srcs = ["local.tf"],

@@ -115,10 +115,10 @@ def _tf_test_impl(ctx):
     plugin_outputs = _materialize_plugin_tree(ctx, providers_depset)
     lock = _provider_lock(ctx, providers_depset)
 
-    # `module` counts as a dep the test lists: its run blocks may load
-    # `module`'s own directories and call its `module_source`. The files of
-    # the root module belong to `module` and are held to its lists, so the
-    # test lists only what its run blocks load.
+    # Include `module` alongside `deps` so `run` blocks in `srcs` can call its
+    # `module_source` with `//<subdir>` and load non-root directories from its
+    # `srcs` and `data`. Files in `module` were already checked when `module`
+    # was built and are not in `ctx.files.srcs` or `ctx.files.data`.
     infos = [under_test.manifest] + [d[TfLibraryInfo] for d in ctx.attr.deps]
     manifest = _modules_manifest(
         ctx,
@@ -301,10 +301,10 @@ def tf_test(name, srcs, module, deps = None, data = None, providers = None, var_
       module: The `tf_library` or `tf_deploy` under test; may be an `alias`.
       deps: Helper `tf_library` targets loaded by
           `run { module { source = ... } }` blocks, reached by a path relative
-          to `module`'s package directory or by `module_source`. A `run` block
-          may load only these and `module` itself, by one of its own
-          directories or its `module_source`; what `module` lists in its
-          `deps` does not count.
+          to `module`'s package directory or by `module_source`. Include any
+          library from `module`'s `deps` that a `run` block in `srcs` loads
+          directly. See
+          [Strict dependencies](https://github.com/benbirt/rules_tofu#strict-dependencies).
       data: Files placed in the work tree at their workspace-relative paths for
           `file()` and `templatefile()`. `terraform.tfvars`,
           `terraform.tfvars.json`, `*.auto.tfvars` and `*.auto.tfvars.json` are
