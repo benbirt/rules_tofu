@@ -238,10 +238,10 @@ Then `bazel shutdown` so the new startup flags take effect.
   - Have a `tf_library` with `module_source` pass itself to `modules_manifest`
     as `own`, never `direct`, because direct deps must be called
     (`module_dep_unused`) whereas a module needn't call itself.
-  - Mark `own` as `callable` and never `direct` in `modules_manifest`, so the
-    library's own files may call its `module_source` with `//<subdir>`. Calls
-    inside a self-called submodule still count as using the library's direct
-    `deps`, because the submodule's files are the library's own.
+  - Mark `own` as `callable` in `modules_manifest`, so the library's own files
+    may call its `module_source` with `//<subdir>`. Calls inside a self-called
+    submodule still count as using the library's direct `deps`, because the
+    submodule's files are the library's own.
   - Cross-calls between two tags over one repository form a Bazel dependency
     cycle and are not supported.
 - Materialise external-repository files under `external/<canonical repo>/`
@@ -319,8 +319,10 @@ Then `bazel shutdown` so the new startup flags take effect.
     the call names one of the dep's own directories (`module.dirs`), never by
     `within` its package directory: the workspace root package contains
     every directory.
-  - Name a `tf_modules` library by its `@tf_modules//...` hub label in advice
-    (`addLabel`): its own label is private and canonical.
+  - Name a `tf_modules` library by its `@tf_modules//...` hub label in the
+    strict deps error (`hubLabel`): its own label is private and canonical.
+    The hub path comes from a registry address, or else from the repository
+    name, `tf_modules_<name>` (`repo_name`, `check_name`).
   - Resolve a call against every module with `tfconfig.BestMatch` first, then
     require the match to be `callable`, so strictness never changes which
     library a call resolves to.

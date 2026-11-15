@@ -587,11 +587,10 @@ run "plans_a_subnet_per_name" {
   [`examples/hello/tests`](examples/hello/tests). When `srcs` sits in a
   subdirectory, `tofu test` still reads any test files in `module`'s root
   directory.
-- Helper modules in `run` blocks come from the test's own `deps` or from
-  `module` itself, by one of its own directories or its `module_source`, not
-  from `module`'s `deps` (see
-  [Strict dependencies](#strict-dependencies)), reached by a path relative to
-  `module`'s package directory or by `module_source`.
+- Helper modules in `run` blocks are reached by a path relative to `module`'s
+  package directory or by `module_source`. They must come from the test's own
+  `deps` or from `module` itself, not from `module`'s `deps`; see
+  [Strict dependencies](#strict-dependencies).
 - Available providers combine `module`, `deps` and `providers`. `mock_provider`
   still needs the provider package for its schema. If `module`'s root directory
   has no configuration files, `tofu init` installs no providers; add a file

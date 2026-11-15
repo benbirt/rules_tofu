@@ -317,8 +317,8 @@ func buildManifest(workTree, root, label string, deps []dep, provided []string, 
 		}
 		if d != nil {
 			if !d.Callable {
-				return fmt.Errorf("%s: %s: source %q resolves to %s, which only a dep of %s has in its deps; add %s to the deps of %s",
-					label, where, c.Source, d.Label, label, addLabel(d), label)
+				return fmt.Errorf("%s: %s: source %q resolves to %q, which only a dep of %s has in its deps; add %q to the deps of %s",
+					label, where, c.Source, hubLabel(d), label, hubLabel(d), label)
 			}
 			used[d.Label] = true
 			return nil
@@ -723,19 +723,29 @@ func lookup(deps []*dep, source string) (*dep, string) {
 	return deps[i], subdir
 }
 
-// addLabel is the label to add to deps for d. A library that tf_modules
-// generated is private to the @tf_modules hub, so its own label is no use:
-// name the hub label instead, which follows from a registry address and
-// otherwise from the name on the tf_modules.module tag.
-func addLabel(d *dep) string {
-	if !strings.HasSuffix(d.Label, ":"+generatedTarget) {
-		return fmt.Sprintf("%q", d.Label)
+// hubLabel is the label by which BUILD files name d. A library that
+// tf_modules generated is private to the @tf_modules hub, in a repository
+// named `tf_modules_<name>` for a git or archive module (repo_name in
+// tf/modules/source.bzl, whose check_name keeps `+` and `/` out of names),
+// so its hub label is `@tf_modules//<name>`; a registry module's follows
+// from its address. Any other label is returned as it is.
+func hubLabel(d *dep) string {
+	repo, target, ok := strings.Cut(d.Label, "//")
+	if !ok || !strings.HasSuffix(target, ":"+generatedTarget) {
+		return d.Label
 	}
 	if s, err := tfconfig.ParseSource(d.Source); err == nil && s.Kind == tfconfig.KindRegistry {
-		return fmt.Sprintf("%q", "@tf_modules//"+registryPath(s))
+		return "@tf_modules//" + registryPath(s)
 	}
-	return fmt.Sprintf("\"@tf_modules//<name>\", with the name of the tf_modules.module tag whose source is %q,", d.Source)
+	if i := strings.LastIndex(repo, generatedRepoPrefix); i >= 0 {
+		return "@tf_modules//" + repo[i+len(generatedRepoPrefix):]
+	}
+	return d.Label
 }
+
+// generatedRepoPrefix precedes a module's name in the canonical name of the
+// repository tf_modules puts it in.
+const generatedRepoPrefix = "+tf_modules_"
 
 // generatedTarget is the name tf_modules gives the tf_library of a fetched
 // module (_MODULE_TARGET in tf/modules/extensions.bzl).
