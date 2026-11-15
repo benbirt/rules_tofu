@@ -17,6 +17,7 @@ load(
     _materialize = "materialize",
     _materialize_plugin_tree = "materialize_plugin_tree",
     _modules_manifest = "modules_manifest",
+    _own_dirs = "own_dirs",
     _package_dir = "package_dir",
     _plugin_tree_root = "plugin_tree_root",
     _provider_lock = "provider_lock",
@@ -55,6 +56,8 @@ def _tf_deploy_impl(ctx):
         [d[TfLibraryInfo] for d in ctx.attr.deps],
         providers_depset,
         _strict_deps(direct_providers, [d[TfLibraryInfo] for d in ctx.attr.deps]),
+        ctx.files.srcs,
+        ctx.files.data,
     )
     plugin_outputs = _materialize_plugin_tree(ctx, providers_depset)
     outputs = outputs + plugin_outputs
@@ -94,10 +97,7 @@ def _tf_deploy_impl(ctx):
             transitive_files = files,
             providers = providers_depset,
             modules = depset(transitive = [d[TfLibraryInfo].modules for d in ctx.attr.deps]),
-            packages = depset(
-                direct = [_package_dir(ctx.label)],
-                transitive = [d[TfLibraryInfo].packages for d in ctx.attr.deps],
-            ),
+            dirs = _own_dirs(ctx.files.srcs + ctx.files.data),
             tfvars_content = tfvars_content,
             var_files = ctx.files.var_files,
         ),
@@ -136,9 +136,8 @@ tf_deploy_rule = rule(
         ),
         "providers": attr.label_list(
             providers = [TfProviderInfo],
-            doc = "Every provider the root module requires, as `@tf_providers//<namespace>/<name>`, " +
-                  "including those required by files that same-package `deps` add to it. " +
-                  "Those of `deps` are installed too, but do not count for the root module.",
+            doc = "Every provider that `srcs` require, as `@tf_providers//<namespace>/<name>`. " +
+                  "Those of `deps` are installed too, and cover the libraries' own files.",
         ),
         "allow_ephemeral_state": attr.bool(
             default = False,
@@ -216,9 +215,8 @@ def tf_deploy(name, srcs = None, deps = None, vars = None, var_files = None, dat
           `terraform.tfvars.json`, `*.auto.tfvars` and `*.auto.tfvars.json` are
           rejected; use `vars` or `var_files`.
       providers: `@tf_providers//<namespace>/<name>` targets for every
-          provider the root module requires, including those required by files
-          that same-package `deps` add to it. Those of `deps` are installed
-          too, but do not count for the root module; see
+          provider `srcs` require. Those of `deps` are installed too, and
+          cover the libraries' own files; see
           [Strict dependencies](https://github.com/benbirt/rules_tofu#strict-dependencies).
       allow_ephemeral_state: Permit `:<name>.apply` and `:<name>.destroy` when
           state lives under `bazel-bin`:

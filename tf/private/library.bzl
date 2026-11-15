@@ -15,6 +15,7 @@ load(
     _materialize = "materialize",
     _materialize_plugin_tree = "materialize_plugin_tree",
     _modules_manifest = "modules_manifest",
+    _own_dirs = "own_dirs",
     _package_dir = "package_dir",
     _plugin_tree_root = "plugin_tree_root",
     _provider_lock = "provider_lock",
@@ -65,6 +66,8 @@ def _tf_library_impl(ctx):
             [d[TfLibraryInfo] for d in ctx.attr.deps],
             providers_depset,
             _strict_deps(direct_providers, [d[TfLibraryInfo] for d in ctx.attr.deps]),
+            ctx.files.srcs,
+            ctx.files.data,
             own = module,
         ),
         lock = _provider_lock(ctx, providers_depset),
@@ -77,10 +80,7 @@ def _tf_library_impl(ctx):
             providers = providers_depset,
             module = module,
             modules = modules,
-            packages = depset(
-                direct = [_package_dir(ctx.label)],
-                transitive = [d[TfLibraryInfo].packages for d in ctx.attr.deps],
-            ),
+            dirs = _own_dirs(ctx.files.srcs + ctx.files.data),
             package_dir = _package_dir(ctx.label),
         ),
     ]
@@ -96,8 +96,8 @@ _tf_library = rule(
         ),
         "deps": attr.label_list(
             providers = [TfLibraryInfo],
-            doc = "`tf_library` targets that `srcs` call as modules, or that share this " +
-                  "library's package. Their files, providers and `module_source` mappings reach " +
+            doc = "`tf_library` targets that `srcs` call as modules, or whose files share a " +
+                  "directory with them. Their files, providers and `module_source` mappings reach " +
                   "dependants' work trees.",
         ),
         "data": attr.label_list(
@@ -178,10 +178,10 @@ def tf_library(name, srcs = None, deps = None, data = None, providers = None, mo
       - A local `./` or `../` call to a directory outside the work tree, in
         another Bazel repository, or absent from `deps`.
       - A non-local `module` call that no `tf_library` in `deps` matches.
-      - A direct `module_source` dependency unused by this target's own
-        configuration. Calls inside other libraries' packages in `deps` do not
-        count, whereas a `module_source` library in this target's own package
-        or reached from it by `./` or `../` counts as used.
+      - A direct `module_source` dependency that no call in this target's own
+        files uses. Calls in other libraries' files do not count, whereas a
+        `module_source` library in this target's own package or reached from
+        its files by `./` or `../` counts as used.
       - Two libraries in `deps` with the same normalised `module_source`.
       - A registry `module` call whose library has an empty `module_version` or
         fails the caller's `version` constraint.
@@ -193,12 +193,13 @@ def tf_library(name, srcs = None, deps = None, data = None, providers = None, mo
       - A `required_providers` entry missing from `providers` or `deps`, or
         outside `registry.opentofu.org`. Built-in providers such as
         `terraform.io/builtin/terraform` are exempt.
-      - A dependency this target's own configuration uses and the target does
-        not list itself: a `required_providers` entry absent from
-        `providers`, a `module_source` call to a library absent from `deps`,
-        or a `./` or `../` call into the package of a library absent from
-        `deps`. What a library in `deps` lists never counts, even one in this
-        target's package whose files join the same root module.
+      - A dependency this target's own `srcs` use and the target does not
+        list itself: a `required_providers` entry absent from `providers`, a
+        `module_source` call to a library absent from `deps`, or a `./` or
+        `../` call to a directory that holds neither this target's files nor
+        those of a library in `deps`. What a library in `deps` lists never
+        counts for this target's files, and this target's lists never count
+        for that library's.
     See [Modules](https://github.com/benbirt/rules_tofu#modules) and
     [Strict dependencies](https://github.com/benbirt/rules_tofu#strict-dependencies).
 
@@ -219,8 +220,8 @@ def tf_library(name, srcs = None, deps = None, data = None, providers = None, mo
           same name. OpenTofu ignores dot-prefixed filenames.
           `.terraform.lock.hcl` is rejected in `srcs` and `data`, and test
           files belong in `tf_test.srcs`.
-      deps: `tf_library` targets that this library's configuration calls as
-          modules, or that share this library's package. Their files, providers and `module_source`
+      deps: `tf_library` targets that `srcs` call as modules, or whose files
+          share a directory with them. Their files, providers and `module_source`
           mappings reach dependants' work trees.
       data: Files placed in the work tree at their workspace-relative paths for
           `file()` and `templatefile()`. `terraform.tfvars`,
@@ -228,7 +229,7 @@ def tf_library(name, srcs = None, deps = None, data = None, providers = None, mo
           rejected; pass variable files via `var_files` on `tf_deploy` or
           `tf_test`.
       providers: `@tf_providers//<namespace>/<name>` targets for every
-          provider this library's configuration requires. Dependants' plugin trees include them, but
+          provider `srcs` require. Dependants' plugin trees include them, but
           a dependant lists the providers of its own configuration itself.
       module_source: Address by which HCL `module` blocks call this library or
           `//<subdir>` within it when it is in the caller's `deps`. Required to

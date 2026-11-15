@@ -2,7 +2,9 @@ load("@rules_tofu//tf:defs.bzl", "tf_deploy", "tf_library")
 
 package(default_visibility = ["//visibility:public"])
 
-# This library bundles main.tf with the AWS provider it requires.
+# This library bundles main.tf with the AWS provider it requires. Each target
+# lists the providers its own files require; the deploy below has no files of
+# its own, so it lists none.
 tf_library(
     name = "s3_bucket_lib",
     srcs = ["main.tf"],
@@ -12,15 +14,12 @@ tf_library(
 # This deploy binds variable values for s3_bucket_lib. `bazel build` validates
 # it offline against the vendored provider.
 # `bazel run //examples/aws:s3_bucket.plan` reads AWS credentials at plan time.
-# main.tf joins the deploy's root module, and a target lists the providers of
-# its own root module, so the deploy names the provider too.
 #
 # This is a demo, so it keeps disposable state under bazel-bin; a real deploy
 # declares a remote backend instead.
 tf_deploy(
     name = "s3_bucket",
     allow_ephemeral_state = True,
-    providers = ["@tf_providers//hashicorp/aws"],
     vars = {
         "region": "us-east-1",
         "bucket_name": "rules_tofu-example-bucket",

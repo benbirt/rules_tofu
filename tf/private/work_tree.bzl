@@ -355,32 +355,34 @@ def library_module(label, module_source, module_version):
         dir = package_dir(label),
     )
 
-def strict_deps(providers, infos):
-    """What a rule's own configuration may use: only what the rule lists.
+def own_dirs(files):
+    """`TfLibraryInfo.dirs`: the work-tree directories of `files`, a rule's own."""
+    return sorted({work_tree_path(f).rpartition("/")[0]: None for f in files}.keys())
 
-    Strict deps (issue #135): a rule lists everything its own configuration
-    uses, so that a dep which stops using something can't break it. Nothing
-    carries over from a dep, not even one in the rule's own package whose
-    files are part of the same root module, nor from the module under test
-    of a `tf_test`.
+def strict_deps(providers, infos):
+    """What a rule's own files may use: only what the rule lists itself.
+
+    Strict deps (issue #135): a rule lists everything its own files use, so
+    that a dep which stops using something can't break it. Nothing carries
+    over from a dep, whose own files are held to its own lists.
 
     Args:
       providers: list[TfProviderInfo], the rule's own `providers`.
       infos: the rule's deps, as `modules_manifest` takes them.
 
     Returns:
-      struct(providers, modules, packages) of lists of strings: provider
-      addresses the root's own configuration may require, labels of the
-      `module_source` libraries it may call, and package directories it may
-      call into by a relative path.
+      struct(providers, modules, dirs) of lists of strings: provider addresses
+      the rule's own files may require, labels of the `module_source`
+      libraries they may call, and directories they may call by a relative
+      path, which are those of the deps' own files.
     """
     return struct(
         providers = [p.address for p in providers],
         modules = [info.module.label for info in infos if info.module],
-        packages = [info.package_dir for info in infos],
+        dirs = [d for info in infos for d in info.dirs],
     )
 
-def modules_manifest(ctx, work_tree_outputs, infos, providers_depset, strict, root = None, test_dir = None, own = None):
+def modules_manifest(ctx, work_tree_outputs, infos, providers_depset, strict, srcs, data, root = None, test_dir = None, own = None):
     """Emit the action writing this rule's `.terraform/modules/modules.json`.
 
     See //tf/private/cmd/modules: every module call from the root module down
@@ -390,17 +392,19 @@ def modules_manifest(ctx, work_tree_outputs, infos, providers_depset, strict, ro
     into place. The action also fails when a module requires a provider that
     `providers_depset` lacks, naming the label to add: a submodule called by
     `//<subdir>` outside `modules/` carries none of its own (issue #76). And
-    it fails when the root's own configuration uses what `strict` lacks.
+    it fails when one of the rule's own files uses what `strict` lacks.
 
     Args:
       ctx: rule ctx. Must declare `_modules_bin` (cfg = "exec") on the rule.
       work_tree_outputs: list[File], the work tree's files (`materialize`).
       infos: the rule's deps, each a `TfLibraryInfo` or a struct with its
-          `module`, `modules`, `packages` and `package_dir` fields.
+          `module`, `modules` and `dirs` fields.
           The module under test of a `tf_test` comes first.
       providers_depset: depset[TfProviderInfo], the providers in the rule's
           plugin tree.
-      strict: what the root's own configuration may use (`strict_deps`).
+      strict: what the rule's own files may use (`strict_deps`).
+      srcs: list[File], the rule's own `srcs`.
+      data: list[File], the rule's other own files in the work tree.
       root: the root module's work-tree directory; the rule's own package by
           default. A `tf_test`'s is the module under test's.
       test_dir: for a `tf_test`, the test files' directory relative to `root`,
@@ -434,9 +438,9 @@ def modules_manifest(ctx, work_tree_outputs, infos, providers_depset, strict, ro
                 )
                 for m in modules
             ],
-            # Which library a directory belongs to, for the unused-dep check.
-            packages = depset(transitive = [info.packages for info in infos]).to_list(),
-            direct_packages = sorted({p: None for p in strict.packages}.keys()),
+            own_srcs = [work_tree_path(f) for f in srcs],
+            own_data = [work_tree_path(f) for f in data],
+            dep_dirs = sorted({d: None for d in strict.dirs}.keys()),
         )),
     )
 

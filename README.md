@@ -97,9 +97,9 @@ A reusable bundle of configuration files with no variable values and no `.plan`,
 | Attribute | Purpose |
 |-----------|---------|
 | `srcs` | `.tf`, `.tf.json`, `.tofu`, `.tofu.json`, `.tftpl` and `.hcl` files. `.tofu` and `.tofu.json` shadow `.tf` and `.tf.json` of the same name; see [`examples/tofu_files`](examples/tofu_files). |
-| `deps` | `tf_library` targets that this library's configuration calls as modules, or that share this library's package. Their files, providers and `module_source` mappings reach dependants' work trees. See [Strict dependencies](#strict-dependencies). |
+| `deps` | `tf_library` targets that `srcs` call as modules, or whose files share a directory with them. Their files, providers and `module_source` mappings reach dependants' work trees. See [Strict dependencies](#strict-dependencies). |
 | `data` | Files placed in the work tree for `file()` and `templatefile()`. |
-| `providers` | Every provider this library's configuration requires, as `@tf_providers//<namespace>/<name>`. |
+| `providers` | Every provider that `srcs` require, as `@tf_providers//<namespace>/<name>`. |
 | `module_source` | Address by which HCL `module` blocks call this library when it lives in another Bazel repository. See [Modules](#modules). |
 | `module_version` | Version checked against callers' `version` constraints on a registry `module_source`. Defaults to the version of the Bazel module that holds the library when `module_source` is set; setting it without `module_source` is an error. |
 | `fmt_test` | Emit `:name.fmt_check` when `srcs` is non-empty. Defaults to `True`. |
@@ -119,7 +119,7 @@ configuration file in the deploy's package, `bazel build` fails.
 | `vars` | String dictionary of variable values written to `rules_tofu.auto.tfvars.json`. See [Variables and data files](#variables-and-data-files). |
 | `var_files` | `.tfvars` or `.tfvars.json` files passed via `-var-file`, including generated outputs. |
 | `data` | Files placed in the work tree for `file()` and `templatefile()`. |
-| `providers` | Every provider the root module requires, as `@tf_providers//<namespace>/<name>`, including those required by files that same-package `deps` add to it. |
+| `providers` | Every provider that `srcs` require, as `@tf_providers//<namespace>/<name>`. Those of `deps` cover the libraries' own files. |
 | `allow_ephemeral_state` | Permit `apply` and `destroy` when state lives under `bazel-bin`. Defaults to `False`; see [State and backends](#state-and-backends). |
 | `fmt_test` | Emit `:name.fmt_check` when `srcs` is non-empty. Defaults to `True`. |
 
@@ -132,8 +132,8 @@ Runs `tofu test` over a module's test files as a Bazel test. See
 |-----------|---------|
 | `srcs` | `.tftest.hcl`, `.tofutest.hcl`, `.tftest.json` and `.tofutest.json` files in one directory at or below `module`'s package. `.tofutest.*` shadows `.tftest.*`. |
 | `module` | The `tf_library` or `tf_deploy` under test. |
-| `deps` | `tf_library` targets that `module`'s root module calls, and helpers loaded by `run { module { ... } }` blocks. |
-| `providers` | Every provider that `module`'s root module and the test files require. |
+| `deps` | Helper `tf_library` targets loaded by `run { module { ... } }` blocks. |
+| `providers` | Providers needed beyond those of `module` and `deps`. |
 | `var_files` | `.tfvars` or `.tfvars.json` files passed via `-var-file`. |
 | `data` | Files placed in the work tree. |
 | `allow_network` | Allow network access during tests instead of blocking it in the sandbox. Defaults to `False`. |
@@ -163,28 +163,29 @@ the package are left alone.
 
 ### Strict dependencies
 
-Every target lists what its own configuration uses. Its own configuration is
-the root module in its package and the local modules below that package. For
-it, `bazel build` fails unless:
+Every target lists what its own files use, and nothing else. A target's own
+files are those in its `srcs` and `data`; for a `tf_test`, the `run` blocks of
+its test files count too. For them, `bazel build` fails unless:
 
 - every `required_providers` entry is in the target's `providers`;
 - every `module` call by `module_source` resolves to a library in the target's
   `deps`, or to the target's own `module_source` with `//<subdir>`;
-- every relative `module` call into another package names the package of a
-  library in the target's `deps`.
+- every relative `module` call names a directory that holds the target's own
+  files or the own files of a library in its `deps`.
 
-Nothing carries over from another target, so a dependency that drops a provider
-or a module cannot break its dependants. The error names the label to add.
+What a library in `deps` lists never counts for the target's files, so a
+dependency that drops a provider or a module cannot break its dependants. The
+error names the label to add.
 
-- A `tf_deploy` whose root module holds a same-package library's files lists
-  that library's providers and called modules again, as in
-  [`examples/aws`](examples/aws).
-- A `tf_test` lists the providers and called modules of `module`'s root module
-  again, plus whatever its own `run` blocks load.
+Files are checked against the target that lists them, wherever they sit. When
+a `tf_deploy` depends on a library in its own package, the library's files join
+the deploy's root module but stay the library's: the deploy lists only what its
+own `srcs` use, as in [`examples/aws`](examples/aws). Likewise a `tf_test` lists
+what its `run` blocks load, not what `module` uses. Other targets' providers
+and modules still reach the plugin tree and module manifest.
 
-Modules in other packages are checked when their own targets are built. Their
-providers and modules still reach the dependant's plugin tree and module
-manifest, so a target never lists what only another package's module uses.
+Configuration files in `data` are checked only where a module is loaded from
+their directory.
 
 ## Providers
 
@@ -485,8 +486,9 @@ Every `module` block's `source` must be a literal string. Non-local calls match
 a `tf_library` in `deps` by `module_source`, either exact or leaving the
 shortest `//<subdir>` suffix. The library must be in the calling target's own
 `deps`; see [Strict dependencies](#strict-dependencies). Direct `module_source`
-dependencies unused by the target's own configuration fail `bazel build`. Full call-matching rules are in
-the [API docs](https://registry.bazel.build/modules/rules_tofu/latest/docs).
+dependencies that no call in the target's own files uses fail `bazel build`.
+Full call-matching rules are in the
+[API docs](https://registry.bazel.build/modules/rules_tofu/latest/docs).
 
 ## Variables and data files
 
@@ -553,7 +555,6 @@ tf_test(
     name = "network_test",
     srcs = glob(["tests/*.tftest.hcl"]),
     module = ":network",
-    providers = ["@tf_providers//hashicorp/aws"],
     deps = ["//network/tests/fixtures:subnet_names"],
 )
 ```
@@ -582,11 +583,11 @@ run "plans_a_subnet_per_name" {
   [`examples/hello/tests`](examples/hello/tests). When `srcs` sits in a
   subdirectory, `tofu test` still reads any test files in `module`'s root
   directory.
-- Helper modules in `run` blocks come from `deps`, reached by a path relative to
+- Helper modules in `run` blocks come from the test's own `deps` or `module`'s
+  own directories, not from `module`'s `deps` (see
+  [Strict dependencies](#strict-dependencies)), reached by a path relative to
   `module`'s package directory or by `module_source`.
-- `providers` and `deps` list what `module`'s root module and the test files
-  use; what `module` lists does not carry over (see
-  [Strict dependencies](#strict-dependencies)). `mock_provider`
+- Available providers combine `module`, `deps` and `providers`. `mock_provider`
   still needs the provider package for its schema. If `module`'s root directory
   has no configuration files, `tofu init` installs no providers; add a file
   declaring `required_providers` there when helper modules need providers.

@@ -292,21 +292,27 @@ Then `bazel shutdown` so the new startup flags take effect.
   provider labels must be dependencies before analysis.
 - Enforce strict deps in the manifest action (issue #135; `README.md`,
   "Strict dependencies"; `strict_deps_*` cases), on by default with no opt-out:
-  - Check only the root's own configuration (`own` in the walk) against the
-    rule's direct lists: `--direct-provider`, `callable` deps and
-    `direct_packages`. Keep checking everything else against the transitive
-    sets, which also still feed the work tree, plugin tree and lock, so a
-    `//<subdir>` submodule's providers stay the caller's to list (issue #76).
-  - Compute the direct lists with `strict_deps` from the rule's own attributes
-    only. Nothing carries over from a dep: a `tf_deploy` re-lists what a
-    same-package library's files use (`examples/aws`), and a `tf_test`
-    re-lists what its `module`'s root module uses. Ben decided this on
-    2026-11-15: each target is fully scoped wherever it sits.
+  - Attribute by file, never by package or directory: a rule's own files are
+    those in its `srcs` and `data` (`own_srcs`, `own_data`) plus a `tf_test`'s
+    run blocks. Check only those against the rule's own lists
+    (`--direct-provider`, `callable` deps, `dep_dirs`). Ben rejected
+    per-package checks and any carry-over between targets on 2026-11-15.
+  - Don't make a rule re-list what another rule's files use, even files a
+    dep puts in the root module's own directory (`examples/aws`) or the root
+    module of a `tf_test`: those files are held to their own rule's lists.
+  - Allow a relative call from an own file only into a directory holding the
+    rule's own files or a direct dep's own files (`TfLibraryInfo.dirs`), so
+    a second library in a direct dep's package, or a directory that only a
+    dep's dep supplies, needs its own entry in `deps`.
+  - Check own configuration files in `srcs` everywhere, but those in `data`
+    only where the walk loads a module from their directory: a `tf_modules`
+    library globs the whole upstream tree, examples included, into `data`.
+  - Keep checking every other file against the transitive sets, which also
+    still feed the work tree, plugin tree and lock, so a `//<subdir>`
+    submodule's providers stay the caller's to list (issue #76).
   - Resolve a call against every module with `tfconfig.BestMatch` first, then
     require the match to be `callable`, so strictness never changes which
     library a call resolves to.
-  - Allow a relative call into a directory that belongs to no library's
-    package: it came with the root's own files or a dep's `data`.
 - Keep `examples/modules/{label,stack,git}` on lightweight providers alongside
   `//tests/integration:tf_modules_test` so CI exercises real upstream registry
   and git modules without ~170 MB cloud-provider downloads.
