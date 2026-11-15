@@ -75,6 +75,7 @@ _CASES = [
     ("strict_deps_provider", "broken_workspace", "//cases/strict_deps:provider", "its own configuration requires these providers, which only its deps list"),
     ("strict_deps_module", "broken_workspace", "//cases/strict_deps:module", "add //cases/strict_deps/net:net to the deps of //cases/strict_deps:module"),
     ("strict_deps_local", "broken_workspace", "//cases/strict_deps:local", "add the tf_library in that directory to the deps of //cases/strict_deps:local"),
+    ("strict_deps_same_package", "broken_workspace", "//cases/strict_deps:same_package", "Add \"@tf_providers//hashicorp/random\" to the providers of //cases/strict_deps:same_package"),
     ("module_source_duplicate", "broken_workspace", "//cases/module_source_duplicate:lib", "both have module_source"),
     ("module_version_mismatch", "broken_workspace", "//cases/module_version_mismatch:lib", "is no longer acceptable"),
     ("module_local_external", "broken_workspace", "//cases/module_local_external:lib", "is in another Bazel repository"),

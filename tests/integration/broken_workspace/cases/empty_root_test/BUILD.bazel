@@ -16,4 +16,6 @@ tf_test(
     srcs = ["main.tftest.hcl"],
     fmt_test = False,
     module = ":empty",
+    # The run block calls into the library's package itself.
+    deps = ["//cases/empty_root_test/lib"],
 )

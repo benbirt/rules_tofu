@@ -1,8 +1,8 @@
 load("@rules_tofu//tf:defs.bzl", "tf_library")
 
 # Strict deps (issue #135): each target's own configuration uses something
-# that only reaches it through `mid` or `random`, so each fails naming what
-# to add. Do not add the missing `providers` or `deps` here.
+# that only reaches it through `mid`, `random` or `same`, so each fails
+# naming what to add. Do not add the missing `providers` or `deps` here.
 
 # provider.tf requires hashicorp/random, which only the dep lists.
 tf_library(
@@ -27,4 +27,19 @@ tf_library(
     srcs = ["local.tf"],
     fmt_test = False,
     deps = ["//cases/strict_deps/mid"],
+)
+
+# Nothing carries over from a same-package dep either: same.tf joins this
+# target's root module, so this target lists hashicorp/random itself.
+tf_library(
+    name = "same",
+    srcs = ["same.tf"],
+    fmt_test = False,
+    providers = ["@tf_providers//hashicorp/random"],
+)
+
+tf_library(
+    name = "same_package",
+    fmt_test = False,
+    deps = [":same"],
 )

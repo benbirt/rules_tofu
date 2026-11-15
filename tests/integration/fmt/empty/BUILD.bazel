@@ -20,4 +20,6 @@ tf_test(
     name = "test",
     srcs = ["tests/main.tftest.hcl"],
     module = ":lib",
+    # The run block calls into that module's package itself.
+    deps = ["//nested:lib"],
 )

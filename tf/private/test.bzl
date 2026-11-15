@@ -40,7 +40,6 @@ def _under_test(target):
                 modules = info.modules,
                 packages = info.packages,
                 package_dir = info.package_dir,
-                strict = info.strict,
             ),
             tfvars_content = info.tfvars_content,
             var_files = info.var_files,
@@ -120,15 +119,15 @@ def _tf_test_impl(ctx):
     plugin_outputs = _materialize_plugin_tree(ctx, providers_depset)
     lock = _provider_lock(ctx, providers_depset)
 
-    # The root module is the module under test's, so what that may use the
-    # test may too: `strict_deps` joins it as a dep in the root's package.
+    # The module under test counts as a dep the test lists, and nothing it
+    # lists carries over: the test lists what the root module uses itself.
     infos = [under_test.manifest] + [d[TfLibraryInfo] for d in ctx.attr.deps]
     manifest = _modules_manifest(
         ctx,
         work_tree_outputs,
         infos,
         providers_depset,
-        _strict_deps(root, direct_providers, infos),
+        _strict_deps(direct_providers, infos),
         root = root,
         test_dir = test_dir,
     )
@@ -230,7 +229,8 @@ _tf_test = rule(
         ),
         "deps": attr.label_list(
             providers = [TfLibraryInfo],
-            doc = "Helper `tf_library` targets loaded by `run { module { source = ... } }` blocks, " +
+            doc = "`tf_library` targets that `module`'s root module calls, and helpers loaded by " +
+                  "`run { module { source = ... } }` blocks, " +
                   "by a path relative to `module`'s package directory or by `module_source`.",
         ),
         "data": attr.label_list(
@@ -241,7 +241,7 @@ _tf_test = rule(
         ),
         "providers": attr.label_list(
             providers = [TfProviderInfo],
-            doc = "Providers needed beyond those of `module` and `deps`, as " +
+            doc = "Every provider that `module`'s root module and the test files require, as " +
                   "`@tf_providers//<namespace>/<name>`. `mock_provider` still requires the " +
                   "provider package for its schema.",
         ),
@@ -300,19 +300,21 @@ def tf_test(name, srcs, module, deps = None, data = None, providers = None, var_
           `tests/unit`. `.tofutest.hcl` and `.tofutest.json` shadow
           `.tftest.hcl` and `.tftest.json` of the same name.
       module: The `tf_library` or `tf_deploy` under test; may be an `alias`.
-      deps: Helper `tf_library` targets loaded by
-          `run { module { source = ... } }` blocks, reached by a path relative
-          to `module`'s package directory or by `module_source`.
+      deps: `tf_library` targets that `module`'s root module calls, and helper
+          libraries loaded by `run { module { source = ... } }` blocks, reached
+          by a path relative to `module`'s package directory or by
+          `module_source`. What `module` lists does not carry over.
       data: Files placed in the work tree at their workspace-relative paths for
           `file()` and `templatefile()`. `terraform.tfvars`,
           `terraform.tfvars.json`, `*.auto.tfvars` and `*.auto.tfvars.json` are
           rejected; use `var_files`.
-      providers: `@tf_providers//<namespace>/<name>` targets needed beyond
-          those of `module` and `deps`. `mock_provider` still needs the
-          provider package for its schema. If `module`'s root directory has no
-          configuration files, `tofu init` installs no providers; add a file
-          declaring `required_providers` there when helper modules require
-          providers.
+      providers: `@tf_providers//<namespace>/<name>` targets for every
+          provider that `module`'s root module and the test files require;
+          what `module` lists does not carry over. `mock_provider` still needs
+          the provider package for its schema. If `module`'s root directory
+          has no configuration files, `tofu init` installs no providers; add a
+          file declaring `required_providers` there when helper modules
+          require providers.
       var_files: `.tfvars` or `.tfvars.json` files passed via `-var-file` after
           a tested `tf_deploy`'s `vars` and `var_files`. Entries here may
           override keys from the deploy, and `variables` blocks in test files

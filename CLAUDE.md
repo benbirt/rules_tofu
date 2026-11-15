@@ -297,11 +297,11 @@ Then `bazel shutdown` so the new startup flags take effect.
     `direct_packages`. Keep checking everything else against the transitive
     sets, which also still feed the work tree, plugin tree and lock, so a
     `//<subdir>` submodule's providers stay the caller's to list (issue #76).
-  - Compute the direct lists with `strict_deps` and carry them in
-    `TfLibraryInfo.strict` and `TfDeployInfo.strict`. A dep in the root's own
-    package joins its lists to the dependant's, because its files are part of
-    the same root module (`examples/aws`); so does the module under test of a
-    `tf_test`. Don't join the lists of deps in other packages.
+  - Compute the direct lists with `strict_deps` from the rule's own attributes
+    only. Nothing carries over from a dep: a `tf_deploy` re-lists what a
+    same-package library's files use (`examples/aws`), and a `tf_test`
+    re-lists what its `module`'s root module uses. Ben decided this on
+    2026-11-15: each target is fully scoped wherever it sits.
   - Resolve a call against every module with `tfconfig.BestMatch` first, then
     require the match to be `callable`, so strictness never changes which
     library a call resolves to.

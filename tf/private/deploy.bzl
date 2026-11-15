@@ -49,17 +49,12 @@ def _tf_deploy_impl(ctx):
         for d in ctx.attr.deps
     ]
     providers_depset = depset(direct = direct_providers, transitive = transitive_provider_sets)
-    strict = _strict_deps(
-        _package_dir(ctx.label),
-        direct_providers,
-        [d[TfLibraryInfo] for d in ctx.attr.deps],
-    )
     modules_manifest = _modules_manifest(
         ctx,
         outputs,
         [d[TfLibraryInfo] for d in ctx.attr.deps],
         providers_depset,
-        strict,
+        _strict_deps(direct_providers, [d[TfLibraryInfo] for d in ctx.attr.deps]),
     )
     plugin_outputs = _materialize_plugin_tree(ctx, providers_depset)
     outputs = outputs + plugin_outputs
@@ -103,7 +98,6 @@ def _tf_deploy_impl(ctx):
                 direct = [_package_dir(ctx.label)],
                 transitive = [d[TfLibraryInfo].packages for d in ctx.attr.deps],
             ),
-            strict = strict,
             tfvars_content = tfvars_content,
             var_files = ctx.files.var_files,
         ),
@@ -142,9 +136,9 @@ tf_deploy_rule = rule(
         ),
         "providers": attr.label_list(
             providers = [TfProviderInfo],
-            doc = "Every provider that `srcs` require, as `@tf_providers//<namespace>/<name>`. " +
-                  "Those of `deps` are installed too, and those of same-package `deps` cover " +
-                  "the files they add to the root module.",
+            doc = "Every provider the root module requires, as `@tf_providers//<namespace>/<name>`, " +
+                  "including those required by files that same-package `deps` add to it. " +
+                  "Those of `deps` are installed too, but do not count for the root module.",
         ),
         "allow_ephemeral_state": attr.bool(
             default = False,
@@ -222,9 +216,10 @@ def tf_deploy(name, srcs = None, deps = None, vars = None, var_files = None, dat
           `terraform.tfvars.json`, `*.auto.tfvars` and `*.auto.tfvars.json` are
           rejected; use `vars` or `var_files`.
       providers: `@tf_providers//<namespace>/<name>` targets for every
-          provider `srcs` require. Those of `deps` are installed too, and those
-          of same-package `deps` cover the files they add to the root module;
-          see [Strict dependencies](https://github.com/benbirt/rules_tofu#strict-dependencies).
+          provider the root module requires, including those required by files
+          that same-package `deps` add to it. Those of `deps` are installed
+          too, but do not count for the root module; see
+          [Strict dependencies](https://github.com/benbirt/rules_tofu#strict-dependencies).
       allow_ephemeral_state: Permit `:<name>.apply` and `:<name>.destroy` when
           state lives under `bazel-bin`:
           - no `backend` or `cloud` block is declared; or

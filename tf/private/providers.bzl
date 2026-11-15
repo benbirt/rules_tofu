@@ -48,10 +48,6 @@ TfLibraryInfo = provider(
         "package_dir": "string: the work-tree directory of this library's package, `<workspace_root>/<package>`; " +
                        "the root module directory when the library is tested. Carried here so a `tf_test` " +
                        "reads it from the provider, which an `alias` passes through unchanged.",
-        "strict": "struct(providers, modules, packages) of depset[string]: what this library's own configuration " +
-                  "may use, and so may that of a dependant in the same package, whose root module holds this " +
-                  "library's files: the provider addresses in its `providers`, the labels of the `module_source` " +
-                  "libraries in its `deps` and the package directories of its `deps` (see `strict_deps`).",
     },
 )
 
@@ -77,8 +73,6 @@ TfDeployInfo = provider(
         "modules": "depset[struct(label, source, version, dir)]: `module` of the deploy's transitive deps.",
         "packages": "depset[string]: the work-tree directory of the deploy's package and of its transitive " +
                     "deps' (see TfLibraryInfo).",
-        "strict": "struct(providers, modules, packages) of depset[string]: what the deploy's own configuration " +
-                  "may use, and so may a `tf_test` of it (see TfLibraryInfo).",
         "tfvars_content": "string: the `rules_tofu.auto.tfvars.json` rendered from `vars`.",
         "var_files": "list[File]: the `var_files`, in declaration order.",
     },

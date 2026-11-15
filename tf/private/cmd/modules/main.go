@@ -68,11 +68,11 @@
 //
 // Strict deps (issue #135): what the root's own configuration uses, the rule
 // must list itself, so that a dep which stops using something can't break
-// the root. The rule's direct providers, deps and deps' packages count, and
-// so do those of the libraries in the root's own package that it reaches
-// through deps in that package, since their files are part of the root
-// module; for a tf_test, the module under test is such a library. The rule
-// passes the three sets, and the tool rejects:
+// the root. Only the rule's direct providers, deps and deps' packages count.
+// Nothing carries over from a dep, not even from a library in the root's own
+// package, whose files are part of the root module, nor from the module
+// under test of a tf_test. The rule passes the three sets, and the tool
+// rejects:
 //   - a required_providers entry of the root's own configuration that no
 //     --direct-provider supplies;
 //   - a call from it by module_source that resolves to a dep which is not
@@ -171,8 +171,7 @@ type dep struct {
 	// another library. A direct dep must be used.
 	Direct bool `json:"direct"`
 	// Callable is whether the root's own configuration may call it: a direct
-	// dep, the library being built, or a direct dep of a library whose files
-	// are part of the root module (see the package doc).
+	// dep or the library being built (see the package doc).
 	Callable bool `json:"callable"`
 }
 
