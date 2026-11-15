@@ -86,8 +86,8 @@ import (
 
 var (
 	workTree = flag.String("work-tree", "", "path to the work tree root")
-	root     = flag.String("root", "", "work-tree-relative directory of the root module")
-	modules  = flag.String("modules", "", "JSON file listing the deps that set module_source")
+	root     = flag.String("root", "", "work-tree-relative directory of the root module; empty for the workspace root package")
+	modules  = flag.String("modules", "", "JSON file listing the module_source libraries a call can resolve to and the package directory of every library in deps")
 	label    = flag.String("label", "", "the target being built, for error messages")
 	out      = flag.String("out", "", "path of the modules.json to write")
 	provided = flags.StringList("provider", "canonical address of a provider in the plugin tree (repeatable)")
