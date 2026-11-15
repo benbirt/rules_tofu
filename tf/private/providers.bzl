@@ -1,7 +1,7 @@
 """Bazel providers exchanged between `rules_tofu` rules.
 
 `TfProviderInfo` carries a vendored OpenTofu provider's per-platform packages
-and optional lock file. `TfLibraryInfo` propagates a `tf_library`'s files,
+and optional lock file. `TfLibraryInfo` carries a `tf_library`'s files,
 providers and `module_source` metadata to downstream libraries, deploys and
 tests. `TfDeployInfo` gives the deploy's `.plan`, `.apply` and `.destroy`
 runners and any `tf_test` targeting the deploy everything needed to stage and
@@ -33,7 +33,7 @@ TfProviderInfo = provider(
 #
 # A library with `module_source` is a module that HCL calls by that address
 # rather than by a relative path: `module` is then a
-# `struct(label, source, version, dir)`, where `dir` is the library's
+# `struct(label, source, version, dir, dirs)`, where `dir` is the library's
 # directory in the work tree, and `modules` carries it to the roots that
 # write the call into their `.terraform/modules/modules.json`.
 TfLibraryInfo = provider(
@@ -41,10 +41,10 @@ TfLibraryInfo = provider(
     fields = {
         "transitive_files": "depset[struct(path, file)]: configuration and data files of this library and its transitive deps.",
         "providers": "depset[TfProviderInfo]: providers contributed by this library and its transitive deps.",
-        "module": "struct(label, source, version, dir) or None: this library's `module_source`, if it sets one.",
-        "modules": "depset[struct(label, source, version, dir)]: `module` of this library and its transitive deps.",
-        "packages": "depset[string]: the work-tree directory of the package of this library and of its " +
-                    "transitive deps, so a directory can be traced to the library that owns it.",
+        "module": "struct(label, source, version, dir, dirs) or None: this library's `module_source`, if it sets one.",
+        "modules": "depset[struct(label, source, version, dir, dirs)]: `module` of this library and its transitive deps.",
+        "dirs": "list[string]: work-tree directories of this library's `srcs` and `data`, callable by " +
+                "relative path from direct dependants.",
         "package_dir": "string: the work-tree directory of this library's package, `<workspace_root>/<package>`; " +
                        "the root module directory when the library is tested. Carried here so a `tf_test` " +
                        "reads it from the provider, which an `alias` passes through unchanged.",
@@ -70,9 +70,9 @@ TfDeployInfo = provider(
         "transitive_files": "depset[struct(path, file)]: the deploy's own files, its `var_files` and the files of " +
                             "its transitive library deps, un-materialised, so a `tf_test` can build a work tree of them.",
         "providers": "depset[TfProviderInfo]: providers of the deploy and its transitive deps.",
-        "modules": "depset[struct(label, source, version, dir)]: `module` of the deploy's transitive deps.",
-        "packages": "depset[string]: the work-tree directory of the deploy's package and of its transitive " +
-                    "deps' (see TfLibraryInfo).",
+        "modules": "depset[struct(label, source, version, dir, dirs)]: `module` of the deploy's transitive deps.",
+        "dirs": "list[string]: work-tree directories of the deploy's `srcs` and `data`, callable by " +
+                "relative path from `tf_test`.",
         "tfvars_content": "string: the `rules_tofu.auto.tfvars.json` rendered from `vars`.",
         "var_files": "list[File]: the `var_files`, in declaration order.",
     },

@@ -342,7 +342,7 @@ def plugin_tree_root(ctx):
 
 MODULES_BIN = "//tf/private/cmd/modules:modules"
 
-def library_module(label, module_source, module_version):
+def library_module(label, module_source, module_version, dirs):
     """`TfLibraryInfo.module` for a library with these attributes, or None."""
     if not module_source:
         if module_version:
@@ -353,9 +353,33 @@ def library_module(label, module_source, module_version):
         source = module_source,
         version = module_version,
         dir = package_dir(label),
+        # A tuple, since a depset carries the struct.
+        dirs = tuple(dirs),
     )
 
-def modules_manifest(ctx, work_tree_outputs, infos, providers_depset, root = None, test_dir = None, own = None):
+def own_dirs(files):
+    """Sorted unique work-tree directories containing `files`."""
+    return sorted({work_tree_path(f).rpartition("/")[0]: None for f in files}.keys())
+
+def strict_deps(providers, infos):
+    """Collect the direct providers, modules and directories a target may use (issue #135).
+
+    Args:
+      providers: list[TfProviderInfo] from the target's `providers`.
+      infos: direct dependency structs as passed to `modules_manifest`.
+
+    Returns:
+      struct(providers, modules, dirs): string lists of direct provider
+      addresses, direct `module_source` labels, and work-tree directories of
+      direct dependencies' `srcs` and `data`.
+    """
+    return struct(
+        providers = [p.address for p in providers],
+        modules = [info.module.label for info in infos if info.module],
+        dirs = [d for info in infos for d in info.dirs],
+    )
+
+def modules_manifest(ctx, work_tree_outputs, infos, providers_depset, strict, srcs, data, root = None, test_dir = None, own = None):
     """Emit the action writing this rule's `.terraform/modules/modules.json`.
 
     See //tf/private/cmd/modules: every module call from the root module down
@@ -365,15 +389,21 @@ def modules_manifest(ctx, work_tree_outputs, infos, providers_depset, root = Non
     into place. The action also fails when a module requires a provider that
     `providers_depset` lacks, naming the label to add: a submodule called by
     `//<subdir>` outside `modules/` carries none of its own (issue #76).
+    It also fails when `srcs` or loaded `data` use a provider or module absent
+    from `strict`, other than `own`, or call a directory that holds no files
+    from `srcs`, `data` or `strict`.
 
     Args:
       ctx: rule ctx. Must declare `_modules_bin` (cfg = "exec") on the rule.
       work_tree_outputs: list[File], the work tree's files (`materialize`).
       infos: the rule's deps, each a `TfLibraryInfo` or a struct with its
-          `module`, `modules` and `packages` fields. The module under test of
-          a `tf_test` comes first.
+          `module`, `modules` and `dirs` fields. The module under test of a
+          `tf_test` comes first.
       providers_depset: depset[TfProviderInfo], the providers in the rule's
           plugin tree.
+      strict: direct dependencies allowed by strict-deps checks (`strict_deps`).
+      srcs: list[File], the rule's `srcs`.
+      data: list[File], the rule's `data`.
       root: the root module's work-tree directory; the rule's own package by
           default. A `tf_test`'s is the module under test's.
       test_dir: for a `tf_test`, the test files' directory relative to `root`,
@@ -387,10 +417,7 @@ def modules_manifest(ctx, work_tree_outputs, infos, providers_depset, root = Non
     Returns:
       File: the manifest.
     """
-    direct = {}
-    for info in infos:
-        if info.module:
-            direct[info.module.label] = True
+    direct = {label: True for label in strict.modules}
     modules = depset(
         direct = [own] if own else [],
         transitive = [info.modules for info in infos],
@@ -405,12 +432,15 @@ def modules_manifest(ctx, work_tree_outputs, infos, providers_depset, root = Non
                     source = m.source,
                     version = m.version,
                     dir = m.dir,
+                    dirs = m.dirs,
                     direct = m.label in direct,
+                    callable = m.label in direct or (own != None and m.label == own.label),
                 )
                 for m in modules
             ],
-            # Which library a directory belongs to, for the unused-dep check.
-            packages = depset(transitive = [info.packages for info in infos]).to_list(),
+            own_srcs = [work_tree_path(f) for f in srcs],
+            own_data = [work_tree_path(f) for f in data],
+            dep_dirs = sorted({d: None for d in strict.dirs}.keys()),
         )),
     )
 
@@ -424,6 +454,7 @@ def modules_manifest(ctx, work_tree_outputs, infos, providers_depset, root = Non
         sorted({p.address: None for p in providers_depset.to_list()}.keys()),
         before_each = "--provider",
     )
+    args.add_all(sorted({p: None for p in strict.providers}.keys()), before_each = "--direct-provider")
     if test_dir != None:
         args.add("--test-dir", test_dir or ".")
     args.add("--out", manifest)

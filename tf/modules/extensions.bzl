@@ -664,11 +664,11 @@ excludes `.git/`, `.terraform/`, `.terraform.lock.hcl`, `terraform.tfvars`,
 directory, dangling or external symlinks; `//<subdir>` cannot be a symlink. Git
 submodules are not fetched.
 
-Each generated `tf_library` propagates providers from the module's root, its
-`modules/` subdirectories, and directories it calls itself. If only a caller
-reaches a `//<subdir>` outside `modules/`, declare that submodule's providers on
-the caller. External modules called transitively must also be declared with
-`tf_modules.module`.
+Each generated `tf_library` includes in callers' plugin trees the providers
+required by the module's root, its `modules/` subdirectories and directories it
+calls itself. If only a caller reaches a `//<subdir>` outside `modules/`,
+declare that submodule's providers on the caller. External modules called
+transitively must also be declared with `tf_modules.module`.
 
 Across the module graph, each `@tf_modules` path resolves once. For registry
 modules, the root module's tag wins, else the highest version. Git and archive

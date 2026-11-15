@@ -238,9 +238,10 @@ Then `bazel shutdown` so the new startup flags take effect.
   - Have a `tf_library` with `module_source` pass itself to `modules_manifest`
     as `own`, never `direct`, because direct deps must be called
     (`module_dep_unused`) whereas a module needn't call itself.
-  - Keep `childOwn` true when a `module_source` call lands back in the root's
-    package so calls inside a self-called submodule still count as using the
-    library's direct `deps`.
+  - Mark `own` as `callable` in `modules_manifest` so the library can call its
+    `module_source` with `//<subdir>`. Calls inside a self-called submodule
+    still count toward `module_dep_unused` because the submodule's files are in
+    the library's `srcs` or `data`.
   - Cross-calls between two tags over one repository form a Bazel dependency
     cycle and are not supported.
 - Materialise external-repository files under `external/<canonical repo>/`
@@ -290,6 +291,39 @@ Then `bazel shutdown` so the new startup flags take effect.
   cannot see which `//<subdir>` submodules outside `modules/` callers will
   reach (issue #76), and providers cannot be added automatically there because
   provider labels must be dependencies before analysis.
+- Enforce strict deps in the manifest action with no opt-out (issue #135;
+  `README.md`, "Strict dependencies"; `strict_deps_*` cases):
+  - Attribute requirements and calls by file (`own_srcs`, `own_data`), never by
+    package or directory, and do not inherit direct declarations across
+    targets.
+  - Check only a target's `srcs` and `data`, plus `run` blocks in a `tf_test`'s
+    `srcs`, against `--direct-provider`, `callable` modules and `dep_dirs`. Do
+    not re-check files from `deps` in the root module's directory
+    (`examples/aws`), `module`'s configuration on a `tf_test`, or test files
+    that came with `module`.
+  - Allow relative calls from checked files only into directories containing the
+    target's files or a direct dep's files (`TfLibraryInfo.dirs`,
+    `TfDeployInfo.dirs`, `dep_dirs`). A second library in a direct dep's package
+    or a directory supplied only by a transitive dep needs its own entry in
+    `deps`.
+  - Check configuration files in `srcs` everywhere, and those in `data` only in
+    directories the walk loads. `tf_modules` globs the whole upstream tree,
+    including uncalled `examples/`, into `data`.
+  - Keep checking all walked modules, including the `//<subdir>` submodules of
+    issue #76, against transitive `--provider` and transitive `modules`, which
+    still feed the work tree, plugin tree and lock.
+  - Read a directory's calls across all files (`tfconfig.ReadCalls`) and
+    attribute each call to the file where its effective `source` is written. An
+    `_override` file in `srcs` makes the overridden call belong to that target.
+  - Mark a direct `module_source` dep used on a relative call only when the call
+    targets one of `module.dirs`, never via `within` on its package directory.
+    The workspace root package (`""`) contains every directory.
+  - Format `tf_modules` targets as `@tf_modules//...` in strict-deps errors
+    (`hubLabel`) rather than their private canonical labels. Derive the hub path
+    from the registry address or from the `+tf_modules_<name>` repository name
+    (`repo_name`, `check_name`).
+  - Match calls against all modules with `tfconfig.BestMatch` before checking
+    `callable`, so strict deps never changes which library a call resolves to.
 - Keep `examples/modules/{label,stack,git}` on lightweight providers alongside
   `//tests/integration:tf_modules_test` so CI exercises real upstream registry
   and git modules without ~170 MB cloud-provider downloads.

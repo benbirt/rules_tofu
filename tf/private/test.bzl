@@ -13,8 +13,10 @@ load(
     _materialize = "materialize",
     _materialize_plugin_tree = "materialize_plugin_tree",
     _modules_manifest = "modules_manifest",
+    _own_dirs = "own_dirs",
     _plugin_tree_root = "plugin_tree_root",
     _provider_lock = "provider_lock",
+    _strict_deps = "strict_deps",
     _runfiles_path = "runfiles_path",
     _work_tree_path = "work_tree_path",
     _work_tree_root = "work_tree_root",
@@ -34,7 +36,7 @@ def _under_test(target):
         return struct(
             files = info.transitive_files,
             providers = info.providers,
-            manifest = struct(module = None, modules = info.modules, packages = info.packages),
+            manifest = struct(module = None, modules = info.modules, dirs = info.dirs),
             tfvars_content = info.tfvars_content,
             var_files = info.var_files,
             package_dir = info.package_dir,
@@ -105,17 +107,27 @@ def _tf_test_impl(ctx):
         tfvars_dir = root,
     )
 
+    direct_providers = [p[TfProviderInfo] for p in ctx.attr.providers]
     providers_depset = depset(
-        direct = [p[TfProviderInfo] for p in ctx.attr.providers],
+        direct = direct_providers,
         transitive = [under_test.providers] + [d[TfLibraryInfo].providers for d in ctx.attr.deps],
     )
     plugin_outputs = _materialize_plugin_tree(ctx, providers_depset)
     lock = _provider_lock(ctx, providers_depset)
+
+    # Include `module` alongside `deps` so `run` blocks in `srcs` can call its
+    # `module_source` with `//<subdir>` and load non-root directories from its
+    # `srcs` and `data`. Files in `module` were already checked when `module`
+    # was built and are not in `ctx.files.srcs` or `ctx.files.data`.
+    infos = [under_test.manifest] + [d[TfLibraryInfo] for d in ctx.attr.deps]
     manifest = _modules_manifest(
         ctx,
         work_tree_outputs,
-        [under_test.manifest] + [d[TfLibraryInfo] for d in ctx.attr.deps],
+        infos,
         providers_depset,
+        _strict_deps(direct_providers, infos),
+        ctx.files.srcs,
+        ctx.files.data,
         root = root,
         test_dir = test_dir,
     )
@@ -289,7 +301,10 @@ def tf_test(name, srcs, module, deps = None, data = None, providers = None, var_
       module: The `tf_library` or `tf_deploy` under test; may be an `alias`.
       deps: Helper `tf_library` targets loaded by
           `run { module { source = ... } }` blocks, reached by a path relative
-          to `module`'s package directory or by `module_source`.
+          to `module`'s package directory or by `module_source`. Include any
+          library from `module`'s `deps` that a `run` block in `srcs` loads
+          directly. See
+          [Strict dependencies](https://github.com/benbirt/rules_tofu#strict-dependencies).
       data: Files placed in the work tree at their workspace-relative paths for
           `file()` and `templatefile()`. `terraform.tfvars`,
           `terraform.tfvars.json`, `*.auto.tfvars` and `*.auto.tfvars.json` are
