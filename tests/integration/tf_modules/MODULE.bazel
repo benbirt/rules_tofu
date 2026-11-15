@@ -30,8 +30,9 @@ use_repo(tofu, "tofu_toolchains")
 
 register_toolchains("@tofu_toolchains//:all")
 
-# The network module requires hashicorp/null, and the submodule //app calls by
-# `//vpc/peering` requires hashicorp/time; nothing in //app itself names them.
+# The network module requires hashicorp/null, and its submodule that //app
+# calls by `//vpc/peering` requires hashicorp/time; nothing in //app itself
+# names them.
 tf_providers = use_extension("@rules_tofu//tf/providers:extensions.bzl", "tf_providers")
 tf_providers.provider(
     source = "hashicorp/null",
@@ -44,9 +45,13 @@ tf_providers.provider(
 use_repo(tf_providers, "tf_providers")
 
 tf_modules = use_extension("@rules_tofu//tf/modules:extensions.bzl", "tf_modules")
+# `peering` is outside modules/ and the module never calls it, so the tag names
+# it for //app to call; the fetch fails naming it otherwise (tf_modules_test.sh,
+# step 3).
 tf_modules.module(
     name = "network",
     source = "git::file://@FIXTURES@/network.git//vpc?ref=v1.0.0",
+    submodules = ["peering"],
 )
 tf_modules.module(
     name = "dns",

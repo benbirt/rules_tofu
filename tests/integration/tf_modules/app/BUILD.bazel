@@ -1,13 +1,11 @@
 load("@rules_tofu//tf:defs.bzl", "tf_deploy")
 
-# hashicorp/null comes with the network module. hashicorp/time is required
-# by a submodule outside its modules/, which only this caller reaches, so it
-# goes here; the build fails naming it otherwise (tf_modules_test.sh, step 3).
+# main.tf requires no providers itself. hashicorp/null and hashicorp/time come
+# with the network module, the latter for its `peering` submodule.
 tf_deploy(
     name = "app",
     srcs = ["main.tf"],
     allow_ephemeral_state = True,
-    providers = ["@tf_providers//hashicorp/time"],
     deps = [
         "@tf_modules//cloudposse/label/null",
         "@tf_modules//dns",

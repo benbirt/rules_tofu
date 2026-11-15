@@ -10,7 +10,7 @@
 // command. The extension uses it to tell registry, git and archive sources
 // apart and to find where each is fetched from.
 //
-//	modscan [--module=<label>=<source>...] [--self=<label>] [--git-submodule=<path>...] <repository dir> <module dir>
+//	modscan [--module=<label>=<source>...] [--self=<label>] [--submodule=<dir>...] [--git-submodule=<path>...] <repository dir> <module dir>
 //
 // Inspects a fetched module to generate its tf_library. <module dir> is
 // relative to <repository dir>, or "" for its root, and must contain
@@ -18,6 +18,10 @@
 //   - --module=<label>=<source>: a declared tf_modules.module tag, repeatable.
 //   - --self=<label>: label of the module being scanned, so calls to
 //     <self>//<subdir> are scanned as internal submodules rather than deps.
+//   - --submodule=<dir>: a directory of the module, relative to <module dir>,
+//     that callers reach with //<subdir> and nothing in the module calls,
+//     repeatable. It is served like a directory under modules/. One that
+//     leaves <module dir> or holds no configuration files is an error.
 //   - --git-submodule=<path>: repository-relative path of an unfetched git
 //     submodule, repeatable. OpenTofu fetches git submodules and rules_tofu
 //     does not. If <module dir> or any call from its served directories
@@ -25,8 +29,10 @@
 //     a caller's build to fail on a missing directory.
 //
 // modscan walks the directories returned by tfconfig.ModuleDirs together with
-// any subdirectories reached by <self>//<subdir> calls, leaving uncalled
-// examples and tests out. It writes a JSON Result to stdout:
+// each --submodule and any subdirectories reached by <self>//<subdir> calls,
+// leaving uncalled examples and tests out. It writes a JSON Result to stdout:
+//   - dirs: the directories walked, relative to <repository dir> and sorted,
+//     with "" for its root. Their configuration files are the library's srcs.
 //   - providers: sorted canonical <host>/<namespace>/<name> addresses of
 //     required providers, or [] when none.
 //   - deps: sorted labels of other declared modules that calls match via
@@ -61,11 +67,13 @@ import (
 var (
 	declared = flags.StringList("module", "`<label>=<source>` of a declared module (repeatable)")
 	self     = flag.String("self", "", "`label` of the declared module being described")
+	extra    = flags.StringList("submodule", "`dir` of the module, relative to it, that callers reach with //<subdir> (repeatable)")
 	gitlinks = flags.StringList("git-submodule", "`path` of a git submodule of the fetched commit, which was not fetched (repeatable)")
 )
 
 // Result is the JSON object written by scan mode; slices are never nil.
 type Result struct {
+	Dirs       []string `json:"dirs"`
 	Providers  []string `json:"providers"`
 	Deps       []string `json:"deps"`
 	Undeclared []Call   `json:"undeclared"`
@@ -93,7 +101,7 @@ func main() {
 	}
 	flag.Parse()
 	if flag.NArg() != 2 {
-		fmt.Fprintln(os.Stderr, "usage: modscan [--module=<label>=<source>...] [--self=<label>] [--git-submodule=<path>...] <repository dir> <module dir>")
+		fmt.Fprintln(os.Stderr, "usage: modscan [--module=<label>=<source>...] [--self=<label>] [--submodule=<dir>...] [--git-submodule=<path>...] <repository dir> <module dir>")
 		os.Exit(2)
 	}
 	var modules []Module
@@ -105,7 +113,7 @@ func main() {
 		}
 		modules = append(modules, Module{Label: label, Source: source})
 	}
-	result, err := scan(flag.Arg(0), flag.Arg(1), modules, *self, *gitlinks)
+	result, err := scan(flag.Arg(0), flag.Arg(1), modules, *self, *extra, *gitlinks)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -121,9 +129,10 @@ const notFetched = "rules_tofu does not fetch git submodules (OpenTofu does)"
 
 // scan describes the module at moduleDir in repo, where "" is repo's root.
 // modules lists the declared modules, and self is the label of the one being
-// described, or "" if it is not among them. submodules lists the paths in
-// repo of git submodules that the fetch left out.
-func scan(repo, moduleDir string, modules []Module, self string, submodules []string) (*Result, error) {
+// described, or "" if it is not among them. extra lists directories of the
+// module, relative to moduleDir, that only its callers reach. submodules lists
+// the paths in repo of git submodules that the fetch left out.
+func scan(repo, moduleDir string, modules []Module, self string, extra, submodules []string) (*Result, error) {
 	moduleDir = strings.Trim(moduleDir, "/")
 	var gitlinks []string
 	for _, s := range submodules {
@@ -172,6 +181,21 @@ func scan(repo, moduleDir string, modules []Module, self string, submodules []st
 	// reading it ensures cycles and directories without configuration still
 	// terminate the loop.
 	called := map[string]bool{}
+	for _, e := range extra {
+		rel := path.Clean(e)
+		if e == "" || rel == "." || rel == ".." || strings.HasPrefix(rel, "../") || path.IsAbs(rel) {
+			return nil, fmt.Errorf("submodules: %q is not a directory below the module's own", e)
+		}
+		dir := path.Join(moduleDir, rel)
+		if s := submodule(dir); s != "" {
+			return nil, fmt.Errorf("submodules: %q is in the git submodule %q of the repository, and %s", e, s, notFetched)
+		}
+		if !tfconfig.HasConfig(filepath.Join(repo, filepath.FromSlash(dir))) {
+			return nil, fmt.Errorf("submodules: %q holds no .tf, .tf.json, .tofu or .tofu.json files", e)
+		}
+		called[dir] = true
+	}
+	var served []string
 	var providers map[string]bool
 	var calls map[string]Call
 	for {
@@ -190,6 +214,7 @@ func scan(repo, moduleDir string, modules []Module, self string, submodules []st
 			}
 			return nil, err
 		}
+		served = dirs
 		providers = map[string]bool{}
 		calls = map[string]Call{}
 		for _, dir := range dirs {
@@ -244,7 +269,7 @@ func scan(repo, moduleDir string, modules []Module, self string, submodules []st
 		}
 	}
 
-	result := &Result{Providers: sorted(providers), Deps: []string{}, Undeclared: []Call{}}
+	result := &Result{Dirs: served, Providers: sorted(providers), Deps: []string{}, Undeclared: []Call{}}
 	deps := map[string]bool{}
 	for _, c := range calls {
 		switch m, _ := resolve(c.Source); {

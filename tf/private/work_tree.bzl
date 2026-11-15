@@ -33,6 +33,9 @@ ALLOWED_SRC_EXTS = [".tf", ".tf.json", ".tofu", ".tofu.json", ".tftpl", ".hcl"]
 # by, every dependant.
 TEST_SRC_EXTS = [".tftest.hcl", ".tofutest.hcl", ".tftest.json", ".tofutest.json"]
 
+# What tofu reads as a module's configuration (tfconfig.IsConfigFile).
+_CONFIG_EXTS = (".tf", ".tf.json", ".tofu", ".tofu.json")
+
 def check_no_test_files(ctx, files):
     """Fail if any of `files`, a library's or deploy's srcs, is a test file."""
     for f in files:
@@ -79,6 +82,21 @@ def check_no_auto_tfvars(ctx, files):
                 f.short_path,
             ))
 
+def check_no_config_in_data(ctx, files):
+    """Fail if any of `files`, a rule's data, is a configuration file.
+
+    `data` holds what `file()` and `templatefile()` read. A configuration
+    file there would be code that nothing checks: only `srcs` are held to the
+    rule's `providers` and `deps`, and formatted.
+    """
+    for f in files:
+        if f.basename.endswith(_CONFIG_EXTS):
+            fail(("`{}`: `{}` in `data` is a configuration file. List it in `srcs`, or in the `srcs` " +
+                  "of the `tf_library` for its directory (README, \"Restrictions\").").format(
+                ctx.label,
+                f.short_path,
+            ))
+
 def runfiles_path(workspace_name, f):
     """Return the path at which `f` appears in a runfiles tree.
 
@@ -90,9 +108,6 @@ def runfiles_path(workspace_name, f):
     if sp.startswith("../"):
         return sp[3:]
     return workspace_name + "/" + sp
-
-# What tofu reads as a module's configuration (tfconfig.IsConfigFile).
-_CONFIG_EXTS = (".tf", ".tf.json", ".tofu", ".tofu.json")
 
 def check_has_configuration(ctx, entries):
     """Fail a deploy whose root module holds no configuration file.
@@ -387,11 +402,9 @@ def modules_manifest(ctx, work_tree_outputs, infos, providers_depset, strict, sr
     the dep whose `module_source` they name, so `tofu init -get=false` finds
     them all installed. The validate action and the runner copy the manifest
     into place. The action also fails when a module requires a provider that
-    `providers_depset` lacks, naming the label to add: a submodule called by
-    `//<subdir>` outside `modules/` carries none of its own (issue #76).
-    It also fails when `srcs` or loaded `data` use a provider or module absent
-    from `strict`, other than `own`, or call a directory that holds no files
-    from `srcs`, `data` or `strict`.
+    `providers_depset` lacks, naming the label to add. It also fails when
+    `srcs` use a provider or module absent from `strict`, other than `own`, or
+    call a directory that holds no files from `srcs`, `data` or `strict`.
 
     Args:
       ctx: rule ctx. Must declare `_modules_bin` (cfg = "exec") on the rule.
@@ -403,7 +416,7 @@ def modules_manifest(ctx, work_tree_outputs, infos, providers_depset, strict, sr
           plugin tree.
       strict: direct dependencies allowed by strict-deps checks (`strict_deps`).
       srcs: list[File], the rule's `srcs`.
-      data: list[File], the rule's `data`.
+      data: list[File], the rule's `data`, which holds no configuration.
       root: the root module's work-tree directory; the rule's own package by
           default. A `tf_test`'s is the module under test's.
       test_dir: for a `tf_test`, the test files' directory relative to `root`,

@@ -98,7 +98,7 @@ A reusable bundle of configuration files with no variable values and no `.plan`,
 |-----------|---------|
 | `srcs` | `.tf`, `.tf.json`, `.tofu`, `.tofu.json`, `.tftpl` and `.hcl` files. `.tofu` and `.tofu.json` shadow `.tf` and `.tf.json` of the same name; see [`examples/tofu_files`](examples/tofu_files). |
 | `deps` | `tf_library` targets whose files, providers and `module_source` mappings are passed on to dependants. Other libraries called by `srcs` must be listed here directly. See [Strict dependencies](#strict-dependencies). |
-| `data` | Files placed in the work tree for `file()` and `templatefile()`. |
+| `data` | Files placed in the work tree for `file()` and `templatefile()`. Configuration files belong in `srcs`. |
 | `providers` | Providers required by `srcs`, as `@tf_providers//<namespace>/<name>`. See [Strict dependencies](#strict-dependencies). |
 | `module_source` | Address by which HCL `module` blocks call this library when it lives in another Bazel repository. See [Modules](#modules). |
 | `module_version` | Version checked against callers' `version` constraints on a registry `module_source`. Defaults to the version of the Bazel module that holds the library when `module_source` is set; setting it without `module_source` is an error. |
@@ -163,7 +163,7 @@ the package are left alone.
 
 ### Strict dependencies
 
-Each target lists the providers and modules that its own `srcs` and `data` use.
+Each target lists the providers and modules that its own `srcs` use.
 `bazel build` fails unless:
 
 - `providers` includes every provider in `required_providers`, except built-in
@@ -199,12 +199,8 @@ Checks follow files, not Bazel packages:
   including any that are in `module`'s `deps`. Directories of `module`'s own
   `srcs` and `data` need no entry.
 
-Configuration files in `data` are checked only when a module is loaded from
-their directory.
-
 Calling `<source>//<subdir>` matches the parent `@tf_modules//...` target in
-`deps`. If the fetched module does not itself call a `//<subdir>` outside
-`modules/`, add that submodule's providers to `providers` as well. See
+`deps`. See
 [From a registry, git or an archive](#from-a-registry-git-or-an-archive).
 
 ## Providers
@@ -436,12 +432,23 @@ auto-loaded `.tfvars` files. Symlinks to directories, missing targets or paths
 outside the tree are also removed, and `//<subdir>` cannot be a symlink. Git
 submodules are not fetched; see [Known gaps](#known-gaps).
 
-Each generated `tf_library` carries the providers required by the module's root,
-its `modules/` subdirectories, and directories it calls itself. If only your
-configuration calls a `//<subdir>` outside `modules/`, add that submodule's
-providers to your target's `providers`. `bazel build` names any missing labels.
-`pin` still locks them. External modules called transitively must also be
-declared with `tf_modules.module`.
+Each generated `tf_library` lists as `srcs` the configuration files of the
+module's root, its `modules/` subdirectories and directories it calls itself,
+and carries the providers they require. The module's other configuration files,
+such as examples, are left out and cannot be called. To call a `//<subdir>`
+outside `modules/` that the module does not call itself, name it in
+`submodules`:
+
+```python
+tf_modules.module(
+    source = "terraform-aws-modules/vpc/aws",
+    submodules = ["wrappers"],
+    version = "5.8.1",
+)
+```
+
+External modules called transitively must also be declared with
+`tf_modules.module`.
 
 #### Keeping modules up to date
 
@@ -712,6 +719,8 @@ subdirectory of `module`'s package.
 - `.terraform.lock.hcl` is rejected in `srcs` and `data`; pass lock files via
   `tf_providers.from_lock`.
 - `rules_tofu.auto.tfvars.json` is reserved in a `tf_deploy` package for `vars`.
+- `data` rejects configuration files (`.tf`, `.tf.json`, `.tofu` and
+  `.tofu.json`); list them in `srcs`, which are checked and formatted.
 - `data` rejects `terraform.tfvars`, `terraform.tfvars.json`, `*.auto.tfvars`
   and `*.auto.tfvars.json` in any directory because OpenTofu auto-loads them
   outside the duplicate-key check; pass variable files via `var_files`.

@@ -53,17 +53,16 @@
 // and opentofu.org/builtin/ need no plugin and are skipped. A tf_library
 // carries the providers listed on it and its deps, checked from its own root
 // module; for a fetched module, modscan populates that list from its served
-// directories. Neither reads //<subdir> paths outside modules/ that only
-// callers reach (issue #76), so callers must list those providers themselves.
+// directories, which include each //<subdir> its tf_modules.module tag names
+// in submodules (issues #76 and #140).
 //
 // Strict deps (issue #135) checks the target's own_srcs and own_data against
 // its direct declarations. Files from deps are not re-checked here, even when
-// they sit in --root, because each dep is checked when built. Configuration
-// files in own_srcs are always checked. Configuration files in own_data are
-// checked only when the walk loads a module from their directory.
-// That skips uncalled examples in fetched modules. On tf_test, run blocks in
-// test files listed in own_srcs are checked as direct calls. Test files from
-// the module under test are not. In checked files, the build fails on:
+// they sit in --root, because each dep is checked when built. Only own_srcs
+// holds configuration files, since no rule takes one as data (issue #140).
+// On tf_test, run blocks in test files listed in own_srcs are checked as
+// direct calls. Test files from the module under test are not. In checked
+// files, the build fails on:
 //   - a non-built-in required_providers entry with no matching
 //     --direct-provider;
 //   - a non-local call resolving to a dep with callable false;
@@ -259,8 +258,6 @@ func buildManifest(workTree, root, label string, deps []dep, provided []string, 
 	// reported deduplicates missing-provider entries across calls and between
 	// the module walk and strict-deps checks.
 	reported := map[string]bool{}
-	// walked is every directory a module was loaded from.
-	walked := map[string]bool{}
 	// require records the providers that dir's configuration requires and no
 	// --provider supplies; module names the module (see requirement).
 	require := func(dir, module string) error {
@@ -293,7 +290,7 @@ func buildManifest(workTree, root, label string, deps []dep, provided []string, 
 			return "", nil, "", fmt.Errorf("%s: %s: no dep provides source %q. %s", label, where, c.Source, missingHint(c.Source))
 		}
 		childDir := path.Join(d.Dir, subdir)
-		if err := checkProvided(workTree, childDir, subdir); err != nil {
+		if err := checkProvided(workTree, childDir, subdir, isGenerated(d)); err != nil {
 			return "", nil, "", fmt.Errorf("%s: %s: %s (module_source %q) %w", label, where, d.Label, d.Source, err)
 		}
 		if tfconfig.IsRegistry(c.Source) && d.Version == "" {
@@ -371,7 +368,6 @@ func buildManifest(workTree, root, label string, deps []dep, provided []string, 
 	walk = func(key, dir, module string) error {
 		active[dir] = key
 		defer delete(active, dir)
-		walked[dir] = true
 		if err := require(dir, module); err != nil {
 			return err
 		}
@@ -427,18 +423,15 @@ func buildManifest(workTree, root, label string, deps []dep, provided []string, 
 		delete(active, root)
 	}
 
-	// Check the target's configuration files directory by directory. Files in
-	// data are checked only in walked directories so uncalled examples in a
-	// fetched module are ignored. ReadCalls reads the whole directory so
-	// _override files apply. mine then selects calls whose effective source is
-	// in one of the target's files.
+	// Check the target's configuration files directory by directory. They are
+	// all in srcs: no rule takes one as data. ReadCalls reads the whole
+	// directory so _override files apply. mine then selects calls whose
+	// effective source is in one of the target's files.
 	byDir := map[string][]string{}
-	for i, files := range [][]string{own.srcs, own.data} {
-		for _, f := range files {
+	for _, f := range own.srcs {
+		if tfconfig.IsConfigFile(path.Base(f)) {
 			dir := dirOf(f)
-			if tfconfig.IsConfigFile(path.Base(f)) && (i == 0 || walked[dir]) {
-				byDir[dir] = append(byDir[dir], filepath.Join(workTree, filepath.FromSlash(f)))
-			}
+			byDir[dir] = append(byDir[dir], filepath.Join(workTree, filepath.FromSlash(f)))
 		}
 	}
 	dirs := make([]string, 0, len(byDir))
@@ -646,18 +639,24 @@ func moduleName(key string) string {
 // requires of a module installed from a remote source. A dep's data can bring
 // directories without configuration along, since a glob(["**"]) includes
 // docs, and a dep with no files in its own directory has no directory in the
-// work tree at all.
-func checkProvided(workTree, dir, subdir string) error {
+// work tree at all. generated is whether tf_modules generated the dep: its
+// library leaves out the configuration of a directory that neither the
+// module nor its tag's submodules names.
+func checkProvided(workTree, dir, subdir string, generated bool) error {
 	if tfconfig.HasConfig(filepath.Join(workTree, filepath.FromSlash(dir))) {
 		return nil
 	}
 	if subdir == "" {
 		return errors.New("has no .tf, .tf.json, .tofu or .tofu.json files")
 	}
-	if !isDir(workTree, dir) {
-		return fmt.Errorf("has no directory %q", subdir)
+	hint := ""
+	if generated {
+		hint = fmt.Sprintf("; if the module has that directory, add %q to `submodules` on its tf_modules.module tag", subdir)
 	}
-	return fmt.Errorf("has no .tf, .tf.json, .tofu or .tofu.json files in %q", subdir)
+	if !isDir(workTree, dir) {
+		return fmt.Errorf("has no directory %q%s", subdir, hint)
+	}
+	return fmt.Errorf("has no .tf, .tf.json, .tofu or .tofu.json files in %q%s", subdir, hint)
 }
 
 // checkLocal checks a local call's target: a directory of the work tree,
@@ -717,8 +716,8 @@ func lookup(deps []*dep, source string) (*dep, string) {
 // @tf_modules//<name>. Module names cannot contain '+' or '/'. Other labels
 // are returned unchanged.
 func hubLabel(d *dep) string {
-	repo, target, ok := strings.Cut(d.Label, "//")
-	if !ok || !strings.HasSuffix(target, ":"+generatedTarget) {
+	repo, _, _ := strings.Cut(d.Label, "//")
+	if !isGenerated(d) {
 		return d.Label
 	}
 	if s, err := tfconfig.ParseSource(d.Source); err == nil && s.Kind == tfconfig.KindRegistry {
@@ -728,6 +727,12 @@ func hubLabel(d *dep) string {
 		return "@tf_modules//" + repo[i+len(generatedRepoPrefix):]
 	}
 	return d.Label
+}
+
+// isGenerated is whether tf_modules generated the library d.
+func isGenerated(d *dep) bool {
+	_, target, ok := strings.Cut(d.Label, "//")
+	return ok && strings.HasSuffix(target, ":"+generatedTarget)
 }
 
 // generatedRepoPrefix precedes a git or archive module's name in the canonical

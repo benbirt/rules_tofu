@@ -891,14 +891,6 @@ Add "@tf_providers//hashicorp/random" to the providers of //app.`,
 			want:     "    app/modules/unused/main.tf:3 requires hashicorp/null\n",
 		},
 		{
-			name:  "a file in data is checked where a module is loaded from it",
-			files: map[string]string{"app/main.tf": `module "sub" { source = "./sub" }`, "app/sub/main.tf": requires("null"), "app/examples/main.tf": requires("random")},
-			own:   own{data: []string{"app/main.tf", "app/sub/main.tf", "app/examples/main.tf"}},
-			want: "//app: nothing in its providers or deps supplies these providers, so `tofu init` would not find them:\n" +
-				"    module \"sub\" requires hashicorp/null\n" +
-				`Add "@tf_providers//hashicorp/null" to the providers of //app.`,
-		},
-		{
 			name:     "absent and indirect providers are told apart",
 			files:    map[string]string{"app/main.tf": requires("random") + requires("null")},
 			provided: []string{null},
@@ -941,8 +933,8 @@ Add "@tf_providers//hashicorp/random" to the providers of //app.`,
 		},
 		{
 			name:  "a directory of the rule's own data",
-			files: map[string]string{"app/main.tf": `module "t" { source = "../templates" }`, "templates/main.tf": ``},
-			own:   own{srcs: []string{"app/main.tf"}, data: []string{"templates/main.tf"}},
+			files: map[string]string{"app/main.tf": `module "t" { source = "../templates" }`, "templates/motd.tftpl": ``},
+			own:   own{srcs: []string{"app/main.tf"}, data: []string{"templates/motd.tftpl"}},
 		},
 		{
 			name:  "a directory of a dep's dep's data",

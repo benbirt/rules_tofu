@@ -12,6 +12,7 @@ load(
     "MODULES_BIN",
     _check_has_configuration = "check_has_configuration",
     _check_no_auto_tfvars = "check_no_auto_tfvars",
+    _check_no_config_in_data = "check_no_config_in_data",
     _check_no_test_files = "check_no_test_files",
     _files_entries = "files_entries",
     _materialize = "materialize",
@@ -29,6 +30,7 @@ load(
 def _tf_deploy_impl(ctx):
     _check_no_test_files(ctx, ctx.files.srcs)
     _check_no_auto_tfvars(ctx, ctx.files.data)
+    _check_no_config_in_data(ctx, ctx.files.data)
     direct = _files_entries(ctx.files.srcs + ctx.files.data)
     var_file_entries = _files_entries(ctx.files.var_files)
     transitive = [d[TfLibraryInfo].transitive_files for d in ctx.attr.deps]
@@ -131,13 +133,14 @@ tf_deploy_rule = rule(
         "data": attr.label_list(
             allow_files = True,
             doc = "Files placed in the work tree for `file()` and `templatefile()`. " +
+                  "Configuration files are rejected; list them in `srcs`. " +
                   "`terraform.tfvars`, `terraform.tfvars.json`, `*.auto.tfvars` and " +
                   "`*.auto.tfvars.json` are rejected; use `vars` or `var_files`.",
         ),
         "providers": attr.label_list(
             providers = [TfProviderInfo],
-            doc = "`@tf_providers//<namespace>/<name>` targets required by `srcs` or loaded " +
-                  "`data`. Providers from `deps` are also installed in the plugin tree.",
+            doc = "`@tf_providers//<namespace>/<name>` targets required by `srcs`. Providers " +
+                  "from `deps` are also installed in the plugin tree.",
         ),
         "allow_ephemeral_state": attr.bool(
             default = False,
@@ -214,9 +217,8 @@ def tf_deploy(name, srcs = None, deps = None, vars = None, var_files = None, dat
           `file()` and `templatefile()`. `terraform.tfvars`,
           `terraform.tfvars.json`, `*.auto.tfvars` and `*.auto.tfvars.json` are
           rejected; use `vars` or `var_files`.
-      providers: `@tf_providers//<namespace>/<name>` targets required by `srcs`
-          or loaded `data`. Providers from `deps` are also installed in the
-          plugin tree. See
+      providers: `@tf_providers//<namespace>/<name>` targets required by `srcs`.
+          Providers from `deps` are also installed in the plugin tree. See
           [Strict dependencies](https://github.com/benbirt/rules_tofu#strict-dependencies).
       allow_ephemeral_state: Permit `:<name>.apply` and `:<name>.destroy` when
           state lives under `bazel-bin`:

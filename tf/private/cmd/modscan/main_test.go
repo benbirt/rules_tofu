@@ -51,11 +51,12 @@ terraform {
 	got, err := scan(repo, "vpc", []Module{
 		{Label: "@tf_modules//acme/dns/aws", Source: "Acme/DNS/aws"},
 		{Label: "@tf_modules//unused", Source: "git::https://e.com/unused.git"},
-	}, "", nil)
+	}, "", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := &Result{
+		Dirs:      []string{"shared", "vpc", "vpc/modules/endpoints"},
 		Providers: []string{"registry.opentofu.org/hashicorp/aws", "registry.opentofu.org/hashicorp/random"},
 		Deps:      []string{"@tf_modules//acme/dns/aws"},
 		Undeclared: []Call{
@@ -70,7 +71,7 @@ terraform {
 
 func TestScan_Root(t *testing.T) {
 	repo := writeTree(t, map[string]string{"main.tf": `output "x" { value = 1 }`})
-	got, err := scan(repo, "", nil, "", nil)
+	got, err := scan(repo, "", nil, "", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,11 +120,12 @@ module "label" { source = "git::https://e.com/label.git?ref=v1" }
 		"vpc/examples/demo/main.tf":   `module "x" { source = "acme/unused/aws" }`,
 		"vpc/examples/demo/extras.tf": "terraform {\n  required_providers {\n    tls = {}\n  }\n}\n",
 	})
-	got, err := scan(repo, "vpc", modules, self, nil)
+	got, err := scan(repo, "vpc", modules, self, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := &Result{
+		Dirs:       []string{"vpc", "vpc/peering", "vpc/routes"},
 		Providers:  []string{"registry.opentofu.org/hashicorp/aws", "registry.opentofu.org/hashicorp/random"},
 		Deps:       []string{"@tf_modules//acme/dns/aws", "@tf_modules//label"},
 		Undeclared: []Call{},
@@ -150,11 +152,12 @@ module "b" { source = "acme/net/aws//parts/b" }
 		// The longer string, and the less specific address.
 		{Label: self, Source: "registry.opentofu.org/acme/net/aws"},
 		{Label: "@tf_modules//a", Source: "acme/net/aws//parts/a"},
-	}, self, nil)
+	}, self, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := &Result{
+		Dirs:       []string{"", "parts/b"},
 		Providers:  []string{"registry.opentofu.org/hashicorp/random"},
 		Deps:       []string{"@tf_modules//a"},
 		Undeclared: []Call{},
@@ -166,7 +169,7 @@ module "b" { source = "acme/net/aws//parts/b" }
 
 func TestScan_NoConfig(t *testing.T) {
 	repo := writeTree(t, map[string]string{"README.md": ``})
-	_, err := scan(repo, "vpc", nil, "", nil)
+	_, err := scan(repo, "vpc", nil, "", nil, nil)
 	if err == nil || !strings.Contains(err.Error(), `"/vpc" holds no .tf`) {
 		t.Errorf("got %v", err)
 	}
@@ -195,12 +198,12 @@ func TestScan_GitSubmodule(t *testing.T) {
 
 	t.Run("an uncalled submodule is nobody's business", func(t *testing.T) {
 		repo := tree(t, `module "vpc" { source = "./vpc" }`)
-		if _, err := scan(repo, "", modules, self, submodules); err != nil {
+		if _, err := scan(repo, "", modules, self, nil, submodules); err != nil {
 			t.Fatal(err)
 		}
 		// Nor is a sibling whose name only starts like the submodule's.
 		repo = writeTree(t, map[string]string{"vendor/shared-not/main.tf": ``})
-		if _, err := scan(repo, "vendor/shared-not", modules, self, submodules); err != nil {
+		if _, err := scan(repo, "vendor/shared-not", modules, self, nil, submodules); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -237,7 +240,7 @@ func TestScan_GitSubmodule(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			repo := tree(t, tc.mainTF)
-			_, err := scan(repo, tc.moduleDir, modules, self, submodules)
+			_, err := scan(repo, tc.moduleDir, modules, self, nil, submodules)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Errorf("got %v, want an error containing %q", err, tc.want)
 			}
@@ -267,7 +270,7 @@ func TestScan_GitSubmodule(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			repo := tree(t, tc.mainTF)
-			_, err := scan(repo, tc.moduleDir, modules, self, submodules)
+			_, err := scan(repo, tc.moduleDir, modules, self, nil, submodules)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("got %v, want an error containing %q", err, tc.want)
 			}
@@ -285,6 +288,45 @@ func TestTagFor(t *testing.T) {
 	} {
 		if got := tagFor(in); got != want {
 			t.Errorf("tagFor(%q) = %s, want %s", in, got, want)
+		}
+	}
+}
+
+// A directory named by --submodule is served like one under modules/: its
+// providers and calls are the library's, and so is what it reaches by a
+// local path. One that leaves the module or holds no configuration is an
+// error, since a caller's build could not load it.
+func TestScan_Submodule(t *testing.T) {
+	repo := writeTree(t, map[string]string{
+		"vpc/main.tf":         ``,
+		"vpc/peering/main.tf": "terraform {\n  required_providers {\n    time = {}\n  }\n}\n" + `module "routes" { source = "../routes" }`,
+		"vpc/routes/main.tf":  `module "dns" { source = "acme/dns/aws" }`,
+		"vpc/docs/README.md":  ``,
+		"other/main.tf":       ``,
+	})
+	modules := []Module{{Label: "@tf_modules//acme/dns/aws", Source: "acme/dns/aws"}}
+	got, err := scan(repo, "vpc", modules, "", []string{"peering"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := &Result{
+		Dirs:       []string{"vpc", "vpc/peering", "vpc/routes"},
+		Providers:  []string{"registry.opentofu.org/hashicorp/time"},
+		Deps:       []string{"@tf_modules//acme/dns/aws"},
+		Undeclared: []Call{},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+	for dir, fragment := range map[string]string{
+		"docs":     `"docs" holds no .tf`,
+		"absent":   `"absent" holds no .tf`,
+		"../other": `"../other" is not a directory below the module's own`,
+		".":        `"." is not a directory below the module's own`,
+		"/vpc":     `"/vpc" is not a directory below the module's own`,
+	} {
+		if _, err := scan(repo, "vpc", modules, "", []string{dir}, nil); err == nil || !strings.Contains(err.Error(), fragment) {
+			t.Errorf("submodule %q: got %v, want an error containing %q", dir, err, fragment)
 		}
 	}
 }

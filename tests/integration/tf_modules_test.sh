@@ -30,9 +30,11 @@
 #      file symlink and the files named "files" and "module" remain, while
 #      .bazelignore, vpc/examples/BUILD.bazel and all other symlinks were
 #      removed.
-#   3. Removing hashicorp/time from //app's providers fails `bazel build //app`
-#      naming the label to add: network's main library cannot carry providers
-#      of submodules outside modules/ that only callers reach (issue #76).
+#   3. Removing `submodules` from the network module's tag fails
+#      `bazel build //app` naming the attribute: the library leaves out the
+#      configuration of a directory outside modules/ that the module never
+#      calls, so //vpc/peering is not there to call (issues #76 and #140).
+#      Nothing under examples/ is in the work tree either.
 #   4. MODULE.bazel.lock records the git commit and registry module metadata.
 #      Replacing the git module's fact with a registry-module fact (location
 #      and sha256), shutting down Bazel and removing the output base's lockfile
@@ -150,25 +152,29 @@ for removed in .bazelignore vpc/examples/BUILD.bazel vpc/examples/complete/modul
 done
 [[ -f "${network_repo}/files" && -f "${network_repo}/vpc/module" ]] || fail "the module's own files named files and module were removed"
 
-echo "--- 3. a submodule's provider missing from the caller ---" >&2
-# //vpc/peering requires hashicorp/time, which only //app lists: the network
-# module's library can't know which submodules outside modules/ callers reach.
-cp app/BUILD.bazel "${_TMPDIR}/app.BUILD.bazel"
-sed -i.bak '/providers = \["@tf_providers\/\/hashicorp\/time"\],/d' app/BUILD.bazel
-rm app/BUILD.bazel.bak
-if grep -q 'providers = ' app/BUILD.bazel; then
-  fail "couldn't remove hashicorp/time from //app's providers"
+echo "--- 3. a submodule the tag doesn't name ---" >&2
+# An example's configuration is no part of the library, so it is in no work
+# tree; its other files are data.
+work_tree="$(bazel info bazel-bin)/app/app.work"
+if find -L "${work_tree}" -path '*/examples/*' \( -name '*.tf' -o -name '*.tofu' \) | grep -q .; then
+  fail "the work tree holds an example's configuration"
+fi
+# //vpc/peering is outside modules/ and nothing in the module calls it: only
+# the tag's `submodules` makes it part of the library.
+cp MODULE.bazel "${_TMPDIR}/MODULE.bazel"
+sed -i.bak '/submodules = \["peering"\],/d' MODULE.bazel
+rm MODULE.bazel.bak
+if grep -q 'submodules = ' MODULE.bazel; then
+  fail "couldn't remove submodules from the network module's tag"
 fi
 if out="$(bazel build //app 2>&1)"; then
-  fail "//app built without hashicorp/time in its providers, which //vpc/peering requires"
+  fail "//app built although the network module's tag doesn't name //vpc/peering"
 fi
 echo "${out}" >&2
-# The dep's label is the per-module repository's canonical one.
-grep -q -F '//vpc:_rules_tofu_module, //vpc/peering) requires hashicorp/time' <<<"${out}" ||
-  fail "the failure doesn't name the submodule and the provider it requires"
-grep -q -F 'Add "@tf_providers//hashicorp/time" to the providers of //app:app.' <<<"${out}" ||
-  fail "the failure doesn't name the label to add"
-mv "${_TMPDIR}/app.BUILD.bazel" app/BUILD.bazel
+grep -q -F 'add "peering" to `submodules` on its tf_modules.module tag' <<<"${out}" ||
+  fail "the failure doesn't name the attribute and the directory to add"
+mv "${_TMPDIR}/MODULE.bazel" MODULE.bazel
+bazel build //app >&2 || fail "//app doesn't build with the tag restored"
 
 echo "--- 4. facts ---" >&2
 grep -q -F "\"commit\": \"${first_commit}\"" MODULE.bazel.lock || fail "MODULE.bazel.lock doesn't record ${first_commit}"
