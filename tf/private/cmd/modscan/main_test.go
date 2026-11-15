@@ -319,11 +319,13 @@ func TestScan_Submodule(t *testing.T) {
 		t.Errorf("got %+v, want %+v", got, want)
 	}
 	for dir, fragment := range map[string]string{
-		"docs":     `"docs" holds no .tf`,
-		"absent":   `"absent" holds no .tf`,
-		"../other": `"../other" is not a directory below the module's own`,
-		".":        `"." is not a directory below the module's own`,
-		"/vpc":     `"/vpc" is not a directory below the module's own`,
+		"docs":      `"docs" holds no .tf`,
+		"absent":    `the module has no directory "absent"`,
+		"//peering": `no leading`,
+		`peer\ing`:  `forward slashes`,
+		"../other":  `"../other" is not a directory below the module's own`,
+		".":         `"." is not a directory below the module's own`,
+		"/vpc":      `"/vpc" is not a directory below the module's own`,
 	} {
 		if _, err := scan(repo, "vpc", modules, "", []string{dir}, nil); err == nil || !strings.Contains(err.Error(), fragment) {
 			t.Errorf("submodule %q: got %v, want an error containing %q", dir, err, fragment)

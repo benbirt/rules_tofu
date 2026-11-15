@@ -82,19 +82,30 @@ def check_no_auto_tfvars(ctx, files):
                 f.short_path,
             ))
 
-def check_no_config_in_data(ctx, files):
+def check_no_config_in_data(ctx, files, srcs_take_configuration = True):
     """Fail if any of `files`, a rule's data, is a configuration file.
 
     `data` holds what `file()` and `templatefile()` read. A configuration
     file there would be code that nothing checks: only `srcs` are held to the
-    rule's `providers` and `deps`, and formatted.
+    rule's `providers` and `deps`, and formatted. tofu passes over a file
+    whose name starts with a dot, so such a file is data whatever its
+    extension.
+
+    Args:
+      ctx: rule ctx.
+      files: list[File], the rule's `data`.
+      srcs_take_configuration: whether the rule's own `srcs` could list the
+          file; False for a `tf_test`, whose `srcs` are test files.
     """
     for f in files:
-        if f.basename.endswith(_CONFIG_EXTS):
-            fail(("`{}`: `{}` in `data` is a configuration file. List it in `srcs`, or in the `srcs` " +
-                  "of the `tf_library` for its directory (README, \"Restrictions\").").format(
+        if f.basename.endswith(_CONFIG_EXTS) and not f.basename.startswith("."):
+            where = "List it in `srcs`, or in the `srcs` of a `tf_library` in `deps`"
+            if not srcs_take_configuration:
+                where = "List it in the `srcs` of a `tf_library` in `deps`"
+            fail("`{}`: `{}` in `data` is a configuration file. {} (README, \"Restrictions\").".format(
                 ctx.label,
                 f.short_path,
+                where,
             ))
 
 def runfiles_path(workspace_name, f):

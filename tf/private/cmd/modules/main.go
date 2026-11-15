@@ -56,8 +56,8 @@
 // directories, which include each //<subdir> its tf_modules.module tag names
 // in submodules (issues #76 and #140).
 //
-// Strict deps (issue #135) checks the target's own_srcs and own_data against
-// its direct declarations. Files from deps are not re-checked here, even when
+// Strict deps (issue #135) checks the target's own_srcs against its direct
+// declarations. Files from deps are not re-checked here, even when
 // they sit in --root, because each dep is checked when built. Only own_srcs
 // holds configuration files, since no rule takes one as data (issue #140).
 // On tf_test, run blocks in test files listed in own_srcs are checked as
@@ -291,7 +291,7 @@ func buildManifest(workTree, root, label string, deps []dep, provided []string, 
 		}
 		childDir := path.Join(d.Dir, subdir)
 		if err := checkProvided(workTree, childDir, subdir, isGenerated(d)); err != nil {
-			return "", nil, "", fmt.Errorf("%s: %s: %s (module_source %q) %w", label, where, d.Label, d.Source, err)
+			return "", nil, "", fmt.Errorf("%s: %s: %s (module_source %q) %w", label, where, hubLabel(d), d.Source, err)
 		}
 		if tfconfig.IsRegistry(c.Source) && d.Version == "" {
 			return "", nil, "", fmt.Errorf("%s: %s: %s provides the registry module %q, so it must set module_version", label, where, d.Label, d.Source)
@@ -640,8 +640,9 @@ func moduleName(key string) string {
 // directories without configuration along, since a glob(["**"]) includes
 // docs, and a dep with no files in its own directory has no directory in the
 // work tree at all. generated is whether tf_modules generated the dep: its
-// library leaves out the configuration of a directory that neither the
-// module nor its tag's submodules names.
+// library holds the configuration of the module's root, its modules/
+// subdirectories, the directories it calls itself and those its tag names in
+// submodules, and of no other.
 func checkProvided(workTree, dir, subdir string, generated bool) error {
 	if tfconfig.HasConfig(filepath.Join(workTree, filepath.FromSlash(dir))) {
 		return nil
@@ -649,14 +650,14 @@ func checkProvided(workTree, dir, subdir string, generated bool) error {
 	if subdir == "" {
 		return errors.New("has no .tf, .tf.json, .tofu or .tofu.json files")
 	}
-	hint := ""
 	if generated {
-		hint = fmt.Sprintf("; if the module has that directory, add %q to `submodules` on its tf_modules.module tag", subdir)
+		return fmt.Errorf("does not include the configuration of %q, a directory outside modules/ that the module does not call itself; "+
+			"add %q to `submodules` on its tf_modules.module tag", subdir, subdir)
 	}
 	if !isDir(workTree, dir) {
-		return fmt.Errorf("has no directory %q%s", subdir, hint)
+		return fmt.Errorf("has no directory %q", subdir)
 	}
-	return fmt.Errorf("has no .tf, .tf.json, .tofu or .tofu.json files in %q%s", subdir, hint)
+	return fmt.Errorf("has no .tf, .tf.json, .tofu or .tofu.json files in %q", subdir)
 }
 
 // checkLocal checks a local call's target: a directory of the work tree,

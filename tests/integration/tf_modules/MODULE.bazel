@@ -46,8 +46,8 @@ use_repo(tf_providers, "tf_providers")
 
 tf_modules = use_extension("@rules_tofu//tf/modules:extensions.bzl", "tf_modules")
 # `peering` is outside modules/ and the module never calls it, so the tag names
-# it for //app to call; the fetch fails naming it otherwise (tf_modules_test.sh,
-# step 3).
+# it for //app to call; //app fails to build naming it otherwise
+# (tf_modules_test.sh, step 3).
 tf_modules.module(
     name = "network",
     source = "git::file://@FIXTURES@/network.git//vpc?ref=v1.0.0",

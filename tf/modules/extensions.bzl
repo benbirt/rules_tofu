@@ -102,9 +102,11 @@ _EXCLUDED = [
     "BUILD.bazel",
 ]
 
-# What tofu reads as a module's configuration. A generated library lists the
-# configuration files of the directories it serves in srcs, and no rule takes
-# one as data, so the globs leave out every other: an example's or a test's.
+# What tofu reads as a module's configuration. No rule takes a configuration
+# file as data, so the globs leave them all out. A generated library lists
+# those of the directories it serves in srcs; an example's are in no target.
+# tofu passes over a file whose name starts with a dot, which the globs can't
+# tell apart: those are listed as data by name (`_dot_files`).
 _CONFIG_EXTS = (".tf", ".tf.json", ".tofu", ".tofu.json")
 _CONFIG_GLOBS = ["**/*" + ext for ext in _CONFIG_EXTS]
 
@@ -219,6 +221,13 @@ def _tidy(repository_ctx, context):
     root = repository_ctx.path(".")
     root_real = str(root.realpath)
     subdir = repository_ctx.attr.subdir
+
+    # The directories the library must find in place: the module's own and
+    # each one the tag names in `submodules`.
+    needed = [subdir] + [
+        (subdir + "/" if subdir else "") + s.strip("/")
+        for s in repository_ctx.attr.submodules
+    ]
     entries = walk(root)
     for entry in entries:
         if not entry.is_dir and entry.path.basename in _BAZEL_FILES:
@@ -229,7 +238,7 @@ def _tidy(repository_ctx, context):
     symlinks = [entry for entry in entries if entry.is_symlink and entry.path.basename not in _BAZEL_FILES]
     for entry in symlinks:
         if entry.path.exists and entry.path.is_dir:
-            if subdir == entry.rel or subdir.startswith(entry.rel + "/"):
+            if [d for d in needed if d == entry.rel or d.startswith(entry.rel + "/")]:
                 target = str(entry.path.realpath)
                 fail(("{}: `{}` is a symlink in the fetched files, to {}; rules_tofu keeps no symlinks to " +
                       "directories, so declare and call the module by the directory the link leads to").format(
@@ -241,6 +250,22 @@ def _tidy(repository_ctx, context):
     for entry in symlinks:
         if not entry.path.exists or not within(str(entry.path.realpath), root_real):
             repository_ctx.delete(entry.path)
+
+def _dot_files(repository_ctx):
+    """Dot-prefixed files with a configuration extension, which tofu does not read.
+
+    They are data like any other file, but `_CONFIG_GLOBS` keeps them out of
+    the globs. Returns their paths, leaving out what `_EXCLUDED` does.
+    """
+    found = []
+    for entry in walk(repository_ctx.path(".")):
+        name = entry.path.basename
+        if entry.is_dir or not name.startswith(".") or not name.endswith(_CONFIG_EXTS):
+            continue
+        if ("/" + entry.rel).find("/.git/") >= 0 or ("/" + entry.rel).find("/.terraform/") >= 0:
+            continue
+        found.append(entry.rel)
+    return sorted(found)
 
 def _fetch(repository_ctx):
     """Fetch the module's files and tidy them.
@@ -340,7 +365,14 @@ def _tf_module_repo_impl(repository_ctx):
     srcs = sorted(srcs) + ["//:" + path for path in sorted(outside)]
 
     excluded = _EXCLUDED + _CONFIG_GLOBS
-    data = ['glob(["**"], exclude = {})'.format(repr(excluded))]
+    dot_files = _dot_files(repository_ctx)
+    if package:
+        own_dot_files = [path[len(package) + 1:] for path in dot_files if path.startswith(package + "/")]
+        root_dot_files = [path for path in dot_files if not path.startswith(package + "/")]
+    else:
+        own_dot_files = dot_files
+        root_dot_files = []
+    data = ['glob(["**"], exclude = {})'.format(repr(excluded)), repr(own_dot_files)]
     if package:
         # The module's library lives in its own directory, which is what calls
         # reach, but local paths may lead out of it into the rest of the files.
@@ -350,7 +382,7 @@ def _tf_module_repo_impl(repository_ctx):
             content = """\
 filegroup(
     name = {name},
-    srcs = glob(["**"], exclude = {excluded}),
+    srcs = glob(["**"], exclude = {excluded}) + {dot_files},
     visibility = ["//:__subpackages__"],
 )
 
@@ -358,7 +390,12 @@ exports_files(
     {outside},
     visibility = ["//:__subpackages__"],
 )
-""".format(name = repr(_FILES_TARGET), excluded = repr(excluded), outside = repr(sorted(outside))),
+""".format(
+                name = repr(_FILES_TARGET),
+                excluded = repr(excluded),
+                dot_files = repr(root_dot_files),
+                outside = repr(sorted(outside)),
+            ),
             executable = False,
         )
 
@@ -486,7 +523,8 @@ _module_tag = tag_class(
             doc = "Directories of the module, relative to it, that callers reach with " +
                   "`//<subdir>`, e.g. `[\"peering\"]`. Needed only for a directory outside " +
                   "`modules/` that the module does not call itself. Each must hold " +
-                  "configuration files. Tags declaring the same module are combined.",
+                  "configuration files and cannot be a symlink. Tags declaring the same " +
+                  "module, at the version selected for a registry module, are combined.",
         ),
     },
 )
@@ -559,6 +597,20 @@ def _resolve(tags, path):
     pinned = [t for t in tags if t.tag.commit or t.tag.sha256]
     return pinned[0] if pinned else tags[0]
 
+def _submodules(tags, chosen):
+    """The `submodules` of every tag that declares the module as `chosen` does.
+
+    Git and archive tags for one module agree on its source. Registry tags may
+    name other versions, where a directory need not exist: only those at the
+    chosen version count, so the root module's tag can always settle it.
+    """
+    return sorted({
+        s: None
+        for t in tags
+        if t.tag.version == chosen.tag.version
+        for s in t.tag.submodules
+    }.keys())
+
 def _tf_modules_extension_impl(module_ctx):
     root_repos = []
     tagged = []
@@ -613,6 +665,7 @@ def _tf_modules_extension_impl(module_ctx):
                 sha256 = fact.get("sha256", ""),
                 archive_type = location.type,
                 subdir = location.subdir,
+                submodules = _submodules(tags, chosen),
             )
         elif parsed.kind == "git":
             commit = tag.commit
@@ -630,6 +683,7 @@ def _tf_modules_extension_impl(module_ctx):
                 sha256 = "",
                 archive_type = "",
                 subdir = parsed.subdir,
+                submodules = _submodules(tags, chosen),
             )
         else:
             resolved[path] = struct(
@@ -642,6 +696,7 @@ def _tf_modules_extension_impl(module_ctx):
                 sha256 = tag.sha256,
                 archive_type = parsed.type,
                 subdir = parsed.subdir,
+                submodules = _submodules(tags, chosen),
             )
 
     labels = {path: "@{}//{}".format(_HUB, path) for path in resolved}
@@ -659,7 +714,7 @@ def _tf_modules_extension_impl(module_ctx):
             sha256 = r.sha256,
             archive_type = r.archive_type,
             subdir = r.subdir,
-            submodules = sorted({s: None for t in by_path[path] for s in t.tag.submodules}.keys()),
+            submodules = r.submodules,
             modules = declared,
         )
 
@@ -712,12 +767,11 @@ directory, dangling or external symlinks; `//<subdir>` cannot be a symlink. Git
 submodules are not fetched.
 
 Each generated `tf_library` lists as `srcs` the configuration files of the
-module's root, its `modules/` subdirectories and directories it calls itself,
-and carries the providers they require. Other files are `data`, except
-configuration files, which are left out: an example cannot be called. To call a
-`//<subdir>` outside `modules/` that the module does not call itself, name it
-in `submodules`. External modules called transitively must also be declared
-with `tf_modules.module`.
+module's root, its `modules/` subdirectories, directories it calls itself and
+directories named in `submodules`, and carries the providers they require.
+Non-configuration files are `data`. Configuration files in other directories,
+such as examples, are left out and cannot be called. External modules called
+transitively must also be declared with `tf_modules.module`.
 
 Across the module graph, each `@tf_modules` path resolves once. For registry
 modules, the root module's tag wins, else the highest version. Git and archive

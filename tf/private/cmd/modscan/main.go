@@ -155,7 +155,7 @@ func scan(repo, moduleDir string, modules []Module, self string, extra, submodul
 	}
 	// A fetched module is declared by the directory callers call, which must
 	// hold configuration. tfconfig.ModuleDirs itself allows an unconfigured
-	// root because pin treats such a library as a bundle of submodules.
+	// root.
 	if !tfconfig.HasConfig(filepath.Join(repo, filepath.FromSlash(moduleDir))) {
 		return nil, fmt.Errorf("%q holds no .tf, .tf.json, .tofu or .tofu.json files", "/"+moduleDir)
 	}
@@ -183,12 +183,16 @@ func scan(repo, moduleDir string, modules []Module, self string, extra, submodul
 	called := map[string]bool{}
 	for _, e := range extra {
 		rel := path.Clean(e)
-		if e == "" || rel == "." || rel == ".." || strings.HasPrefix(rel, "../") || path.IsAbs(rel) {
-			return nil, fmt.Errorf("submodules: %q is not a directory below the module's own", e)
+		if e == "" || rel == "." || rel == ".." || strings.HasPrefix(rel, "../") || path.IsAbs(rel) || strings.Contains(e, `\`) {
+			return nil, fmt.Errorf("submodules: %q is not a directory below the module's own; "+
+				"write it relative to the module, with forward slashes and no leading `//`", e)
 		}
 		dir := path.Join(moduleDir, rel)
 		if s := submodule(dir); s != "" {
 			return nil, fmt.Errorf("submodules: %q is in the git submodule %q of the repository, and %s", e, s, notFetched)
+		}
+		if info, err := os.Stat(filepath.Join(repo, filepath.FromSlash(dir))); err != nil || !info.IsDir() {
+			return nil, fmt.Errorf("submodules: the module has no directory %q", e)
 		}
 		if !tfconfig.HasConfig(filepath.Join(repo, filepath.FromSlash(dir))) {
 			return nil, fmt.Errorf("submodules: %q holds no .tf, .tf.json, .tofu or .tofu.json files", e)

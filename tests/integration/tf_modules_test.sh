@@ -34,7 +34,7 @@
 #      `bazel build //app` naming the attribute: the library leaves out the
 #      configuration of a directory outside modules/ that the module never
 #      calls, so //vpc/peering is not there to call (issues #76 and #140).
-#      Nothing under examples/ is in the work tree either.
+#      No configuration file under examples/ is in the work tree either.
 #   4. MODULE.bazel.lock records the git commit and registry module metadata.
 #      Replacing the git module's fact with a registry-module fact (location
 #      and sha256), shutting down Bazel and removing the output base's lockfile
@@ -156,7 +156,7 @@ echo "--- 3. a submodule the tag doesn't name ---" >&2
 # An example's configuration is no part of the library, so it is in no work
 # tree; its other files are data.
 work_tree="$(bazel info bazel-bin)/app/app.work"
-if find -L "${work_tree}" -path '*/examples/*' \( -name '*.tf' -o -name '*.tofu' \) | grep -q .; then
+if find -L "${work_tree}" -path '*/examples/*' \( -name '*.tf' -o -name '*.tofu' -o -name '*.tf.json' -o -name '*.tofu.json' \) | grep -q .; then
   fail "the work tree holds an example's configuration"
 fi
 # //vpc/peering is outside modules/ and nothing in the module calls it: only

@@ -247,9 +247,8 @@ bazel run @tf_providers//:pin
 ```
 
 `pin` collects `required_providers` across the workspace's `tf_library`,
-`tf_deploy` and `tf_test` targets and their external `deps`, leaving out
-directories of a fetched module outside `modules/` that nothing calls, such as
-its `examples/`. It resolves the newest version satisfying every constraint and
+`tf_deploy` and `tf_test` targets and their external `deps`. A fetched module's
+examples are in no target, so they are left out. It resolves the newest version satisfying every constraint and
 writes `.terraform.lock.hcl`; conflicting constraints fail without changing the
 lock.
 
@@ -434,10 +433,10 @@ submodules are not fetched; see [Known gaps](#known-gaps).
 
 Each generated `tf_library` lists as `srcs` the configuration files of the
 module's root, its `modules/` subdirectories and directories it calls itself,
-and carries the providers they require. The module's other configuration files,
-such as examples, are left out and cannot be called. To call a `//<subdir>`
-outside `modules/` that the module does not call itself, name it in
-`submodules`:
+and carries the providers they require. Configuration files in other
+directories, such as examples, are left out and cannot be called. To call a
+`//<subdir>` outside `modules/` that the module does not call itself, name it
+in `submodules`, which adds it to the library:
 
 ```python
 tf_modules.module(
@@ -720,7 +719,8 @@ subdirectory of `module`'s package.
   `tf_providers.from_lock`.
 - `rules_tofu.auto.tfvars.json` is reserved in a `tf_deploy` package for `vars`.
 - `data` rejects configuration files (`.tf`, `.tf.json`, `.tofu` and
-  `.tofu.json`); list them in `srcs`, which are checked and formatted.
+  `.tofu.json`), except dot-prefixed ones; list them in `srcs`, which are
+  checked and formatted.
 - `data` rejects `terraform.tfvars`, `terraform.tfvars.json`, `*.auto.tfvars`
   and `*.auto.tfvars.json` in any directory because OpenTofu auto-loads them
   outside the duplicate-key check; pass variable files via `var_files`.

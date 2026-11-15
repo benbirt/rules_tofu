@@ -167,15 +167,6 @@ func ReadCalls(dir string) ([]Call, error) {
 	return readCalls(primary, overrides)
 }
 
-// ReadCallsFrom parses the module blocks of files, which share a directory,
-// after filtering with Effective (see ReadCalls).
-func ReadCallsFrom(files []string) ([]Call, error) {
-	primary, overrides := splitOverrides(Effective(files))
-	sort.Strings(primary)
-	sort.Strings(overrides)
-	return readCalls(primary, overrides)
-}
-
 func readCalls(primary, overrides []string) ([]Call, error) {
 	parser := hclparse.NewParser()
 	var calls []Call
@@ -443,12 +434,12 @@ func LiteralString(expr hcl.Expression) (string, bool) {
 //
 // modules/ is the standard place for submodules; examples and tests are left
 // out unless something calls them. The called list supplies submodules outside
-// modules/ that callers reach with //<subdir>, which only the callers know.
+// modules/: those the module calls by its own address, and those its
+// tf_modules.module tag names.
 //
 // A readable moduleDir that holds no configuration is a bundle of submodules
-// and serves the rest all the same (issue #123). Whether such a module is
-// acceptable is the caller's to say: modscan refuses a fetched one, while pin
-// locks what a library in another repository serves. A missing or unreadable
+// and serves the rest all the same. Whether such a module is acceptable is the
+// caller's to say: modscan refuses a fetched one. A missing or unreadable
 // moduleDir returns an error.
 func ModuleDirs(repo, moduleDir string, called ...string) ([]string, error) {
 	moduleDir = strings.Trim(moduleDir, "/")

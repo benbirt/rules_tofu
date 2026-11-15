@@ -537,8 +537,7 @@ func TestBuild_RootPackageCycle(t *testing.T) {
 
 // Every module walked must have its required providers in the plugin tree,
 // which --provider lists: the root, a local module, a dep called by
-// module_source, and above all a submodule reached by `//<subdir>` outside
-// `modules/`, whose providers the dep's generated library can't carry (#76).
+// module_source, and a submodule reached by `//<subdir>` (#76).
 // The error names the module, the provider and the label to add; a built-in
 // provider needs no plugin.
 func TestBuild_RequiredProviders(t *testing.T) {
@@ -838,8 +837,8 @@ func buildLenient(workTree, root, label string, deps []dep, provided []string, t
 	return buildManifest(workTree, root, label, callable, provided, testDir, mine)
 }
 
-// Strict deps (#135) checks own.srcs, walked own.data, and run blocks in a
-// test's own.srcs against own.providers, callable deps and depDirs. Files from
+// Strict deps (#135) checks own.srcs and run blocks in a test's own.srcs
+// against own.providers, callable deps and depDirs. Files from
 // other targets are not checked here, even when they sit in root.
 func TestBuildManifest_StrictDeps(t *testing.T) {
 	const (
@@ -938,7 +937,7 @@ Add "@tf_providers//hashicorp/random" to the providers of //app.`,
 		},
 		{
 			name:  "a directory of a dep's dep's data",
-			files: map[string]string{"app/main.tf": `module "t" { source = "../templates" }`, "templates/main.tf": ``},
+			files: map[string]string{"app/main.tf": `module "t" { source = "../templates" }`, "templates/motd.tftpl": ``},
 			own:   own{srcs: []string{"app/main.tf"}},
 			want:  `source "../templates" resolves to the directory "templates", which has no files from //app or from a tf_library in its deps`,
 		},

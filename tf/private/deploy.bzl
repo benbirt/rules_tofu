@@ -214,7 +214,8 @@ def tf_deploy(name, srcs = None, deps = None, vars = None, var_files = None, dat
           with `vars` or other `var_files` entries; duplicates fail
           `bazel build`.
       data: Files placed in the work tree at their workspace-relative paths for
-          `file()` and `templatefile()`. `terraform.tfvars`,
+          `file()` and `templatefile()`. Configuration files are rejected; list
+          them in `srcs`. `terraform.tfvars`,
           `terraform.tfvars.json`, `*.auto.tfvars` and `*.auto.tfvars.json` are
           rejected; use `vars` or `var_files`.
       providers: `@tf_providers//<namespace>/<name>` targets required by `srcs`.
