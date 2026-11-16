@@ -159,23 +159,17 @@ Then `bazel shutdown` so the new startup flags take effect.
   - Discover `required_providers` with one `bazel query`, never a filesystem
     walk, which would miss `.bazelignore`, deleted packages and nested
     workspaces. `$BAZEL` overrides the `bazel` binary.
-  - Pass `--output=streamed_jsonproto`, request `module_source` as the sole
-    rule attribute, pass `--keep_going`, and accept exit 3 because `deps()`
-    traverses `providers` into `@tf_providers` packages that don't exist yet.
-  - Query every `_tf_library` in `deps`, not only those setting `module_source`
-    (issue #60).
-  - In external repositories, count files only in the directories
-    `(*library).serves` and `tfconfig.ModuleDirs` return: `modscan`'s
-    directories plus `//<subdir>` submodules resolved via `tfconfig.BestMatch`
-    to a fixpoint. That keeps fetched modules' examples out of the lock
-    (`tf_modules_test`).
-  - Have an external library with neither own configuration nor `module_source`
-    serve nothing so an aggregate of deps doesn't sweep in child `modules/`.
-    Have one with `module_source` and no own configuration act as a bundle
-    serving `modules/` and called `//<subdir>` paths (issue #123;
-    `lock_update_test`). `tfconfig.ModuleDirs` therefore allows an empty module
-    root, while `modscan` checks separately that a fetched module has root
-    configuration.
+  - Pass `--output=streamed_jsonproto` and `--keep_going`, and accept exit 3
+    because `deps()` traverses `providers` into `@tf_providers` packages that
+    don't exist yet.
+  - Count every configuration file the query returns, in any repository
+    (issues #60, #123 and #140). In an external repository they are all some
+    library's `srcs`, whose providers that library lists, and Bazel loads each of those labels whether
+    or not anything calls the directory. `tf_modules` keeps a fetched module's
+    examples out of every target, and so out of the lock (`tf_modules_test`).
+    Don't bring back a filter on the directories a library serves: it left a
+    declared submodule that nothing called unlocked, which then failed to
+    load.
   - Combine a directory's constraints by provider source in `requirements`,
     never by local name. Don't revert to `ReadRequiredProviders`, which assumes
     a single module: `bazel query` returns files rather than targets, and two
@@ -227,8 +221,8 @@ Then `bazel shutdown` so the new startup flags take effect.
   downstream host-tools build.
 - Leave `version` constraint checking against `module_version` to `tofu`, which
   checks each call against the manifest during `tofu init -get=false`.
-- Match module calls to declarations with `tfconfig.BestMatch` across
-  `modscan`, the manifest tool and `pin`, never in Starlark or by raw string
+- Match module calls to declarations with `tfconfig.BestMatch` in `modscan`
+  and the manifest tool, never in Starlark or by raw string
   comparison. The match leaving the shortest `//<subdir>` wins, so a
   submodule's own declaration beats its parent's regardless of spelling (issue
   #97).
@@ -241,7 +235,7 @@ Then `bazel shutdown` so the new startup flags take effect.
   - Mark `own` as `callable` in `modules_manifest` so the library can call its
     `module_source` with `//<subdir>`. Calls inside a self-called submodule
     still count toward `module_dep_unused` because the submodule's files are in
-    the library's `srcs` or `data`.
+    the library's `srcs`.
   - Cross-calls between two tags over one repository form a Bazel dependency
     cycle and are not supported.
 - Materialise external-repository files under `external/<canonical repo>/`
@@ -255,6 +249,20 @@ Then `bazel shutdown` so the new startup flags take effect.
   - When `subdir` is non-empty, generate a root `//:_rules_tofu_files`
     filegroup and add it to `data` so relative paths leading outside `subdir`
     resolve.
+  - List as `srcs` the configuration files of the directories `modscan`
+    reports in `dirs`, and exclude every configuration file from the `data`
+    globs (`_CONFIG_GLOBS`), so an uncalled example never reaches a work tree
+    (issue #140). Files that a local path reaches outside `subdir` are in the
+    root package, which exports them.
+  - Read `subdirs` on `tf_modules.module` (`modscan --subdir`) for
+    `//<subdir>` directories outside `modules/` that the module does not call
+    itself. Combine the tags that declare the module, for a registry module
+    only those at the selected version (`_subdirs`), so the root can drop a
+    directory a newer version lacks. The generated library includes their
+    configuration and providers (issue #76).
+  - List dot-prefixed files with a configuration extension as `data` by name
+    (`_dot_files`). tofu ignores them, `glob` cannot tell them from
+    configuration, and `check_no_config_in_data` lets them through.
   - Keep the `_rules_tofu_` prefix on both target names so they never collide
     with upstream files named `files` or `module` (issue #61).
 - Reach submodules via `//<subdir>` rather than separate hub targets: listing
@@ -287,17 +295,14 @@ Then `bazel shutdown` so the new startup flags take effect.
 - Check walked `required_providers` against `TfProviderInfo` (`--provider`) in
   the manifest action so a missing provider fails naming the
   `@tf_providers//<ns>/<name>` label to add before `tofu init` fails less
-  helpfully (`missing_provider`, `tf_modules_test` step 3). Module fetches
-  cannot see which `//<subdir>` submodules outside `modules/` callers will
-  reach (issue #76), and providers cannot be added automatically there because
-  provider labels must be dependencies before analysis.
+  helpfully (`missing_provider`).
 - Enforce strict deps in the manifest action with no opt-out (issue #135;
   `README.md`, "Strict dependencies"; `strict_deps_*` cases):
-  - Attribute requirements and calls by file (`own_srcs`, `own_data`), never by
+  - Attribute requirements and calls by file (`own_srcs`), never by
     package or directory, and do not inherit direct declarations across
     targets.
-  - Check only a target's `srcs` and `data`, plus `run` blocks in a `tf_test`'s
-    `srcs`, against `--direct-provider`, `callable` modules and `dep_dirs`. Do
+  - Check only a target's `srcs`, plus `run` blocks in a `tf_test`'s `srcs`,
+    against `--direct-provider`, `callable` modules and `dep_dirs`. Do
     not re-check files from `deps` in the root module's directory
     (`examples/aws`), `module`'s configuration on a `tf_test`, or test files
     that came with `module`.
@@ -306,12 +311,8 @@ Then `bazel shutdown` so the new startup flags take effect.
     `TfDeployInfo.dirs`, `dep_dirs`). A second library in a direct dep's package
     or a directory supplied only by a transitive dep needs its own entry in
     `deps`.
-  - Check configuration files in `srcs` everywhere, and those in `data` only in
-    directories the walk loads. `tf_modules` globs the whole upstream tree,
-    including uncalled `examples/`, into `data`.
-  - Keep checking all walked modules, including the `//<subdir>` submodules of
-    issue #76, against transitive `--provider` and transitive `modules`, which
-    still feed the work tree, plugin tree and lock.
+  - Keep checking all walked modules against transitive `--provider` and
+    transitive `modules`, which still feed the work tree, plugin tree and lock.
   - Read a directory's calls across all files (`tfconfig.ReadCalls`) and
     attribute each call to the file where its effective `source` is written. An
     `_override` file in `srcs` makes the overridden call belong to that target.
@@ -336,9 +337,6 @@ Then `bazel shutdown` so the new startup flags take effect.
     `test.<file path with dots>.<run>`. `tofu` strips only `.tftest.hcl`,
     keeping `.tofutest.hcl`, `.tftest.json` and `.tofutest.json` in the key
     (issue #84).
-  - Query `_tf_test` in `pin` for the `//<subdir>` fixpoint, while
-    `tfconfig.ModuleDirs` ignores fetched modules' `tests/` directories brought
-    in by `glob(["**"])`.
 
 ### Extensions and the toolchain
 
@@ -409,19 +407,24 @@ Then `bazel shutdown` so the new startup flags take effect.
     cache.
   - Keep the validate script's guidance when an empty-root test fails for a
     missing provider (`empty_root_test_provider`).
-  - Don't make `tfconfig` treat missing directories as empty: `modscan` and
-    `pin` rely on the error.
+  - Don't make `tfconfig` treat missing directories as empty: `modscan` relies
+    on the error.
 - Reject an empty root in `tf_deploy` at analysis (`check_has_configuration`;
   `deploy_deps_only`, `deploy_subdirectory_only`), because `tofu` validates an
   empty directory and then refuses to plan it.
 - Keep `HAS_CONFIG` (validate script), `tfconfig.HasConfig` and
   `check_has_configuration` aligned on what counts as configuration: regular
   non-dot files with the four config extensions. `tfconfig.Effective` and
-  `EffectiveTests` drop dotfiles for all callers including `pin`.
+  `EffectiveTests` drop dotfiles for all callers; `pin` reads through
+  `Effective`.
 - Reject `TEST_SRC_EXTS` in `tf_library` and `tf_deploy` `srcs`
   (`check_no_test_files`; `test_file_in_srcs`). `ALLOWED_SRC_EXTS` admits
   `.hcl`, and `tofu` would otherwise load library test files in dependants.
   Fetched modules' tests in `data` stay unchecked and inert unless loaded.
+- Reject configuration files in every rule's `data` (`check_no_config_in_data`;
+  `config_in_data`; issue #140). `data` is not code: only `srcs` are checked
+  against `providers` and `deps`, and formatted. Don't go back to
+  checking `data` only when a directory is loaded.
 - Reject auto-loaded variable files (`terraform.tfvars[.json]`,
   `*.auto.tfvars[.json]`) in every rule's `data` (`check_no_auto_tfvars`;
   `auto_tfvars_in_data`). Any library directory is a root when validated or

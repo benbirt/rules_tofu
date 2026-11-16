@@ -520,8 +520,8 @@ _from_lock_tag = tag_class(
           "`registry.opentofu.org`; locks written by `terraform` against " +
           "`registry.terraform.io` are rejected. `pin` collects `required_providers` across " +
           "the workspace's `tf_library`, `tf_deploy` and `tf_test` targets and their " +
-          "external `deps`, leaving out directories of a fetched module outside `modules/` " +
-          "that nothing calls, such as its `examples/`. By default `pin` locks " +
+          "external `deps`. A fetched module's examples are in no target, so they are " +
+          "left out. By default `pin` locks " +
           "the five platforms `from_lock` resolves: `linux_amd64`, `linux_arm64`, " +
           "`darwin_amd64`, `darwin_arm64` and `windows_amd64`. Pass " +
           "`-- -platform=<os>_<arch>` to replace that list when a provider omits one of " +

@@ -35,18 +35,17 @@ func TestParseTargets(t *testing.T) {
 	got, err := parseTargets([]byte(sourceFile("//:versions.tf", "/ws/versions.tf") + "\n" +
 		sourceFile("//net:vpc/extra.tf", "/ws/net/vpc/extra.tf") + "\n" +
 		sourceFile("@@//dash:main.tf", "/ws/dash/main.tf") + "\n" +
-		libraryRule("@@m+//vpc:module", "/ext/m+/vpc/BUILD.bazel", "github.com/acme/m//vpc") + "\n" +
-		libraryRule("@@dep+//lib:lib", "/ext/dep+/lib/BUILD.bazel", "") + "\n" +
+		sourceFile("@@m+//vpc:main.tf", "/ext/m+/vpc/main.tf") + "\n" +
+		`{"type":"RULE","rule":{"name":"@@dep+//lib:lib","ruleClass":"_tf_library","location":"/ext/dep+/lib/BUILD.bazel:3:11"}}` + "\n" +
 		`{"type":"PACKAGE_GROUP","packageGroup":{"name":"//:pkgs"}}` + "\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := []target{
-		{Kind: "source file", Label: "//:versions.tf", Repo: "", Package: "", Name: "versions.tf", Path: "/ws/versions.tf"},
-		{Kind: "source file", Label: "//net:vpc/extra.tf", Repo: "", Package: "net", Name: "vpc/extra.tf", Path: "/ws/net/vpc/extra.tf"},
-		{Kind: "source file", Label: "@@//dash:main.tf", Repo: "", Package: "dash", Name: "main.tf", Path: "/ws/dash/main.tf"},
-		{Kind: "_tf_library rule", Label: "@@m+//vpc:module", Repo: "m+", Package: "vpc", Name: "module", Path: "/ext/m+/vpc/BUILD.bazel", ModuleSource: "github.com/acme/m//vpc"},
-		{Kind: "_tf_library rule", Label: "@@dep+//lib:lib", Repo: "dep+", Package: "lib", Name: "lib", Path: "/ext/dep+/lib/BUILD.bazel"},
+		{Label: "//:versions.tf", Repo: "", Package: "", Name: "versions.tf", Path: "/ws/versions.tf"},
+		{Label: "//net:vpc/extra.tf", Repo: "", Package: "net", Name: "vpc/extra.tf", Path: "/ws/net/vpc/extra.tf"},
+		{Label: "@@//dash:main.tf", Repo: "", Package: "dash", Name: "main.tf", Path: "/ws/dash/main.tf"},
+		{Label: "@@m+//vpc:main.tf", Repo: "m+", Package: "vpc", Name: "main.tf", Path: "/ext/m+/vpc/main.tf"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("parseTargets = %+v, want %+v", got, want)
@@ -62,17 +61,6 @@ func sourceFile(label, path string) string {
 	return fmt.Sprintf(`{"type":"SOURCE_FILE","sourceFile":{"name":%q,"location":"%s:1:1","visibilityLabel":["//visibility:private"]}}`, label, path)
 }
 
-// libraryRule is a tf_library as `bazel query --output=streamed_jsonproto
-// --proto:output_rule_attrs=module_source` prints it, declared in buildFile,
-// with the given module_source ("" for none).
-func libraryRule(label, buildFile, moduleSource string) string {
-	attrs := `{"name":"$rule_implementation_hash","type":"STRING","stringValue":"0f95"}`
-	if moduleSource != "" {
-		attrs = fmt.Sprintf(`{"name":"module_source","type":"STRING","stringValue":%q,"explicitlySpecified":true,"nodep":false},`, moduleSource) + attrs
-	}
-	return fmt.Sprintf(`{"type":"RULE","rule":{"name":%q,"ruleClass":"_tf_library","location":"%s:3:11","attribute":[%s]}}`, label, buildFile, attrs)
-}
-
 func TestModuleNames(t *testing.T) {
 	got := moduleNames([]module{{Dir: "examples/lock/greeting"}, {Dir: "1st"}, {Dir: "examples/lock.greeting"}})
 	want := []string{"examples_lock_greeting", "m_1st", "examples_lock_greeting_2"}
@@ -82,7 +70,7 @@ func TestModuleNames(t *testing.T) {
 }
 
 // fakeBazel writes a bazel stand-in whose query prints the given
-// main-repository source files of ws, and no libraries.
+// main-repository source files of ws.
 func fakeBazel(t *testing.T, ws string, labels ...string) string {
 	t.Helper()
 	var lines []string
@@ -94,7 +82,7 @@ func fakeBazel(t *testing.T, ws string, labels ...string) string {
 }
 
 // fakeBazelOutput writes a bazel stand-in whose query prints the given
-// targets (see sourceFile and libraryRule).
+// targets (see sourceFile).
 func fakeBazelOutput(t *testing.T, targets ...string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "bazel")
@@ -343,10 +331,10 @@ func TestRun_ExcludesTaggedProviders(t *testing.T) {
 	}
 }
 
-// A module from another repository is locked against in the directories its
-// library serves: its own, its modules/, the submodules outside modules/
-// that counted files call with `//<subdir>` (in turn: a call from one of
-// those counts too), and what they all call locally. Not in its examples.
+// A module from another repository is locked against in every directory the
+// query returns a configuration file for: those are its library's srcs,
+// whose providers the library lists, called or not. Its examples are not
+// among them, because tf_modules leaves them out of the library.
 func TestRun_ExternalModule(t *testing.T) {
 	ws := t.TempDir()
 	writeFile(t, filepath.Join(ws, "app/main.tf"), nullFloor+`
@@ -362,8 +350,7 @@ terraform {
   }
 }
 `)
-	// Outside modules/, so served only because app calls it. Its call into
-	// the other module's submodule is found once it counts.
+	// Outside modules/: in the library because its tag names it in subdirs.
 	writeFile(t, filepath.Join(ext, "vpc/peering/main.tf"), `module "tools" { source = "github.com/acme/other//tools" }
 terraform {
   required_providers {
@@ -371,6 +358,8 @@ terraform {
   }
 }
 `)
+	// Named in subdirs too, and called by nothing: its provider is on the
+	// library all the same, so it is locked.
 	writeFile(t, filepath.Join(ext, "vpc/uncalled/main.tf"), `terraform {
   required_providers {
     http = { source = "hashicorp/http" }
@@ -411,16 +400,14 @@ terraform {
 	repo := "@@rules_tofu++tf_modules+tf_modules_vpc"
 	otherRepo := "@@rules_tofu++tf_modules+tf_modules_other"
 	targets := []string{sourceFile("//app:main.tf", filepath.Join(ws, "app/main.tf"))}
-	for _, f := range []string{"vpc:main.tf", "vpc:modules/sub/main.tf", "vpc:examples/complete/main.tf", "vpc:peering/main.tf", "vpc:uncalled/main.tf", ":shared/main.tf"} {
+	// examples/complete/main.tf is on disk and in no target, so not in the query.
+	for _, f := range []string{"vpc:main.tf", "vpc:modules/sub/main.tf", "vpc:peering/main.tf", "vpc:uncalled/main.tf", ":shared/main.tf"} {
 		pkg, name, _ := strings.Cut(f, ":")
 		targets = append(targets, sourceFile(repo+"//"+f, filepath.Join(ext, pkg, name)))
 	}
 	for _, f := range []string{"main.tf", "tools/main.tf"} {
 		targets = append(targets, sourceFile(otherRepo+"//:"+f, filepath.Join(other, f)))
 	}
-	targets = append(targets,
-		libraryRule(repo+"//vpc:module", filepath.Join(ext, "vpc/BUILD.bazel"), "git::https://example.com/net.git//vpc?ref=v1"),
-		libraryRule(otherRepo+"//:module", filepath.Join(other, "BUILD.bazel"), "github.com/acme/other"))
 	bazel := fakeBazelOutput(t, targets...)
 	tofu, _ := fakeTofu(t)
 
@@ -439,7 +426,7 @@ terraform {
 			locked[name] = true
 		}
 	}
-	want := map[string]bool{"null": true, "time": true, "tls": true, "dns": true, "local": true, "external": true}
+	want := map[string]bool{"null": true, "time": true, "tls": true, "dns": true, "local": true, "external": true, "http": true}
 	if !reflect.DeepEqual(locked, want) {
 		t.Errorf("locked %v, want %v", locked, want)
 	}
@@ -456,251 +443,10 @@ terraform {
 		"m__rules_tofu__tf_modules_tf_modules_vpc__vpc",
 		"m__rules_tofu__tf_modules_tf_modules_vpc__vpc_modules_sub",
 		"m__rules_tofu__tf_modules_tf_modules_vpc__vpc_peering",
+		"m__rules_tofu__tf_modules_tf_modules_vpc__vpc_uncalled",
 	}
 	if !reflect.DeepEqual(dirs, wantDirs) {
 		t.Errorf("locked against %q, want %q", dirs, wantDirs)
-	}
-}
-
-// A call into a submodule that has a library of its own counts that
-// library's directory, as the modules manifest resolves it, not the
-// directory of the module containing it, however the two are written: the
-// parent's module_source here is the longer string (#97).
-func TestRun_MostSpecificLibrary(t *testing.T) {
-	ws := t.TempDir()
-	writeFile(t, filepath.Join(ws, "app/main.tf"), nullFloor+`
-module "x" {
-  source = "acme/net/aws//parts/x"
-}
-`)
-	requires := func(name string) string {
-		return fmt.Sprintf("terraform {\n  required_providers {\n    %s = { source = \"hashicorp/%s\" }\n  }\n}\n", name, name)
-	}
-	whole := filepath.Join(t.TempDir(), "rules_tofu++tf_modules+tf_modules_whole")
-	writeFile(t, filepath.Join(whole, "main.tf"), requires("time"))
-	writeFile(t, filepath.Join(whole, "parts/x/main.tf"), requires("http"))
-	parts := filepath.Join(t.TempDir(), "rules_tofu++tf_modules+tf_modules_parts")
-	writeFile(t, filepath.Join(parts, "parts/main.tf"), requires("dns"))
-	writeFile(t, filepath.Join(parts, "parts/x/main.tf"), requires("tls"))
-
-	wholeRepo := "@@rules_tofu++tf_modules+tf_modules_whole"
-	partsRepo := "@@rules_tofu++tf_modules+tf_modules_parts"
-	bazel := fakeBazelOutput(t,
-		sourceFile("//app:main.tf", filepath.Join(ws, "app/main.tf")),
-		sourceFile(wholeRepo+"//:main.tf", filepath.Join(whole, "main.tf")),
-		sourceFile(wholeRepo+"//:parts/x/main.tf", filepath.Join(whole, "parts/x/main.tf")),
-		sourceFile(partsRepo+"//parts:main.tf", filepath.Join(parts, "parts/main.tf")),
-		sourceFile(partsRepo+"//parts:x/main.tf", filepath.Join(parts, "parts/x/main.tf")),
-		libraryRule(wholeRepo+"//:module", filepath.Join(whole, "BUILD.bazel"), "registry.opentofu.org/acme/net/aws"),
-		libraryRule(partsRepo+"//parts:module", filepath.Join(parts, "parts/BUILD.bazel"), "acme/net/aws//parts"))
-	tofu, _ := fakeTofu(t)
-
-	var log strings.Builder
-	if err := run(ws, "", tofu, bazel, nil, nil, nil, &log); err != nil {
-		t.Fatalf("run: %v\n%s", err, log.String())
-	}
-	lock, err := os.ReadFile(filepath.Join(ws, ".terraform.lock.hcl"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, children := lockedModules(t, lock)
-	locked := map[string]bool{}
-	for _, c := range children {
-		for name := range c {
-			locked[name] = true
-		}
-	}
-	// Not http: the parent's copy of the directory is not the one called.
-	want := map[string]bool{"null": true, "time": true, "dns": true, "tls": true}
-	if !reflect.DeepEqual(locked, want) {
-		t.Errorf("locked %v, want %v", locked, want)
-	}
-}
-
-// A library from another Bazel module needs no module_source for its files
-// to count: it serves its own directory, and what that calls locally. One
-// with no configuration of its own, deps alone, serves nothing: not even
-// what lies under a `modules/` directory below its package, which a library
-// with configuration or a module_source would serve.
-func TestRun_ExternalLibraryWithoutModuleSource(t *testing.T) {
-	ws := t.TempDir()
-	writeFile(t, filepath.Join(ws, "app/main.tf"), nullFloor)
-	ext := filepath.Join(t.TempDir(), "acme+")
-	writeFile(t, filepath.Join(ext, "lib/main.tf"), `module "util" { source = "./util" }
-terraform {
-  required_providers {
-    tls = { source = "hashicorp/tls" }
-  }
-}
-`)
-	writeFile(t, filepath.Join(ext, "lib/util/main.tf"), `terraform {
-  required_providers {
-    time = { source = "hashicorp/time" }
-  }
-}
-`)
-	writeFile(t, filepath.Join(ext, "lib/examples/main.tf"), `terraform {
-  required_providers {
-    random = { source = "hashicorp/random" }
-  }
-}
-`)
-	writeFile(t, filepath.Join(ext, "all/BUILD.bazel"), "")
-	writeFile(t, filepath.Join(ext, "BUILD.bazel"), "")
-	writeFile(t, filepath.Join(ext, "modules/orphan/main.tf"), `terraform {
-  required_providers {
-    http = { source = "hashicorp/http" }
-  }
-}
-`)
-	bazel := fakeBazelOutput(t,
-		sourceFile("//app:main.tf", filepath.Join(ws, "app/main.tf")),
-		sourceFile("@@acme+//:modules/orphan/main.tf", filepath.Join(ext, "modules/orphan/main.tf")),
-		libraryRule("@@acme+//:top", filepath.Join(ext, "BUILD.bazel"), ""),
-		sourceFile("@@acme+//lib:main.tf", filepath.Join(ext, "lib/main.tf")),
-		sourceFile("@@acme+//lib:util/main.tf", filepath.Join(ext, "lib/util/main.tf")),
-		sourceFile("@@acme+//lib:examples/main.tf", filepath.Join(ext, "lib/examples/main.tf")),
-		libraryRule("@@acme+//lib:lib", filepath.Join(ext, "lib/BUILD.bazel"), ""),
-		libraryRule("@@acme+//all:all", filepath.Join(ext, "all/BUILD.bazel"), ""))
-	tofu, _ := fakeTofu(t)
-
-	var log strings.Builder
-	if err := run(ws, "", tofu, bazel, nil, nil, nil, &log); err != nil {
-		t.Fatalf("run: %v\n%s", err, log.String())
-	}
-	lock, err := os.ReadFile(filepath.Join(ws, ".terraform.lock.hcl"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, children := lockedModules(t, lock)
-	locked := map[string]bool{}
-	for _, c := range children {
-		for name := range c {
-			locked[name] = true
-		}
-	}
-	want := map[string]bool{"null": true, "tls": true, "time": true}
-	if !reflect.DeepEqual(locked, want) {
-		t.Errorf("locked %v, want %v", locked, want)
-	}
-}
-
-// A library from another repository that is a bundle: a module_source, and
-// configuration only in subdirectories, which callers reach with
-// `//<subdir>`. The manifest tool resolves such calls, so the directories
-// they reach, and the bundle's `modules/`, are served and their providers
-// locked; what nothing calls is not (issue #123).
-func TestRun_ExternalBundleLibrary(t *testing.T) {
-	ws := t.TempDir()
-	writeFile(t, filepath.Join(ws, "app/main.tf"), nullFloor+`module "vpc" { source = "github.com/acme/infra//vpc" }
-`)
-	ext := filepath.Join(t.TempDir(), "acme+")
-	requires := func(name string) string {
-		return fmt.Sprintf("terraform {\n  required_providers {\n    %s = { source = \"hashicorp/%s\" }\n  }\n}\n", name, name)
-	}
-	writeFile(t, filepath.Join(ext, "bundle/vpc/main.tf"), requires("tls")+`module "peer" { source = "../peering" }
-`)
-	writeFile(t, filepath.Join(ext, "bundle/peering/main.tf"), requires("time"))
-	writeFile(t, filepath.Join(ext, "bundle/modules/dns/main.tf"), requires("local"))
-	writeFile(t, filepath.Join(ext, "bundle/examples/main.tf"), requires("random"))
-	writeFile(t, filepath.Join(ext, "bundle/BUILD.bazel"), "")
-	bazel := fakeBazelOutput(t,
-		sourceFile("//app:main.tf", filepath.Join(ws, "app/main.tf")),
-		sourceFile("@@acme+//bundle:vpc/main.tf", filepath.Join(ext, "bundle/vpc/main.tf")),
-		sourceFile("@@acme+//bundle:peering/main.tf", filepath.Join(ext, "bundle/peering/main.tf")),
-		sourceFile("@@acme+//bundle:modules/dns/main.tf", filepath.Join(ext, "bundle/modules/dns/main.tf")),
-		sourceFile("@@acme+//bundle:examples/main.tf", filepath.Join(ext, "bundle/examples/main.tf")),
-		libraryRule("@@acme+//bundle:bundle", filepath.Join(ext, "bundle/BUILD.bazel"), "github.com/acme/infra"))
-	tofu, _ := fakeTofu(t)
-
-	var log strings.Builder
-	if err := run(ws, "", tofu, bazel, nil, nil, nil, &log); err != nil {
-		t.Fatalf("run: %v\n%s", err, log.String())
-	}
-	lock, err := os.ReadFile(filepath.Join(ws, ".terraform.lock.hcl"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, children := lockedModules(t, lock)
-	locked := map[string]bool{}
-	for _, c := range children {
-		for name := range c {
-			locked[name] = true
-		}
-	}
-	want := map[string]bool{"null": true, "tls": true, "time": true, "local": true}
-	if !reflect.DeepEqual(locked, want) {
-		t.Errorf("locked %v, want %v", locked, want)
-	}
-}
-
-// A tf_test's test file loads a library's submodule outside modules/ with a
-// run block: that directory is served, so its providers are locked, as if
-// the root module called it. The test file itself is not a configuration
-// file, so it is read for its run blocks only.
-func TestRun_TestFileLoadsSubmodule(t *testing.T) {
-	ws := t.TempDir()
-	writeFile(t, filepath.Join(ws, "app/main.tf"), nullFloor)
-	writeFile(t, filepath.Join(ws, "app/tests/setup.tftest.hcl"), `run "setup" {
-  module {
-    source = "git::https://example.com/net.git//vpc/fixtures?ref=v1"
-  }
-}
-
-run "main" {
-  command = plan
-}
-`)
-	ext := filepath.Join(t.TempDir(), "rules_tofu++tf_modules+tf_modules_vpc")
-	writeFile(t, filepath.Join(ext, "vpc/main.tf"), `terraform {
-  required_providers {
-    time = { source = "hashicorp/time" }
-  }
-}
-`)
-	writeFile(t, filepath.Join(ext, "vpc/fixtures/main.tf"), `terraform {
-  required_providers {
-    http = { source = "hashicorp/http" }
-  }
-}
-`)
-	writeFile(t, filepath.Join(ext, "vpc/examples/complete/main.tf"), `terraform {
-  required_providers {
-    random = { source = "hashicorp/random" }
-  }
-}
-`)
-	repo := "@@rules_tofu++tf_modules+tf_modules_vpc"
-	targets := []string{
-		sourceFile("//app:main.tf", filepath.Join(ws, "app/main.tf")),
-		sourceFile("//app:tests/setup.tftest.hcl", filepath.Join(ws, "app/tests/setup.tftest.hcl")),
-	}
-	for _, f := range []string{"vpc:main.tf", "vpc:fixtures/main.tf", "vpc:examples/complete/main.tf"} {
-		pkg, name, _ := strings.Cut(f, ":")
-		targets = append(targets, sourceFile(repo+"//"+f, filepath.Join(ext, pkg, name)))
-	}
-	targets = append(targets, libraryRule(repo+"//vpc:module", filepath.Join(ext, "vpc/BUILD.bazel"), "git::https://example.com/net.git//vpc?ref=v1"))
-	bazel := fakeBazelOutput(t, targets...)
-	tofu, _ := fakeTofu(t)
-
-	var log strings.Builder
-	if err := run(ws, "", tofu, bazel, nil, nil, nil, &log); err != nil {
-		t.Fatalf("run: %v\n%s", err, log.String())
-	}
-	lock, err := os.ReadFile(filepath.Join(ws, ".terraform.lock.hcl"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, children := lockedModules(t, lock)
-	locked := map[string]bool{}
-	for _, c := range children {
-		for name := range c {
-			locked[name] = true
-		}
-	}
-	want := map[string]bool{"null": true, "time": true, "http": true}
-	if !reflect.DeepEqual(locked, want) {
-		t.Errorf("locked %v, want %v", locked, want)
 	}
 }
 

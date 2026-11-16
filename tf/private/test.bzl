@@ -9,6 +9,7 @@ load(
     "MODULES_BIN",
     "TEST_SRC_EXTS",
     _check_no_auto_tfvars = "check_no_auto_tfvars",
+    _check_no_config_in_data = "check_no_config_in_data",
     _files_entries = "files_entries",
     _materialize = "materialize",
     _materialize_plugin_tree = "materialize_plugin_tree",
@@ -95,6 +96,7 @@ def _tf_test_impl(ctx):
     # deploy's var_files and generated tfvars, together with the test files,
     # their data and var_files and the helper libraries' files.
     _check_no_auto_tfvars(ctx, ctx.files.data)
+    _check_no_config_in_data(ctx, ctx.files.data, srcs_take_configuration = False)
     direct = _files_entries(ctx.files.srcs + ctx.files.data + ctx.files.var_files)
     files = depset(
         direct = direct,
@@ -235,6 +237,8 @@ _tf_test = rule(
         "data": attr.label_list(
             allow_files = True,
             doc = "Files placed in the work tree for `file()` and `templatefile()`. " +
+                  "Configuration files are rejected; list them in the `srcs` of a " +
+                  "`tf_library` in `deps`. " +
                   "`terraform.tfvars`, `terraform.tfvars.json`, `*.auto.tfvars` and " +
                   "`*.auto.tfvars.json` are rejected; use `var_files`.",
         ),
@@ -306,7 +310,8 @@ def tf_test(name, srcs, module, deps = None, data = None, providers = None, var_
           directly. See
           [Strict dependencies](https://github.com/benbirt/rules_tofu#strict-dependencies).
       data: Files placed in the work tree at their workspace-relative paths for
-          `file()` and `templatefile()`. `terraform.tfvars`,
+          `file()` and `templatefile()`. Configuration files are rejected; list
+          them in the `srcs` of a `tf_library` in `deps`. `terraform.tfvars`,
           `terraform.tfvars.json`, `*.auto.tfvars` and `*.auto.tfvars.json` are
           rejected; use `var_files`.
       providers: `@tf_providers//<namespace>/<name>` targets needed beyond

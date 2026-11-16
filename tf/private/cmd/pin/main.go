@@ -23,9 +23,8 @@
 //     transitive tf_library deps. Bazel's package graph handles .bazelignore,
 //     deleted packages and nested workspaces automatically. Any .tf file
 //     outside Bazel rules, including a top-level versions.tf that no target
-//     lists, is ignored. Libraries from external repositories count only in
-//     the directories they serve (see library.serves), leaving uncalled
-//     examples out.
+//     lists, is ignored. A fetched module's examples are in no target, so
+//     they are left out.
 //   - Only `terraform { required_providers { ... } }` blocks are extracted, so
 //     resources, variables and module calls never need to evaluate out of
 //     context.
@@ -317,15 +316,6 @@ const rootRules = `kind("^(_tf_library|tf_deploy_rule|_tf_test) rule$", //...)`
 // reached through filegroups and library deps, in any repository.
 const configQuery = `filter("\.(tf|tofu)(\.json)?$", kind("source file", deps(` + rootRules + `)))`
 
-// libraryQuery lists the libraries among their deps, which may be in other
-// repositories: the modules tf_modules generates, and the libraries of other
-// Bazel modules, with or without a module_source.
-const libraryQuery = `kind("^_tf_library rule$", deps(` + rootRules + `))`
-
-// testQuery lists the test files of the tf_tests: a `run` block's module may
-// be a library's submodule, which then counts (see queryConfigFiles).
-const testQuery = `filter("\.(tftest|tofutest)\.(hcl|json)$", kind("source file", deps(kind("^_tf_test rule$", //...))))`
-
 // queryPartialExitCode is Bazel's exit code for a --keep_going command that
 // produced results despite errors.
 const queryPartialExitCode = 3
@@ -336,12 +326,12 @@ const queryPartialExitCode = 3
 // workspace-relative with "" for the workspace root in the main repository,
 // and @<repo>//<dir> in external repositories.
 //
-// Every file in the main repository counts. A library from another repository
-// may include unserved files in its data, such as examples in a fetched
-// module. Its files count only in the directories it serves (see
-// library.serves), expanding iteratively as counted files and tf_test `run`
-// blocks call external submodules with //<subdir> (see lookup). Test files
-// hold no required_providers themselves.
+// Every file counts, in any repository. A library's configuration files are
+// all in its srcs, since no rule takes one as data (issue #140), and the
+// library lists the providers they require: Bazel loads each of those labels
+// with the library, whether or not anything calls the directory. A module
+// that tf_modules fetched lists only the directories it serves, so its
+// examples are not among them.
 //
 // The query runs with --keep_going because deps() also follows each rule's
 // providers into @tf_providers, which cannot load before providers are locked:
@@ -349,160 +339,34 @@ const queryPartialExitCode = 3
 // unusable lock entry makes its provider's repo fail when fetched. Neither has
 // .tf files to find, and pin is how both are fixed.
 func queryConfigFiles(bazel, workspace string, log io.Writer) (map[string][]string, error) {
-	targets, err := query(bazel, workspace, configQuery+" + "+libraryQuery+" + "+testQuery, log)
+	targets, err := query(bazel, workspace, configQuery, log)
 	if err != nil {
 		return nil, err
 	}
-	var files []target
-	var tests []string
-	var libraries []*library
-	for _, t := range targets {
-		switch {
-		case t.Kind == "source file" && tfconfig.IsTestFile(t.Name):
-			if t.Repo == "" {
-				tests = append(tests, t.Path)
-			}
-		case t.Kind == "source file":
-			files = append(files, t)
-		case t.Repo != "":
-			libraries = append(libraries, newLibrary(t))
+	byDir := map[string][]string{}
+	for _, f := range targets {
+		dir := path.Dir(path.Join(f.Package, f.Name))
+		if dir == "." {
+			dir = ""
 		}
+		if f.Repo != "" {
+			dir = "@" + f.Repo + "//" + dir
+		}
+		byDir[dir] = append(byDir[dir], f.Path)
 	}
-
-	// A tf_test's run blocks load modules as the root module calls them: a
-	// library's submodule one loads is served from the start.
-	testCalls, err := tfconfig.ReadTestCalls(tests)
-	if err != nil {
-		return nil, err
-	}
-	for _, c := range testCalls {
-		if l, subdir := lookup(libraries, c.Source); l != nil && subdir != "" {
-			l.called[subdir] = true
-		}
-	}
-
-	for {
-		served := map[string]bool{}
-		for _, l := range libraries {
-			dirs, err := l.serves()
-			if err != nil {
-				return nil, fmt.Errorf("%s: %w", l.Label, err)
-			}
-			for _, d := range dirs {
-				served[filepath.Join(l.root, filepath.FromSlash(d))] = true
-			}
-		}
-		byDir := map[string][]string{}
-		for _, f := range files {
-			dir := path.Dir(path.Join(f.Package, f.Name))
-			if dir == "." {
-				dir = ""
-			}
-			if f.Repo != "" {
-				if !served[filepath.Dir(f.Path)] {
-					continue
-				}
-				dir = "@" + f.Repo + "//" + dir
-			}
-			byDir[dir] = append(byDir[dir], f.Path)
-		}
-
-		// A counted file's call into a library's submodule serves that
-		// directory, whose files may call further ones: go round until no
-		// call serves a new one.
-		grew := false
-		for _, paths := range byDir {
-			calls, err := tfconfig.ReadCallsFrom(paths)
-			if err != nil {
-				return nil, err
-			}
-			for _, c := range calls {
-				if l, subdir := lookup(libraries, c.Source); l != nil && subdir != "" && !l.called[subdir] {
-					l.called[subdir] = true
-					grew = true
-				}
-			}
-		}
-		if !grew {
-			return byDir, nil
-		}
-	}
+	return byDir, nil
 }
 
-// library is a tf_library in another repository.
-type library struct {
-	target
-	root   string          // the repository's directory
-	called map[string]bool // the subdirectories of its own that calls reach with `//<subdir>`
-}
-
-func newLibrary(t target) *library {
-	pkgDir := filepath.Dir(t.Path)
-	root := pkgDir
-	if t.Package != "" {
-		root = strings.TrimSuffix(pkgDir, string(filepath.Separator)+filepath.FromSlash(t.Package))
-	}
-	return &library{target: t, root: root, called: map[string]bool{}}
-}
-
-// serves lists the directories, relative to the repository, whose files the
-// library serves (see tfconfig.ModuleDirs).
-//
-// A library with no configuration in its own directory and no module_source
-// serves none. It is an aggregate of deps, which serve theirs: nothing
-// outside its repository can call into it, and a modules/ directory below its
-// package is other libraries', whose examples must not reach the lock through
-// it. With a module_source it is a bundle: callers reach its subdirectories
-// with //<subdir>, which the manifest tool resolves, so those and its
-// modules/ are served like any module's (issue #123).
-func (l *library) serves() ([]string, error) {
-	if l.ModuleSource == "" {
-		own, err := tfconfig.ConfigFiles(filepath.Join(l.root, filepath.FromSlash(l.Package)))
-		if err != nil || len(own) == 0 {
-			return nil, err
-		}
-	}
-	called := make([]string, 0, len(l.called))
-	for subdir := range l.called {
-		called = append(called, path.Join(l.Package, subdir))
-	}
-	return tfconfig.ModuleDirs(l.root, l.Package, called...)
-}
-
-// lookup finds the library whose module_source provides a call to source and
-// the subdirectory of the library's own that the call uses, or "" for the
-// library's own directory; it returns (nil, "") when none matches. When
-// several match, the most specific wins (see tfconfig.BestMatch), as in the
-// modules manifest, so a submodule's own library beats its parent's.
-func lookup(libraries []*library, source string) (*library, string) {
-	var candidates []*library
-	var sources []string
-	for _, l := range libraries {
-		if l.ModuleSource != "" {
-			candidates = append(candidates, l)
-			sources = append(sources, l.ModuleSource)
-		}
-	}
-	i, subdir := tfconfig.BestMatch(sources, source)
-	if i < 0 {
-		return nil, ""
-	}
-	return candidates[i], subdir
-}
-
-// target is one object of `bazel query --output=streamed_jsonproto`: a
-// source file or a rule, its label split up, the absolute path of the file
-// it is or is declared in, and a rule's `module_source`.
+// target is a source file from `bazel query --output=streamed_jsonproto`: its
+// label split up, and its absolute path.
 type target struct {
-	Kind, Label, Repo, Package, Name, Path, ModuleSource string
+	Label, Repo, Package, Name, Path string
 }
 
-// queryFlags make the query print each target as a JSON object with what
-// parseTargets reads, and no more: of a rule's attributes, only
-// module_source, and not its inputs.
+// queryFlags make the query print each target as a JSON object.
 var queryFlags = []string{
 	"--keep_going", "--noimplicit_deps", "--notool_deps",
-	"--output=streamed_jsonproto", "--proto:output_rule_attrs=module_source", "--proto:rule_inputs_and_outputs=false",
+	"--output=streamed_jsonproto",
 }
 
 // query runs a `bazel query`, accepting partial results.
@@ -524,16 +388,7 @@ func query(bazel, workspace, expr string, log io.Writer) ([]target, error) {
 // queryTarget holds the fields pin reads from a `bazel query
 // --output=streamed_jsonproto` Target JSON object.
 type queryTarget struct {
-	Type string `json:"type"`
-	Rule *struct {
-		Name      string `json:"name"`
-		RuleClass string `json:"ruleClass"`
-		Location  string `json:"location"`
-		Attribute []struct {
-			Name        string `json:"name"`
-			StringValue string `json:"stringValue"`
-		} `json:"attribute"`
-	} `json:"rule"`
+	Type       string `json:"type"`
 	SourceFile *struct {
 		Name     string `json:"name"`
 		Location string `json:"location"`
@@ -544,9 +399,8 @@ type queryTarget struct {
 var location = regexp.MustCompile(`^(.+):\d+:\d+$`)
 
 // parseTargets reads `bazel query --output=streamed_jsonproto` output, one
-// JSON object per target. `Kind` is "source file" for a file, else the rule's
-// class plus " rule", as `--output=label_kind` prints them. `Repo` is "" for
-// the main repository, else the repository's name as Bazel prints it.
+// JSON object per target, keeping the source files. `Repo` is "" for the main
+// repository, else the repository's name as Bazel prints it.
 func parseTargets(out []byte) ([]target, error) {
 	var targets []target
 	dec := json.NewDecoder(bytes.NewReader(out))
@@ -555,20 +409,10 @@ func parseTargets(out []byte) ([]target, error) {
 		if err := dec.Decode(&qt); err != nil {
 			return nil, fmt.Errorf("bazel query output: %w", err)
 		}
-		var t target
-		switch {
-		case qt.Type == "SOURCE_FILE" && qt.SourceFile != nil:
-			t = target{Kind: "source file", Label: qt.SourceFile.Name, Path: qt.SourceFile.Location}
-		case qt.Type == "RULE" && qt.Rule != nil:
-			t = target{Kind: qt.Rule.RuleClass + " rule", Label: qt.Rule.Name, Path: qt.Rule.Location}
-			for _, a := range qt.Rule.Attribute {
-				if a.Name == "module_source" {
-					t.ModuleSource = a.StringValue
-				}
-			}
-		default:
+		if qt.Type != "SOURCE_FILE" || qt.SourceFile == nil {
 			continue
 		}
+		t := target{Label: qt.SourceFile.Name, Path: qt.SourceFile.Location}
 		if m := location.FindStringSubmatch(t.Path); m != nil {
 			t.Path = m[1]
 		}

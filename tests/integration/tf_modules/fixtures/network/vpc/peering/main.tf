@@ -1,5 +1,6 @@
-# A submodule outside modules/: part of the library only because //app calls
-# it by `//vpc/peering`, so its provider is the caller's to pin and to carry.
+# A submodule outside modules/ that the module never calls: part of the
+# library only because the tag names it in `subdirs`. The library then
+# carries its provider.
 terraform {
   required_providers {
     time = {

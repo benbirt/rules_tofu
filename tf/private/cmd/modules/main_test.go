@@ -537,8 +537,7 @@ func TestBuild_RootPackageCycle(t *testing.T) {
 
 // Every module walked must have its required providers in the plugin tree,
 // which --provider lists: the root, a local module, a dep called by
-// module_source, and above all a submodule reached by `//<subdir>` outside
-// `modules/`, whose providers the dep's generated library can't carry (#76).
+// module_source, and a submodule reached by `//<subdir>` (#76).
 // The error names the module, the provider and the label to add; a built-in
 // provider needs no plugin.
 func TestBuild_RequiredProviders(t *testing.T) {
@@ -838,8 +837,8 @@ func buildLenient(workTree, root, label string, deps []dep, provided []string, t
 	return buildManifest(workTree, root, label, callable, provided, testDir, mine)
 }
 
-// Strict deps (#135) checks own.srcs, walked own.data, and run blocks in a
-// test's own.srcs against own.providers, callable deps and depDirs. Files from
+// Strict deps (#135) checks own.srcs and run blocks in a test's own.srcs
+// against own.providers, callable deps and depDirs. Files from
 // other targets are not checked here, even when they sit in root.
 func TestBuildManifest_StrictDeps(t *testing.T) {
 	const (
@@ -891,14 +890,6 @@ Add "@tf_providers//hashicorp/random" to the providers of //app.`,
 			want:     "    app/modules/unused/main.tf:3 requires hashicorp/null\n",
 		},
 		{
-			name:  "a file in data is checked where a module is loaded from it",
-			files: map[string]string{"app/main.tf": `module "sub" { source = "./sub" }`, "app/sub/main.tf": requires("null"), "app/examples/main.tf": requires("random")},
-			own:   own{data: []string{"app/main.tf", "app/sub/main.tf", "app/examples/main.tf"}},
-			want: "//app: nothing in its providers or deps supplies these providers, so `tofu init` would not find them:\n" +
-				"    module \"sub\" requires hashicorp/null\n" +
-				`Add "@tf_providers//hashicorp/null" to the providers of //app.`,
-		},
-		{
 			name:     "absent and indirect providers are told apart",
 			files:    map[string]string{"app/main.tf": requires("random") + requires("null")},
 			provided: []string{null},
@@ -941,12 +932,12 @@ Add "@tf_providers//hashicorp/random" to the providers of //app.`,
 		},
 		{
 			name:  "a directory of the rule's own data",
-			files: map[string]string{"app/main.tf": `module "t" { source = "../templates" }`, "templates/main.tf": ``},
-			own:   own{srcs: []string{"app/main.tf"}, data: []string{"templates/main.tf"}},
+			files: map[string]string{"app/main.tf": `module "t" { source = "../templates" }`, "templates/motd.tftpl": ``},
+			own:   own{srcs: []string{"app/main.tf"}, data: []string{"templates/motd.tftpl"}},
 		},
 		{
 			name:  "a directory of a dep's dep's data",
-			files: map[string]string{"app/main.tf": `module "t" { source = "../templates" }`, "templates/main.tf": ``},
+			files: map[string]string{"app/main.tf": `module "t" { source = "../templates" }`, "templates/motd.tftpl": ``},
 			own:   own{srcs: []string{"app/main.tf"}},
 			want:  `source "../templates" resolves to the directory "templates", which has no files from //app or from a tf_library in its deps`,
 		},
@@ -1013,6 +1004,41 @@ Add "@tf_providers//hashicorp/random" to the providers of //app.`,
 				t.Fatal(err)
 			case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
 				t.Fatalf("got\n%v\nwant an error containing\n%s", err, tc.want)
+			}
+		})
+	}
+}
+
+// A call into a directory that a generated library lacks says how to add
+// one outside modules/, where the library leaves out what the module doesn't
+// call itself. Below modules/ the library has every configured directory, so
+// the path is simply wrong.
+func TestBuild_GeneratedLibraryLacksDirectory(t *testing.T) {
+	tree := writeTree(t, map[string]string{
+		"app/main.tf":                    ``,
+		"external/net+/main.tf":          ``,
+		"external/net+/wrappers/README":  ``,
+		"external/net+/modules/x/README": ``,
+	})
+	generated := dep{Label: "@@rules_tofu++tf_modules+tf_modules_net//:_rules_tofu_module", Source: "git::https://example.com/net.git?ref=v1", Dir: "external/net+", Direct: true}
+	written := dep{Label: "@net//:net", Source: "git::https://example.com/net.git?ref=v1", Dir: "external/net+", Direct: true}
+	for _, tc := range []struct {
+		name, subdir, want string
+		dep                dep
+	}{
+		{"outside modules/", "wrappers", `@tf_modules//net (module_source "git::https://example.com/net.git?ref=v1") has no configuration in "wrappers". A fetched module's library leaves out directories outside modules/ that the module does not call itself: check the path, or add "wrappers" to ` + "`subdirs`" + ` on its tf_modules.module tag`, generated},
+		{"absent", "nowhere", `check the path, or add "nowhere" to`, generated},
+		{"below modules/", "modules/x", `has no .tf, .tf.json, .tofu or .tofu.json files in "modules/x"`, generated},
+		{"below modules/, absent", "modules/y", `has no directory "modules/y"`, generated},
+		{"a hand-written library", "wrappers", `has no .tf, .tf.json, .tofu or .tofu.json files in "wrappers"`, written},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := os.WriteFile(filepath.Join(tree, "app/main.tf"), []byte(`module "m" { source = "git::https://example.com/net.git//`+tc.subdir+`?ref=v1" }`), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			_, err := build(tree, "app", "//app", []dep{tc.dep}, nil)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("got %v, want an error containing %q", err, tc.want)
 			}
 		})
 	}
