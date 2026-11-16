@@ -10,7 +10,7 @@
 // command. The extension uses it to tell registry, git and archive sources
 // apart and to find where each is fetched from.
 //
-//	modscan [--module=<label>=<source>...] [--self=<label>] [--submodule=<dir>...] [--git-submodule=<path>...] <repository dir> <module dir>
+//	modscan [--module=<label>=<source>...] [--self=<label>] [--subdir=<dir>...] [--git-submodule=<path>...] <repository dir> <module dir>
 //
 // Inspects a fetched module to generate its tf_library. <module dir> is
 // relative to <repository dir>, or "" for its root, and must contain
@@ -18,7 +18,7 @@
 //   - --module=<label>=<source>: a declared tf_modules.module tag, repeatable.
 //   - --self=<label>: label of the module being scanned, so calls to
 //     <self>//<subdir> are scanned as internal submodules rather than deps.
-//   - --submodule=<dir>: a directory of the module, relative to <module dir>,
+//   - --subdir=<dir>: a directory of the module, relative to <module dir>,
 //     that callers reach with //<subdir> and nothing in the module calls,
 //     repeatable. It is served like a directory under modules/. One that
 //     leaves <module dir> or holds no configuration files is an error.
@@ -29,7 +29,7 @@
 //     a caller's build to fail on a missing directory.
 //
 // modscan walks the directories returned by tfconfig.ModuleDirs together with
-// each --submodule and any subdirectories reached by <self>//<subdir> calls,
+// each --subdir and any subdirectories reached by <self>//<subdir> calls,
 // leaving uncalled examples and tests out. It writes a JSON Result to stdout:
 //   - dirs: the directories walked, relative to <repository dir> and sorted,
 //     with "" for its root. Their configuration files are the library's srcs.
@@ -67,7 +67,7 @@ import (
 var (
 	declared = flags.StringList("module", "`<label>=<source>` of a declared module (repeatable)")
 	self     = flag.String("self", "", "`label` of the declared module being described")
-	extra    = flags.StringList("submodule", "`dir` of the module, relative to it, that callers reach with //<subdir> (repeatable)")
+	extra    = flags.StringList("subdir", "`dir` of the module, relative to it, that callers reach with //<subdir> (repeatable)")
 	gitlinks = flags.StringList("git-submodule", "`path` of a git submodule of the fetched commit, which was not fetched (repeatable)")
 )
 
@@ -101,7 +101,7 @@ func main() {
 	}
 	flag.Parse()
 	if flag.NArg() != 2 {
-		fmt.Fprintln(os.Stderr, "usage: modscan [--module=<label>=<source>...] [--self=<label>] [--submodule=<dir>...] [--git-submodule=<path>...] <repository dir> <module dir>")
+		fmt.Fprintln(os.Stderr, "usage: modscan [--module=<label>=<source>...] [--self=<label>] [--subdir=<dir>...] [--git-submodule=<path>...] <repository dir> <module dir>")
 		os.Exit(2)
 	}
 	var modules []Module
@@ -184,18 +184,18 @@ func scan(repo, moduleDir string, modules []Module, self string, extra, submodul
 	for _, e := range extra {
 		rel := path.Clean(e)
 		if e == "" || rel == "." || rel == ".." || strings.HasPrefix(rel, "../") || path.IsAbs(rel) || strings.Contains(e, `\`) {
-			return nil, fmt.Errorf("submodules: %q is not a directory below the module's own; "+
+			return nil, fmt.Errorf("subdirs: %q is not a directory below the module's own; "+
 				"write it relative to the module, with forward slashes and no leading `//`", e)
 		}
 		dir := path.Join(moduleDir, rel)
 		if s := submodule(dir); s != "" {
-			return nil, fmt.Errorf("submodules: %q is in the git submodule %q of the repository, and %s", e, s, notFetched)
+			return nil, fmt.Errorf("subdirs: %q is in the git submodule %q of the repository, and %s", e, s, notFetched)
 		}
 		if info, err := os.Stat(filepath.Join(repo, filepath.FromSlash(dir))); err != nil || !info.IsDir() {
-			return nil, fmt.Errorf("submodules: the module has no directory %q", e)
+			return nil, fmt.Errorf("subdirs: the module has no directory %q", e)
 		}
 		if !tfconfig.HasConfig(filepath.Join(repo, filepath.FromSlash(dir))) {
-			return nil, fmt.Errorf("submodules: %q holds no .tf, .tf.json, .tofu or .tofu.json files", e)
+			return nil, fmt.Errorf("subdirs: %q holds no .tf, .tf.json, .tofu or .tofu.json files", e)
 		}
 		called[dir] = true
 	}

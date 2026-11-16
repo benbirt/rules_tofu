@@ -32,7 +32,7 @@
 #      file symlink and the files named "files" and "module" remain, while
 #      .bazelignore, vpc/examples/BUILD.bazel and all other symlinks were
 #      removed.
-#   3. Removing `submodules` from the network module's tag fails
+#   3. Removing `subdirs` from the network module's tag fails
 #      `bazel build //app` naming the attribute: the library leaves out the
 #      configuration of a directory outside modules/ that the module never
 #      calls, so //vpc/peering is not there to call (issues #76 and #140).
@@ -171,18 +171,18 @@ if find -L "${work_tree}" -path '*/examples/*' \( -name '*.tf' -o -name '*.tofu'
   fail "the work tree holds an example's configuration"
 fi
 # //vpc/peering is outside modules/ and nothing in the module calls it: only
-# the tag's `submodules` makes it part of the library.
+# the tag's `subdirs` makes it part of the library.
 cp MODULE.bazel "${_TMPDIR}/MODULE.bazel"
-sed -i.bak '/submodules = \["peering"\],/d' MODULE.bazel
+sed -i.bak '/subdirs = \["peering"\],/d' MODULE.bazel
 rm MODULE.bazel.bak
-if grep -q 'submodules = ' MODULE.bazel; then
-  fail "couldn't remove submodules from the network module's tag"
+if grep -q 'subdirs = ' MODULE.bazel; then
+  fail "couldn't remove subdirs from the network module's tag"
 fi
 if out="$(bazel build //app 2>&1)"; then
   fail "//app built although the network module's tag doesn't name //vpc/peering"
 fi
 echo "${out}" >&2
-grep -q -F 'add "peering" to `submodules` on its tf_modules.module tag' <<<"${out}" ||
+grep -q -F 'add "peering" to `subdirs` on its tf_modules.module tag' <<<"${out}" ||
   fail "the failure doesn't name the attribute and the directory to add"
 mv "${_TMPDIR}/MODULE.bazel" MODULE.bazel
 bazel build //app >&2 || fail "//app doesn't build with the tag restored"

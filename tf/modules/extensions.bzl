@@ -214,7 +214,7 @@ def _tidy(repository_ctx, context):
     if they cycle to an ancestor, while symlinks outside the repository would
     make its contents depend on the host machine.
 
-    If `subdir` or a `submodules` directory is or lies under a directory
+    If `subdir` or a `subdirs` directory is or lies under a directory
     symlink, removing that symlink leaves nothing there to serve, so fetching
     fails naming the symlink target.
     """
@@ -223,10 +223,10 @@ def _tidy(repository_ctx, context):
     subdir = repository_ctx.attr.subdir
 
     # The directories the library must find in place: the module's own and
-    # each one the tag names in `submodules`.
+    # each one the tag names in `subdirs`.
     needed = [subdir] + [
         (subdir + "/" if subdir else "") + s.strip("/")
-        for s in repository_ctx.attr.submodules
+        for s in repository_ctx.attr.subdirs
     ]
     entries = walk(root)
     for entry in entries:
@@ -244,9 +244,9 @@ def _tidy(repository_ctx, context):
                 remedy = "declare and call the module by the directory the link leads to"
                 module_real = root_real + "/" + subdir if subdir else root_real
                 if subdir not in through:
-                    # `submodules` takes a directory below the module's own.
+                    # `subdirs` takes a directory below the module's own.
                     if within(target, module_real) and target != module_real:
-                        remedy = "name `{}` in `submodules` instead, and call that".format(target[len(module_real) + 1:])
+                        remedy = "name `{}` in `subdirs` instead, and call that".format(target[len(module_real) + 1:])
                     else:
                         remedy = "declare the directory the link leads to as a module of its own"
                 fail(("{}: `{}` is a symlink in the fetched files, to {}; rules_tofu keeps no symlinks to " +
@@ -320,8 +320,8 @@ def _scan(repository_ctx, submodules):
     args = [repository_ctx.path(_MODSCAN), "--self=" + repository_ctx.attr.label]
     for label, source in repository_ctx.attr.modules.items():
         args.append("--module={}={}".format(label, source))
-    for directory in repository_ctx.attr.submodules:
-        args.append("--submodule=" + directory)
+    for directory in repository_ctx.attr.subdirs:
+        args.append("--subdir=" + directory)
     for path in submodules:
         args.append("--git-submodule=" + path)
     args += [repository_ctx.path("."), repository_ctx.attr.subdir]
@@ -460,7 +460,7 @@ _tf_module_repo = repository_rule(
         # The module's directory in the fetched files.
         "subdir": attr.string(),
         # Directories below it that callers reach with `//<subdir>`.
-        "submodules": attr.string_list(),
+        "subdirs": attr.string_list(),
         # Every declared module: label -> source, for matching the calls this
         # module makes.
         "modules": attr.string_dict(),
@@ -529,7 +529,7 @@ _module_tag = tag_class(
             doc = "SHA256 digest of the archive. Required for archive sources and disallowed " +
                   "otherwise.",
         ),
-        "submodules": attr.string_list(
+        "subdirs": attr.string_list(
             doc = "Directories of the module, relative to it, that callers reach with " +
                   "`//<subdir>`, e.g. `[\"peering\"]`. Needed only for a directory outside " +
                   "`modules/` that the module does not call itself. Each must hold " +
@@ -607,8 +607,8 @@ def _resolve(tags, path):
     pinned = [t for t in tags if t.tag.commit or t.tag.sha256]
     return pinned[0] if pinned else tags[0]
 
-def _submodules(tags, chosen):
-    """The `submodules` of every tag that declares the module as `chosen` does.
+def _subdirs(tags, chosen):
+    """The `subdirs` of every tag that declares the module as `chosen` does.
 
     Git and archive tags for one module agree on its source. Registry tags may
     name other versions, where a directory need not exist: only those at the
@@ -618,7 +618,7 @@ def _submodules(tags, chosen):
         s: None
         for t in tags
         if t.tag.version == chosen.tag.version
-        for s in t.tag.submodules
+        for s in t.tag.subdirs
     }.keys())
 
 def _tf_modules_extension_impl(module_ctx):
@@ -675,7 +675,7 @@ def _tf_modules_extension_impl(module_ctx):
                 sha256 = fact.get("sha256", ""),
                 archive_type = location.type,
                 subdir = location.subdir,
-                submodules = _submodules(tags, chosen),
+                subdirs = _subdirs(tags, chosen),
             )
         elif parsed.kind == "git":
             commit = tag.commit
@@ -693,7 +693,7 @@ def _tf_modules_extension_impl(module_ctx):
                 sha256 = "",
                 archive_type = "",
                 subdir = parsed.subdir,
-                submodules = _submodules(tags, chosen),
+                subdirs = _subdirs(tags, chosen),
             )
         else:
             resolved[path] = struct(
@@ -706,7 +706,7 @@ def _tf_modules_extension_impl(module_ctx):
                 sha256 = tag.sha256,
                 archive_type = parsed.type,
                 subdir = parsed.subdir,
-                submodules = _submodules(tags, chosen),
+                subdirs = _subdirs(tags, chosen),
             )
 
     labels = {path: "@{}//{}".format(_HUB, path) for path in resolved}
@@ -724,7 +724,7 @@ def _tf_modules_extension_impl(module_ctx):
             sha256 = r.sha256,
             archive_type = r.archive_type,
             subdir = r.subdir,
-            submodules = r.submodules,
+            subdirs = r.subdirs,
             modules = declared,
         )
 
@@ -778,7 +778,7 @@ submodules are not fetched.
 
 Each generated `tf_library` lists as `srcs` the configuration files of the
 module's root, its `modules/` subdirectories, directories it calls itself and
-directories named in `submodules`, and carries the providers they require.
+directories named in `subdirs`, and carries the providers they require.
 Non-configuration files are `data`. Configuration files in other directories,
 such as examples, are left out and cannot be called. External modules called
 transitively must also be declared with `tf_modules.module`.

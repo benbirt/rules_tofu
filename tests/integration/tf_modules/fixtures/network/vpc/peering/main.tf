@@ -1,5 +1,5 @@
 # A submodule outside modules/ that the module never calls: part of the
-# library only because the tag names it in `submodules`. The library then
+# library only because the tag names it in `subdirs`. The library then
 # carries its provider.
 terraform {
   required_providers {

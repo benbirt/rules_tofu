@@ -292,11 +292,11 @@ func TestTagFor(t *testing.T) {
 	}
 }
 
-// A directory named by --submodule is served like one under modules/: its
+// A directory named by --subdir is served like one under modules/: its
 // providers and calls are the library's, and so is what it reaches by a
 // local path. One that leaves the module or holds no configuration is an
 // error, since a caller's build could not load it.
-func TestScan_Submodule(t *testing.T) {
+func TestScan_Subdir(t *testing.T) {
 	repo := writeTree(t, map[string]string{
 		"vpc/main.tf":         ``,
 		"vpc/peering/main.tf": "terraform {\n  required_providers {\n    time = {}\n  }\n}\n" + `module "routes" { source = "../routes" }`,
@@ -328,7 +328,7 @@ func TestScan_Submodule(t *testing.T) {
 		"/vpc":      `"/vpc" is not a directory below the module's own`,
 	} {
 		if _, err := scan(repo, "vpc", modules, "", []string{dir}, nil); err == nil || !strings.Contains(err.Error(), fragment) {
-			t.Errorf("submodule %q: got %v, want an error containing %q", dir, err, fragment)
+			t.Errorf("subdir %q: got %v, want an error containing %q", dir, err, fragment)
 		}
 	}
 }

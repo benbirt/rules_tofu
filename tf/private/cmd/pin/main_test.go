@@ -350,7 +350,7 @@ terraform {
   }
 }
 `)
-	// Outside modules/: in the library because its tag names it in submodules.
+	// Outside modules/: in the library because its tag names it in subdirs.
 	writeFile(t, filepath.Join(ext, "vpc/peering/main.tf"), `module "tools" { source = "github.com/acme/other//tools" }
 terraform {
   required_providers {
@@ -358,7 +358,7 @@ terraform {
   }
 }
 `)
-	// Named in submodules too, and called by nothing: its provider is on the
+	// Named in subdirs too, and called by nothing: its provider is on the
 	// library all the same, so it is locked.
 	writeFile(t, filepath.Join(ext, "vpc/uncalled/main.tf"), `terraform {
   required_providers {

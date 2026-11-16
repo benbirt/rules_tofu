@@ -254,10 +254,10 @@ Then `bazel shutdown` so the new startup flags take effect.
     globs (`_CONFIG_GLOBS`), so an uncalled example never reaches a work tree
     (issue #140). Files that a local path reaches outside `subdir` are in the
     root package, which exports them.
-  - Read `submodules` on `tf_modules.module` (`modscan --submodule`) for
+  - Read `subdirs` on `tf_modules.module` (`modscan --subdir`) for
     `//<subdir>` directories outside `modules/` that the module does not call
     itself. Combine the tags that declare the module, for a registry module
-    only those at the selected version (`_submodules`), so the root can drop a
+    only those at the selected version (`_subdirs`), so the root can drop a
     directory a newer version lacks. The generated library includes their
     configuration and providers (issue #76).
   - List dot-prefixed files with a configuration extension as `data` by name

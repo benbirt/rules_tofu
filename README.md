@@ -436,12 +436,12 @@ module's root, its `modules/` subdirectories and directories it calls itself,
 and carries the providers they require. Configuration files in other
 directories, such as examples, are left out and cannot be called. To call a
 `//<subdir>` outside `modules/` that the module does not call itself, name it
-in `submodules`, which adds it to the library:
+in `subdirs`, which adds it to the library:
 
 ```python
 tf_modules.module(
     source = "terraform-aws-modules/vpc/aws",
-    submodules = ["wrappers"],
+    subdirs = ["wrappers"],
     version = "5.8.1",
 )
 ```

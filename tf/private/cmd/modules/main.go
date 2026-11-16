@@ -54,7 +54,7 @@
 // carries the providers listed on it and its deps, checked from its own root
 // module; for a fetched module, modscan populates that list from its served
 // directories, which include each //<subdir> its tf_modules.module tag names
-// in submodules (issues #76 and #140).
+// in subdirs (issues #76 and #140).
 //
 // Strict deps (issue #135) checks the target's own_srcs against its direct
 // declarations. Files from deps are not re-checked here, even when
@@ -642,7 +642,7 @@ func moduleName(key string) string {
 // work tree at all. generated is whether tf_modules generated the dep: its
 // library holds the configuration of the module's root, its modules/
 // subdirectories, the directories it calls itself and those its tag names in
-// submodules, and of no other.
+// subdirs, and of no other.
 func checkProvided(workTree, dir, subdir string, generated bool) error {
 	if tfconfig.HasConfig(filepath.Join(workTree, filepath.FromSlash(dir))) {
 		return nil
@@ -654,7 +654,7 @@ func checkProvided(workTree, dir, subdir string, generated bool) error {
 	// only one outside it can be there upstream and missing here.
 	if generated && subdir != "modules" && !strings.HasPrefix(subdir, "modules/") {
 		return fmt.Errorf("has no configuration in %q. A fetched module's library leaves out directories outside modules/ "+
-			"that the module does not call itself: check the path, or add %q to `submodules` on its tf_modules.module tag", subdir, subdir)
+			"that the module does not call itself: check the path, or add %q to `subdirs` on its tf_modules.module tag", subdir, subdir)
 	}
 	if !isDir(workTree, dir) {
 		return fmt.Errorf("has no directory %q", subdir)

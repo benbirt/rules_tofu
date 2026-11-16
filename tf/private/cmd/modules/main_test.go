@@ -1026,7 +1026,7 @@ func TestBuild_GeneratedLibraryLacksDirectory(t *testing.T) {
 		name, subdir, want string
 		dep                dep
 	}{
-		{"outside modules/", "wrappers", `@tf_modules//net (module_source "git::https://example.com/net.git?ref=v1") has no configuration in "wrappers". A fetched module's library leaves out directories outside modules/ that the module does not call itself: check the path, or add "wrappers" to ` + "`submodules`" + ` on its tf_modules.module tag`, generated},
+		{"outside modules/", "wrappers", `@tf_modules//net (module_source "git::https://example.com/net.git?ref=v1") has no configuration in "wrappers". A fetched module's library leaves out directories outside modules/ that the module does not call itself: check the path, or add "wrappers" to ` + "`subdirs`" + ` on its tf_modules.module tag`, generated},
 		{"absent", "nowhere", `check the path, or add "nowhere" to`, generated},
 		{"below modules/", "modules/x", `has no .tf, .tf.json, .tofu or .tofu.json files in "modules/x"`, generated},
 		{"below modules/, absent", "modules/y", `has no directory "modules/y"`, generated},
