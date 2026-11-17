@@ -61,7 +61,7 @@ jobs:
       # from). With the default key (MODULE.bazel alone), a lockfile-only
       # update or a provider fetched by the integration tests was never saved.
       - name: Set up Bazel
-        uses: bazel-contrib/setup-bazel@0.19.1
+        uses: bazel-contrib/setup-bazel@0.19.2
         with:
           bazelisk-cache: true
           cache-save: ${{ github.ref == 'refs/heads/main' }}
@@ -187,7 +187,7 @@ jobs:
           fi
 
       - name: Set up Bazel
-        uses: bazel-contrib/setup-bazel@0.19.1
+        uses: bazel-contrib/setup-bazel@0.19.2
         with:
           bazelisk-cache: true
           cache-save: ${{ github.ref == 'refs/heads/main' }}
