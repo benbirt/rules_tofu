@@ -3,7 +3,7 @@
 `TfProviderInfo` carries a vendored OpenTofu provider's per-platform packages
 and optional lock file. `TfLibraryInfo` carries a `tf_library`'s files,
 providers and `module_source` metadata to downstream libraries, deploys and
-tests. `TfDeployInfo` gives the deploy's `.plan`, `.apply` and `.destroy`
+tests, with the outputs of its own checks, which theirs wait for. `TfDeployInfo` gives the deploy's `.plan`, `.apply` and `.destroy`
 runners and any `tf_test` targeting the deploy everything needed to stage and
 run `tofu`.
 """
@@ -48,6 +48,12 @@ TfLibraryInfo = provider(
         "package_dir": "string: the work-tree directory of this library's package, `<workspace_root>/<package>`; " +
                        "the root module directory when the library is tested. Carried here so a `tf_test` " +
                        "reads it from the provider, which an `alias` passes through unchanged.",
+        "modules_manifest": "File: this library's own module manifest, written once its strict-deps check passes. " +
+                            "An input of each direct dependant's manifest action, which reads none of it: the " +
+                            "dependant's files are checked only after this library's.",
+        "validate_stamp": "File: the empty file written when this library validates, which it does only after " +
+                          "its own deps have. An input of each direct dependant's validate action, so a library " +
+                          "that does not validate fails as itself and nothing that depends on it is built.",
     },
 )
 
@@ -75,5 +81,10 @@ TfDeployInfo = provider(
                 "relative path from `tf_test`.",
         "tfvars_content": "string: the `rules_tofu.auto.tfvars.json` rendered from `vars`.",
         "var_files": "list[File]: the `var_files`, in declaration order.",
+        "stamps": "list[File]: the empty files written when the deploy's checks pass: `tofu validate`, which runs " +
+                  "only after the deps have validated and the `var_files` have been checked, and that " +
+                  "duplicate-variable check when there are `var_files`. The launchers carry them in their " +
+                  "runfiles and default outputs, and a `tf_test` of the deploy requires them, so neither " +
+                  "runs a deploy that does not validate.",
     },
 )

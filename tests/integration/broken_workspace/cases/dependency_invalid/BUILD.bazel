@@ -1,0 +1,55 @@
+load("@rules_tofu//tf:defs.bzl", "tf_deploy", "tf_library", "tf_test")
+
+# A target is built only after its dependencies' own checks pass (issue
+# #143). Each target here is sound in itself and depends on a library that is
+# not, so building it alone must fail with the dependency's action as the one
+# that failed: `TofuValidate` or `TofuModules` of the dependency, never of
+# the target. Keep the dependencies broken.
+
+# main.tf calls ./dep, which does not validate.
+tf_library(
+    name = "dependant",
+    srcs = ["main.tf"],
+    fmt_test = False,
+    deps = ["//cases/dependency_invalid/dep"],
+)
+
+# The same through a deploy's launcher: `bazel run` must not get as far as
+# running tofu.
+tf_deploy(
+    name = "deploy",
+    srcs = ["main.tf"],
+    allow_ephemeral_state = True,
+    fmt_test = False,
+    deps = ["//cases/dependency_invalid/dep"],
+)
+
+# A library whose root module is empty, so it validates whatever is in its
+# deps: nothing but the dependency's own action can fail.
+tf_library(
+    name = "bundle",
+    deps = ["//cases/dependency_invalid/dep"],
+)
+
+# A test of a sound module, with a helper in deps that does not validate.
+tf_library(
+    name = "sound",
+    srcs = ["sound.tf"],
+    fmt_test = False,
+)
+
+tf_test(
+    name = "test_helper",
+    srcs = ["sound.tftest.hcl"],
+    fmt_test = False,
+    module = ":sound",
+    deps = ["//cases/dependency_invalid/dep"],
+)
+
+# undeclared fails its strict-deps check, in the manifest action that runs
+# before validation.
+tf_library(
+    name = "manifest_dependant",
+    fmt_test = False,
+    deps = ["//cases/dependency_invalid/undeclared"],
+)

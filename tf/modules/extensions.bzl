@@ -424,10 +424,12 @@ tf_library(
     module_source = {source},
     module_version = {version},
     providers = {providers},
+    tf_modules_label = {label},
     visibility = ["@{hub}//:__subpackages__"],
     deps = {deps},
 )
 """.format(
+            label = repr(attr.label),
             name = repr(_MODULE_TARGET),
             srcs = repr(srcs),
             data = " + ".join(data),

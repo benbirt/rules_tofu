@@ -1,0 +1,19 @@
+load("@rules_tofu//tf:defs.bzl", "tf_library", "tf_test")
+
+package(default_visibility = ["//cases/dependency_invalid:__pkg__"])
+
+# main.tf references `var.does_not_exist`, which `tofu validate` rejects.
+tf_library(
+    name = "dep",
+    srcs = ["main.tf"],
+    fmt_test = False,
+)
+
+# A test of a module that does not validate fails as the module, before the
+# test's own work tree is validated.
+tf_test(
+    name = "test",
+    srcs = ["main.tftest.hcl"],
+    fmt_test = False,
+    module = ":dep",
+)

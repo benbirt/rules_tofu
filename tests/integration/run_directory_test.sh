@@ -14,6 +14,9 @@
 #      `bazel run` sets) finds that state and destroys the resource: the
 #      launchers are ordinary executables sharing one run directory.
 #   3. `bazel run //app:deploy.plan` plans against the same, now empty, state.
+#   4. The deploy's default outputs are the stamps of its checks alone, not
+#      its work tree and provider packages (issue #156), and each launcher's
+#      include them beside the script (issue #143).
 
 set -euo pipefail
 
@@ -54,6 +57,20 @@ echo "--- 3. plan against the same state ---" >&2
 out="$(bazel run //app:deploy.plan 2>&1)" || fail "the plan failed: ${out}"
 echo "${out}" >&2
 grep -q -F '1 to add' <<<"${out}" || fail "the plan didn't see the destroyed resource as one to add"
+
+echo "--- 4. default outputs ---" >&2
+files="$(bazel cquery --output=files //app:deploy 2>/dev/null)" || fail "cquery of //app:deploy failed"
+echo "${files}" >&2
+grep -q -F '/app/deploy.validate.stamp' <<<"${files}" || fail "the deploy's default outputs lack its validate stamp"
+if grep -v '\.stamp$' <<<"${files}" | grep -q .; then
+  fail "the deploy's default outputs hold more than the stamps of its checks"
+fi
+for command in plan apply destroy; do
+  files="$(bazel cquery --output=files "//app:deploy.${command}" 2>/dev/null)" || fail "cquery of //app:deploy.${command} failed"
+  echo "${files}" >&2
+  grep -q -F "/app/deploy.${command}.sh" <<<"${files}" || fail "the ${command} launcher's default outputs lack its script"
+  grep -q -F '/app/deploy.validate.stamp' <<<"${files}" || fail "the ${command} launcher's default outputs lack the deploy's validate stamp"
+done
 
 # The nested server would otherwise live until the test's process group is
 # killed.

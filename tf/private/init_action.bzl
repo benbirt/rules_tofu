@@ -2,6 +2,10 @@
 
 `tf_library`, `tf_deploy` and `tf_test` call `tf_init_validate` and include its
 stamp in `DefaultInfo.files`, so `bazel build :foo` runs cached validation.
+The stamp is also an input of whatever uses the target: the validate actions of
+its dependants, and the runfiles of a deploy's launchers and of a test. So a
+target is validated only after its dependencies have been, and a broken
+dependency fails as itself (issue #143).
 
 `-plugin-dir` is always passed, keeping `tofu init` offline whether or not
 `required_providers` is declared. It points at the sibling plugin tree from
@@ -21,8 +25,9 @@ fetch when a call's `source` or `version` does not match.
 """
 
 load("//toolchain:toolchain.bzl", "TOOLCHAIN_TYPE")
+load(":work_tree.bzl", "display_label")
 
-def tf_init_validate(ctx, work_tree_files, work_tree_root, package_dir, plugin_tree_root, modules_manifest, lock = None, test_dir = None):
+def tf_init_validate(ctx, work_tree_files, work_tree_root, package_dir, plugin_tree_root, modules_manifest, required_stamps, lock = None, test_dir = None, fetched_module = None):
     """Emit a build-time `tofu init -backend=false` + `tofu validate` action.
 
     Args:
@@ -39,6 +44,11 @@ def tf_init_validate(ctx, work_tree_files, work_tree_root, package_dir, plugin_t
           `-plugin-dir` so init runs offline.
       modules_manifest: File, the `.terraform/modules/modules.json` recording
           every module call (see `modules_manifest` in work_tree.bzl).
+      required_stamps: list[File], the stamps of the checks that must pass
+          before this one runs: the validate stamps of the rule's direct
+          dependencies, each of which required its own, and a deploy's
+          duplicate-variable stamp. They are inputs that the action never
+          reads.
       lock: optional File, the `.terraform.lock.hcl` pinning the providers
           (see `provider_lock` in work_tree.bzl).
       test_dir: for a `tf_test`, the test files' directory relative to
@@ -46,6 +56,9 @@ def tf_init_validate(ctx, work_tree_files, work_tree_root, package_dir, plugin_t
           the test files are checked too; "" when they are in `package_dir`
           itself, which `tofu` reads without being told. None for a rule that
           has no test files.
+      fetched_module: for a library that `tf_modules` generated, its
+          `@tf_modules//<path>` label; a failure then says that the module
+          does not validate as fetched. None for any other target.
 
     Returns:
       File: a stamp file declared as an action output.
@@ -63,7 +76,10 @@ def tf_init_validate(ctx, work_tree_files, work_tree_root, package_dir, plugin_t
     # $TMPDIR, whereas darwin-sandbox and local execution share the host's and
     # clean nothing up (issue #90).
     ctx.actions.run_shell(
-        inputs = depset(direct = [tofu.binary, modules_manifest] + ([lock] if lock else []), transitive = [work_tree_files]),
+        inputs = depset(
+            direct = [tofu.binary, modules_manifest] + required_stamps + ([lock] if lock else []),
+            transitive = [work_tree_files],
+        ),
         outputs = [stamp],
         command = """\
 set -euo pipefail
@@ -78,6 +94,18 @@ STAMP=$5
 MODULES=$6
 LOCK=${7:-}
 TEST_DIR=${8:-}
+FETCHED_MODULE=${9:-}
+# A module that tf_modules fetched is validated on its own, as any library is,
+# before anything that depends on it. Nobody wrote it here, so say what it is
+# and what can be done.
+failed() {
+    if [ -n "$FETCHED_MODULE" ]; then
+        echo "rules_tofu: $FETCHED_MODULE, a module fetched by tf_modules, does not validate on its own," \\
+             'so nothing that depends on it is built. Declare a version of it that validates in its' \\
+             'tf_modules.module tag in MODULE.bazel, or have it fixed where it is published.' 1>&2
+    fi
+    exit 1
+}
 # The test files' directory, for a tf_test: `.` when it is the root module's
 # own, which tofu reads anyway, with its default, `tests`. A string, not an
 # array: an empty array fails under `set -u` in bash 3.
@@ -148,7 +176,7 @@ if ! "$TOFU" -chdir="$CWD" init -backend=false -input=false -get=false -plugin-d
              "each module call's source and version must match the tf_library in deps that provides it" \
              '(its module_source and module_version).' 1>&2
     fi
-    exit 1
+    failed
 fi
 if ! "$TOFU" -chdir="$CWD" validate ${TEST_FLAG:+"$TEST_FLAG"}; then
     # The one way an empty root module is not like any other: tofu sets up
@@ -158,7 +186,7 @@ if ! "$TOFU" -chdir="$CWD" validate ${TEST_FLAG:+"$TEST_FLAG"}; then
              'and `tofu init` installs no providers for one. If a provider is reported missing, give the' \\
              'root module a file whose `required_providers` names it.' 1>&2
     fi
-    exit 1
+    failed
 fi
 touch "$STAMP"
 """,
@@ -169,9 +197,12 @@ touch "$STAMP"
             plugin_tree_root,
             stamp.path,
             modules_manifest.path,
-        ] + [lock.path if lock else ""] + ([test_dir or "."] if test_dir != None else []),
+            lock.path if lock else "",
+            (test_dir or ".") if test_dir != None else "",
+            fetched_module or "",
+        ],
         env = {"TF_IN_AUTOMATION": "1"},
         mnemonic = "TofuValidate",
-        progress_message = "TofuValidate %{label}",
+        progress_message = "TofuValidate " + display_label(ctx),
     )
     return stamp

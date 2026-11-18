@@ -54,6 +54,9 @@
 #      fails during fetch naming the directory the link points to.
 #   9. Declaring a module by a //<subdir> (vendor/shared) inside a git
 #      submodule fails during fetch naming the submodule.
+#  10. Building //invalid_caller, which calls a fetched module that does not
+#      validate, fails in the module's own validate action, named by its
+#      @tf_modules label, and says what can be done about it (issue #143).
 
 set -euo pipefail
 
@@ -130,7 +133,7 @@ if command -v sha256sum >/dev/null; then
 else
   dns_sha256="$(shasum -a 256 "${FIXTURES}/dns.tar.gz" | cut -d' ' -f1)"
 fi
-for f in MODULE.bazel app/main.tf bad/main.tf; do
+for f in MODULE.bazel app/main.tf bad/main.tf invalid_caller/main.tf; do
   sed -i.bak \
     -e "s|path = \"../../..\"|path = \"${RULES_TOFU}\"|" \
     -e "s|@FIXTURES@|${FIXTURES}|g" \
@@ -289,5 +292,24 @@ fi
 echo "${out}" >&2
 grep -q -F '"/vendor/shared" is in the git submodule "vendor/shared" of the repository, and rules_tofu does not fetch git submodules' <<<"${out}" ||
   fail "the failure doesn't name the git submodule"
+
+echo "--- 10. a fetched module that does not validate ---" >&2
+cat >>MODULE.bazel <<EOF
+tf_modules.module(
+    name = "invalid",
+    source = "git::file://${FIXTURES}/network.git//invalid?ref=v1.0.0",
+)
+EOF
+if out="$(bazel build //invalid_caller 2>&1)"; then
+  fail "//invalid_caller built, but the fetched module it calls does not validate"
+fi
+echo "${out}" >&2
+grep -q -F 'TofuValidate @tf_modules//invalid failed' <<<"${out}" ||
+  fail "the failing action is not the fetched module's validation, named by its @tf_modules label"
+grep -q -F '@tf_modules//invalid, a module fetched by tf_modules, does not validate on its own' <<<"${out}" ||
+  fail "the failure doesn't say that the fetched module itself does not validate"
+if grep -q -F 'TofuValidate //invalid_caller' <<<"${out}"; then
+  fail "//invalid_caller was validated although the module it depends on does not validate"
+fi
 
 echo "OK: tf_modules fetched git, archive and registry modules, pinned by commit" >&2

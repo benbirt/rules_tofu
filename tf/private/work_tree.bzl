@@ -139,7 +139,7 @@ def check_has_configuration(ctx, entries):
     fail(("`{label}` has no configuration file in its root module's directory, {dir}: there is nothing " +
           "to deploy, and tofu refuses to plan it. `deps`, and files in subdirectories, are only reached " +
           "by `module` blocks in files of that directory: add `srcs` there that call them.").format(
-        label = _display_label(ctx.label),
+        label = display_label(ctx),
         dir = "`{}/`".format(root) if root else "the workspace root",
     ))
 
@@ -421,8 +421,11 @@ def modules_manifest(ctx, work_tree_outputs, infos, providers_depset, strict, sr
       ctx: rule ctx. Must declare `_modules_bin` (cfg = "exec") on the rule.
       work_tree_outputs: list[File], the work tree's files (`materialize`).
       infos: the rule's deps, each a `TfLibraryInfo` or a struct with its
-          `module`, `modules` and `dirs` fields. The module under test of a
-          `tf_test` comes first.
+          `module`, `modules`, `dirs` and `modules_manifest` fields. The
+          module under test of a `tf_test` comes first. Their manifests are
+          inputs of the action, read by nothing: the rule's own files are
+          checked only once every dependency's have passed the same check
+          (issue #143).
       providers_depset: depset[TfProviderInfo], the providers in the rule's
           plugin tree.
       strict: direct dependencies allowed by strict-deps checks (`strict_deps`).
@@ -473,7 +476,7 @@ def modules_manifest(ctx, work_tree_outputs, infos, providers_depset, strict, sr
     args.add("--work-tree", work_tree_root(ctx))
     args.add("--root", root if root != None else package_dir(ctx.label))
     args.add("--modules", listing)
-    args.add("--label", _display_label(ctx.label))
+    args.add("--label", display_label(ctx))
     args.add_all(
         sorted({p.address: None for p in providers_depset.to_list()}.keys()),
         before_each = "--provider",
@@ -484,13 +487,22 @@ def modules_manifest(ctx, work_tree_outputs, infos, providers_depset, strict, sr
     args.add("--out", manifest)
     ctx.actions.run(
         executable = ctx.attr._modules_bin[DefaultInfo].files_to_run,
-        inputs = [listing] + work_tree_outputs,
+        inputs = [listing] + work_tree_outputs + [info.modules_manifest for info in infos],
         outputs = [manifest],
         arguments = [args],
         mnemonic = "TofuModules",
-        progress_message = "TofuModules %{label}",
+        progress_message = "TofuModules " + display_label(ctx),
     )
     return manifest
+
+def display_label(ctx):
+    """The target's label as users write it, for messages.
+
+    A library that `tf_modules` generated is named by its
+    `@tf_modules//<path>` label, which is the one BUILD files use: the
+    library itself is private to the hub.
+    """
+    return getattr(ctx.attr, "tf_modules_label", "") or _display_label(ctx.label)
 
 def _display_label(label):
     """`label` as users write it: `//pkg:name` in the main repository."""

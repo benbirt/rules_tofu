@@ -1,4 +1,4 @@
-load("@rules_tofu//tf:defs.bzl", "tf_library")
+load("@rules_tofu//tf:defs.bzl", "tf_deploy", "tf_library")
 
 # main.tf references `var.does_not_exist`, which `tofu validate` rejects
 # with "Reference to undeclared input variable". The build-time
@@ -6,5 +6,15 @@ load("@rules_tofu//tf:defs.bzl", "tf_library")
 tf_library(
     name = "bad",
     srcs = ["main.tf"],
+    fmt_test = False,
+)
+
+# The same file as a deploy's root module: its launchers require its
+# validation, so `bazel run` of one fails in the build and never runs tofu
+# (issue #143).
+tf_deploy(
+    name = "bad_deploy",
+    srcs = ["main.tf"],
+    allow_ephemeral_state = True,
     fmt_test = False,
 )

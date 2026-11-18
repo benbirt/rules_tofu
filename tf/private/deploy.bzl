@@ -67,6 +67,15 @@ def _tf_deploy_impl(ctx):
 
     work_tree_files = depset(direct = outputs)
 
+    var_files_check_stamp = _tf_check_var_files(
+        ctx,
+        vars_keys = sorted(ctx.attr.vars.keys()),
+        var_files = ctx.files.var_files,
+    )
+    var_files_check_stamps = [var_files_check_stamp] if var_files_check_stamp != None else []
+
+    # Validation waits for the deps' own and for the duplicate-variable
+    # check, so a deploy that validates has passed every check.
     validate_stamp = _tf_init_validate(
         ctx,
         work_tree_files = work_tree_files,
@@ -74,21 +83,17 @@ def _tf_deploy_impl(ctx):
         package_dir = _package_dir(ctx.label),
         modules_manifest = modules_manifest,
         plugin_tree_root = _plugin_tree_root(ctx),
+        required_stamps = [d[TfLibraryInfo].validate_stamp for d in ctx.attr.deps] + var_files_check_stamps,
         lock = lock,
     )
+    stamps = [validate_stamp] + var_files_check_stamps
 
-    var_files_check_stamp = _tf_check_var_files(
-        ctx,
-        vars_keys = sorted(ctx.attr.vars.keys()),
-        var_files = ctx.files.var_files,
-    )
-
-    default_files = [validate_stamp]
-    if var_files_check_stamp != None:
-        default_files.append(var_files_check_stamp)
-
+    # The stamps alone are the default outputs, as for a tf_library: the work
+    # tree and the provider packages beside it are inputs of the actions and
+    # launchers that read them, not something to hand to whoever builds the
+    # deploy (issue #156).
     return [
-        DefaultInfo(files = depset(direct = default_files, transitive = [work_tree_files])),
+        DefaultInfo(files = depset(direct = stamps)),
         TfDeployInfo(
             work_tree_files = work_tree_files,
             package_dir = _package_dir(ctx.label),
@@ -102,6 +107,7 @@ def _tf_deploy_impl(ctx):
             dirs = _own_dirs(ctx.files.srcs + ctx.files.data),
             tfvars_content = tfvars_content,
             var_files = ctx.files.var_files,
+            stamps = stamps,
         ),
     ]
 
@@ -175,7 +181,8 @@ def tf_deploy(name, srcs = None, deps = None, vars = None, var_files = None, dat
     Generated targets:
       - `:<name>`: materialises the work tree, checks for duplicate variable
         keys across `vars` and `var_files`, and runs
-        `tofu init -backend=false && tofu validate`.
+        `tofu init -backend=false && tofu validate` once the `deps` have
+        passed their own checks. The launchers below require it to build.
       - `:<name>.plan`: `bazel run` target that runs `tofu plan`, saving the
         plan file to `<state-dir>/tfplan`.
       - `:<name>.apply`: `bazel run` target that runs a fresh `tofu apply`

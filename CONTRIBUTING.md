@@ -49,7 +49,13 @@ bazel test //...
    lock file's `zh:` hashes.
 2. Building validates. `bazel build` on any `tf_library`, `tf_deploy` or
    `tf_test` target runs `tofu init -backend=false` and `tofu validate` (with
-   the test directory for `tf_test`). Do not bypass or defer this.
+   the test directory for `tf_test`). Do not bypass or defer this. Building a
+   target also requires the checks of everything it depends on to pass first:
+   each target's validate stamp is an input of its direct dependants' validate
+   actions, of a deploy's `.plan`, `.apply` and `.destroy` launchers (runfiles
+   and default outputs) and of a `tf_test`'s runfiles, and its module manifest
+   is an input of its direct dependants' manifest actions. Libraries generated
+   by `tf_modules` are no exception.
 3. Nothing under `tf/private/` is public API. Downstream modules load only
    `@rules_tofu//tf:defs.bzl`, `@rules_tofu//tf/providers:extensions.bzl`,
    `@rules_tofu//tf/modules:extensions.bzl`,

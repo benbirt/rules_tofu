@@ -161,6 +161,28 @@ arguments after `--`, or passed directly to the `.sh` script, are forwarded to
 only on the files in `srcs`, including those in subdirectories; other files in
 the package are left alone.
 
+### Build order
+
+A target is checked only after everything it depends on has passed its own
+checks. With `//net` in the `deps` of `//app`, `bazel build //app` validates
+`//net` first. If `//net` is broken, the build fails in `//net`'s action with
+`//net`'s error, and `//app` is not validated:
+
+```
+ERROR: net/BUILD.bazel:3:11: TofuValidate //net:net failed: (Exit 1): bash failed: error executing TofuValidate command ...
+```
+
+What runs a target waits for its checks in the same way:
+
+- `bazel run` on `:name.plan`, `:name.apply` or `:name.destroy`, and
+  `bazel build` on one to run its script directly, first validate the deploy
+  and check its `var_files` for duplicate keys.
+- `bazel test` on a `tf_test` runs `tofu test` only once the test's work tree
+  validates, which waits for `module` and `deps`.
+
+On a cold build, a chain of `deps` validates one link at a time; the results are
+cached.
+
 ### Strict dependencies
 
 Each target lists the providers and modules that its own `srcs` use.
@@ -449,6 +471,12 @@ tf_modules.module(
 External modules called transitively must also be declared with
 `tf_modules.module`.
 
+A fetched module is validated like any other library: on its own, in its root
+directory, before anything that depends on it (see [Build order](#build-order)).
+One that does not validate fails the build in its own action, named by its
+`@tf_modules` label, even if callers use only a `//<subdir>` of it. Declare a
+version that validates, or have the module fixed where it is published.
+
 #### Keeping modules up to date
 
 Renovate updates registry modules in `MODULE.bazel` with a regex manager paired
@@ -690,7 +718,12 @@ packages into `bazel-bin/<pkg>/<name>.plugins/` and write the module manifest to
 scratch directory, installs that manifest at
 `<pkg>/.terraform/modules/modules.json`, and runs
 `tofu init -backend=false -get=false -plugin-dir=... && tofu validate` as a
-cached action.
+cached action, which writes the empty `bazel-bin/<pkg>/<name>.validate.stamp`.
+A `tf_deploy` with `var_files` also writes `<name>.var_files_check.stamp` when
+no variable is set twice. Those stamps are a target's only default outputs: the
+work tree and plugin tree are built for the actions and launchers that read
+them. Each stamp is an input of the dependants' validation and of the launchers,
+which is what orders the build (see [Build order](#build-order)).
 
 `.plan`, `.apply` and `.destroy` locate their runfiles and state directory from
 `$0` and mirror the work tree as symlinks into
