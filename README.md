@@ -152,8 +152,6 @@ relative to its own path, so do not copy or symlink the script elsewhere. Extra
 arguments after `--`, or passed directly to the `.sh` script, are forwarded to
 `tofu` in the deploy's shared run directory. See [How it works](#how-it-works).
 
-For formatting, see [Formatting](#formatting).
-
 ### Strict dependencies
 
 Each target lists the providers and modules that its own `srcs` use.
@@ -633,38 +631,19 @@ run "plans_a_subnet_per_name" {
 
 ## Formatting
 
-`rules_tofu` generates no format targets because `tofu fmt` formats a source
-tree by itself.
-
-### `tofu fmt`
-
-Run the pinned [`@rules_tofu//tofu`](#running-tofu) binary at the workspace
-root:
+`rules_tofu` generates no format targets. Run the pinned binary via
+[`@rules_tofu//tofu`](#running-tofu) at the workspace root:
 
 ```sh
 bazel run @rules_tofu//tofu -- fmt -recursive .
 bazel run @rules_tofu//tofu -- fmt -check -diff -recursive .
 ```
 
-The first command rewrites files. For CI, the second prints a diff per
-unformatted file and exits non-zero.
+`-recursive` does not follow directory symlinks, so Bazel's `bazel-*` links are
+skipped.
 
-- `tofu fmt` formats `.tf`, `.tofu`, `.tfvars`, `.tftest.hcl` and
-  `.tofutest.hcl` files in the directories given and, with `-recursive`, in all
-  directories below.
-- It formats every such file there, whether or not any target lists it.
-- `-recursive` does not follow directory symlinks, so Bazel's `bazel-*` links
-  are skipped.
-- It skips directories and files whose names start with a dot.
-- To exclude paths such as deliberately unformatted test fixtures, pass the
-  directories to format instead of `.`.
-
-### `rules_lint`
-
-In a workspace that formats several languages with one target, pass
-`@rules_tofu//tofu` to
-[`rules_lint`](https://github.com/bazel-contrib/rules_lint) as the `terraform`
-tool of `format_multirun`:
+With [`rules_lint`](https://github.com/bazel-contrib/rules_lint), pass
+`@rules_tofu//tofu` as the `terraform` tool:
 
 ```python
 # BUILD.bazel
@@ -676,14 +655,12 @@ format_multirun(
 )
 ```
 
-`bazel run //:format` rewrites files. For CI, `bazel run //:format.check` fails
-on an unformatted file.
-
-- `rules_lint` 2.9.1 passes only `.tf` and `.tfvars` files to the tool. `.tofu`,
-  `.tftest.hcl` and `.tofutest.hcl` files are neither formatted nor checked.
-  [`tofu fmt`](#tofu-fmt) covers them.
-- `rules_lint`'s documentation says `format_test` is "not recommended". For a
-  check under `bazel test` anyway, use only the form that reads the workspace:
+- `rules_lint` 2.9.1 passes only `.tf` and `.tfvars` files to the tool, so
+  `.tofu`, `.tftest.hcl` and `.tofutest.hcl` files are neither formatted nor
+  checked. The `tofu fmt` commands above cover them.
+- `rules_lint` calls `format_test` "not recommended". For a check under
+  `bazel test` anyway, use only the `workspace` form; `format_test(srcs = ...)`
+  passed with an unformatted file in `rules_lint` 2.9.1:
 
   ```python
   load("@aspect_rules_lint//format:defs.bzl", "format_test")
@@ -695,9 +672,6 @@ on an unformatted file.
       workspace = "//:MODULE.bazel",
   )
   ```
-
-  Do not use the sandboxed `format_test(srcs = ...)` form: with `rules_lint`
-  2.9.1 it passed with an unformatted file in `srcs`.
 
 ## The `tofu` binary
 

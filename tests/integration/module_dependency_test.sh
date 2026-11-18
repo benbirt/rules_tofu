@@ -21,11 +21,11 @@
 #      loads a module from the manifest, and checks that tofu-test.json is
 #      written to its test outputs. The runner passes `tofu test` a flag
 #      (-json-into) that OpenTofu before 1.12 lacks, and tf_test once ran on no
-#      version except the default (issue #125). Also checks that the test's
-#      runfiles manifest lists app_test.validate.stamp, ordering validation
-#      before tofu test (issue #143). `bazel test //empty:test` runs a tf_test
-#      of an empty root module whose run block loads the library beside it
-#      (issue #119).
+#      version except the default (issue #125). The step also checks that
+#      app_test's runfiles manifest lists app_test.validate.stamp, ordering
+#      validation before tofu test (issue #143). `bazel test //empty:test` runs
+#      a tf_test of an empty root module whose run block loads the library
+#      beside it (issue #119).
 #   6. Run the README's formatting commands at the workspace root; rules_tofu
 #      generates no format targets, so these commands are how a workspace is
 #      formatted. `bazel run @rules_tofu//tofu -- fmt -check -diff -recursive .`
