@@ -579,9 +579,11 @@ Set `allow_ephemeral_state = True` only for demos, throwaway sandboxes or
 state-bucket bootstrap. After bootstrapping a state bucket, add the remote
 `backend` block, run `tofu init -migrate-state` in the run directory, and remove
 `allow_ephemeral_state`. Adding a `backend` or `cloud` block while
-`terraform.tfstate` in the run directory is non-empty makes `tofu init` fail in
-every launcher because `-input=false` prevents the migration prompt; run
-`tofu init -migrate-state` in the run directory or delete that state file.
+`terraform.tfstate` in the run directory holds resources or outputs makes
+`tofu init` fail in every launcher because `-input=false` blocks the migration
+prompt. In the run directory, run `tofu init -migrate-state` for a `backend`
+block, or delete `terraform.tfstate`; `cloud` blocks reject `-migrate-state`, so
+run plain `tofu init` there and answer its prompt.
 
 ## Tests
 

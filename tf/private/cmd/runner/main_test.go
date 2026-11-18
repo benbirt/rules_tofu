@@ -674,9 +674,9 @@ func TestRunner_EphemeralState_UnreadableRecord(t *testing.T) {
 	}
 }
 
-// When tofu init fails and non-empty terraform.tfstate exists in the run
-// directory, the runner logs the state path and `tofu init -migrate-state`
-// because -input=false blocks OpenTofu's migration prompt.
+// When tofu init fails and terraform.tfstate in the run directory is non-zero
+// in size, the runner logs a conditional migration hint naming that file and
+// tofu init -migrate-state, covering -input=false blocking OpenTofu's prompt.
 func TestRunner_InitFailure_NamesLocalState(t *testing.T) {
 	const hint = "tofu init -migrate-state"
 	cmd, _, _ := setup(t, map[string]any{"region": "us-east-1"})

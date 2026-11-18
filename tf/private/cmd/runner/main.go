@@ -200,7 +200,7 @@ func run() error {
 			log.Print("if the provider versions in required_providers changed, run `bazel run @tf_providers//:pin` to update the lock file.")
 		}
 		if localState := filepath.Join(cwd, defaultStateFile); hasContent(localState) {
-			log.Printf("non-empty local state at %s: if you added a backend or cloud block, run `tofu init -migrate-state` in that directory or delete the state file.", localState)
+			log.Printf("if tofu needs approval for state migration from %s, in its directory run `tofu init -migrate-state` for a backend block or `tofu init` for a cloud block, or delete that file.", localState)
 		}
 		return fmt.Errorf("tofu init: %w", err)
 	}

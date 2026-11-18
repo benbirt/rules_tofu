@@ -179,7 +179,7 @@ deploy's srcs:
 (Any remote backend or a cloud {} block will do. A backend "local" block
 counts only when its path and workspace_dir are both absolute paths outside
 Bazel's output tree, and that state is still local to this machine.)
-With one present, the runner defers to it and this check no longer applies.
+With one present, this check no longer applies.
 
 %s`,
 		command, defaultStateFile, cwd, ephemeralExplanation, optInAdvice)
