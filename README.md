@@ -426,9 +426,9 @@ Every fetch is pinned:
   hashes.
 - Archive modules verify `sha256`.
 
-A module is fetched again only when its own pin changes. Declaring, removing or
-changing another module regenerates the `BUILD` files of the rest without
-fetching them.
+A module is re-fetched only when its own `source` or pin changes. Declaring,
+removing or changing another module, or changing `subdirs`, only regenerates
+`BUILD` files.
 
 Unpacking removes upstream Bazel files, `.git/`, `.terraform/`, lock files and
 auto-loaded `.tfvars` files. Symlinks to directories, missing targets or paths

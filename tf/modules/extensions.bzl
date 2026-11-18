@@ -215,12 +215,9 @@ def _tidy(repository_ctx, root):
     if they cycle to an ancestor, while symlinks outside the tree would make
     its contents depend on the host machine.
 
-    Returns the symlinks to directories that were removed, as a list of
-    `{"path": ..., "target": ...}`: where the link was and the directory it
-    led to, both relative to `root`, with `target` `"."` for `root` itself
-    and `None` for a directory outside it. A module whose `subdir` or
-    `subdirs` is or lies under one has nothing there to serve
-    (`_check_directories`).
+    Returns a list of `{"path": ..., "target": ...}` dicts recording removed
+    directory symlinks for `_check_directories`. Both paths are relative to
+    `root`. `target` is `"."` for `root` itself and `None` outside `root`.
     """
     root_real = str(root.realpath)
     entries = walk(root)
@@ -249,10 +246,10 @@ def _tidy(repository_ctx, root):
     return removed
 
 def _check_directories(repository_ctx, directory_symlinks, context):
-    """Fail if the module's directory or one of its `subdirs` was a symlink to a directory.
+    """Fail if `subdir` or `subdirs` is or lies under a directory symlink.
 
-    `_tidy` removed those symlinks when the files were fetched, so there is
-    nothing there to serve. The failure names where the link led.
+    `_tidy` removed directory symlinks from the fetched tree. The error names
+    where the link pointed and the remedy.
     """
     subdir = repository_ctx.attr.subdir
 
@@ -280,7 +277,7 @@ def _check_directories(repository_ctx, directory_symlinks, context):
               "directories, so {}").format(
             context,
             path,
-            {None: "a directory outside them", ".": "their root"}.get(target, target),
+            {None: "a directory outside them", ".": "their root directory"}.get(target, target),
             remedy,
         ))
 
@@ -300,17 +297,17 @@ def _dot_files(tree):
         found.append(entry.rel)
     return sorted(found)
 
-# In a module's files repository: the fetched files, and what the fetch found
-# that the files no longer show.
+# Layout of a module's files repository: the tidied source tree and the JSON
+# file recording git submodules and removed directory symlinks.
 _TREE = "tree"
 _METADATA = "metadata.json"
 
 def _tf_module_files_impl(repository_ctx):
-    """Fetch a module's files into `tree/` and tidy them.
+    """Fetch a module into `tree/`, tidy it and write `metadata.json`.
 
-    `metadata.json` records the paths of the fetched commit's git submodules,
-    which are not fetched, and the symlinks to directories that `_tidy`
-    removed. `_tf_module_repo` reads both.
+    `metadata.json` passes `_tf_module_repo` the commit's unfetched git
+    submodules and the directory symlinks `_tidy` removed. Every path in it
+    is relative to `tree/`, keeping host paths out of the cached repository.
     """
     attr = repository_ctx.attr
     context = "tf_modules.module `{}`".format(attr.source)
@@ -349,21 +346,21 @@ def _tf_module_files_impl(repository_ctx):
         executable = False,
     )
 
-    # A package for `_tf_module_repo` to name the metadata in; it has no
-    # targets.
+    # Empty root package so metadata.json can be named by label.
     repository_ctx.file("BUILD.bazel", "", executable = False)
 
-    # The files came from a git commit or an archive checked against `sha256`,
-    # so the attributes determine the contents.
+    # Every fetch is pinned by commit or sha256, so the rule's attributes
+    # determine its contents.
     return reproducible(repository_ctx)
 
-# A module's fetched files, and nothing that depends on any other module: the
-# attributes are the module's own pin, so declaring, removing or changing
-# another module fetches nothing here again (issue #157).
+# Fetches and tidies one module's files. Attributes carry only this module's
+# `source` and pin, not `subdir`, `subdirs` or `modules`. Changing `subdirs`,
+# or declaring, removing or changing another module, never re-fetches it
+# (issue #157).
 _tf_module_files = repository_rule(
     implementation = _tf_module_files_impl,
     attrs = {
-        # For messages.
+        # Used in error messages.
         "source": attr.string(mandatory = True),
         "kind": attr.string(mandatory = True, values = ["git", "archive"]),
         "remote": attr.string(),
@@ -375,7 +372,7 @@ _tf_module_files = repository_rule(
 )
 
 def _child(directory, rel):
-    """The `path` at the slash-separated `rel` below `directory`, itself for ""."""
+    """Path at slash-separated `rel` below `directory`, or `directory` for `""`."""
     return directory.get_child(*rel.split("/")) if rel else directory
 
 def _scan(repository_ctx, tree, submodules):
@@ -405,13 +402,13 @@ def _provider_label(source, context):
     return "@{}//{}".format(_PROVIDERS_HUB, rest)
 
 def _link_files(repository_ctx, tree, package):
-    """Make the fetched files at `tree` this repository's, by symlinks.
+    """Symlink the fetched files under `tree` into this repository.
 
-    The root and each directory on the way down to `package` are directories
-    of this repository, since the generated BUILD files are written at both
-    ends: a BUILD file written through a symlink would land in the files
-    repository, which other output bases share. Everything else in them is a
-    symlink to its counterpart in `tree`.
+    The repository root and each directory on the path to `package` are real
+    directories. Every other entry in those directories is a symlink to its
+    counterpart in `tree`. Generated `BUILD.bazel` files are written at the
+    root and in `package`. Writing one through a symlinked directory would
+    land in the files repository, which other output bases share.
     """
     parts = package.split("/") if package else []
     own = [""] + ["/".join(parts[:i + 1]) for i in range(len(parts))]
@@ -425,8 +422,8 @@ def _tf_module_repo_impl(repository_ctx):
     attr = repository_ctx.attr
     context = "tf_modules.module `{}`".format(attr.source)
 
-    # Reading the metadata makes this repository depend on the module's
-    # files: it is generated again when they are fetched again.
+    # Reading `files` records a dependency on the files repository, so Bazel
+    # regenerates this repository whenever the files are re-fetched.
     metadata_path = repository_ctx.path(attr.files)
     metadata = json.decode(repository_ctx.read(metadata_path))
     tree = metadata_path.dirname.get_child(_TREE)
@@ -530,21 +527,20 @@ tf_library(
         executable = False,
     )
 
-    # Not `reproducible`: the symlinks lead into this output base, and
-    # generating the repository fetches nothing.
+    # Omit `reproducible`: `_link_files` writes absolute symlinks into this
+    # output base. Regenerating this repository downloads nothing.
 
-# A module's library: BUILD files over symlinks to the files that
-# `_tf_module_files` fetched. Which of the declared modules its calls reach
-# is only known once the files are there, so it takes them all, and is
-# generated again whenever one is declared, removed or changed. That reads
-# the files and downloads nothing.
+# Generates a module's BUILD files over symlinks to its `_tf_module_files`
+# tree. Taking `modules`, `subdir` and `subdirs` here means Bazel regenerates
+# this repository when `subdirs` changes or a module is declared, removed or
+# changed. That scans the local tree and downloads nothing.
 _tf_module_repo = repository_rule(
     implementation = _tf_module_repo_impl,
     attrs = {
         "source": attr.string(mandatory = True),
         "version": attr.string(),
         "label": attr.string(mandatory = True),
-        # `metadata.json` of the module's `_tf_module_files`.
+        # metadata.json in the module's `_tf_module_files` repository.
         "files": attr.label(mandatory = True),
         # The module's directory in the fetched files.
         "subdir": attr.string(),
@@ -801,9 +797,8 @@ def _tf_modules_extension_impl(module_ctx):
     labels = {path: "@{}//{}".format(_HUB, path) for path in resolved}
     declared = {labels[path]: r.source for path, r in resolved.items()}
     for path, r in resolved.items():
-        # Two repositories for each module, so that the list of declared
-        # modules, which every library is generated from, is no part of what
-        # any fetch depends on (issue #157).
+        # Split fetching from BUILD generation so `declared`, `subdir` and
+        # `subdirs` are not inputs to `_tf_module_files` (issue #157).
         _tf_module_files(
             name = files_repo_name(path),
             source = r.source,
@@ -866,9 +861,9 @@ Every fetch is pinned:
     Fetching git modules requires `git` on `PATH`.
   - Archive modules verify `sha256`.
 
-A module is fetched again only when its own pin changes. Declaring, removing or
-changing another module regenerates the `BUILD` files of the rest without
-fetching them.
+A module is re-fetched only when its own `source` or pin changes. Declaring,
+removing or changing another module, or changing `subdirs`, only regenerates
+`BUILD` files.
 
 Unpacking deletes upstream Bazel files: `.bazelignore`, `BUILD`, `BUILD.bazel`,
 `MODULE.bazel`, `REPO.bazel`, `WORKSPACE` and `WORKSPACE.bazel`. It also

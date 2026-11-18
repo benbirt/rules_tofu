@@ -43,10 +43,9 @@ def repo_name(path):
     return "tf_modules_" + path.replace("/", "_")
 
 def files_repo_name(path):
-    """The repository holding a module's fetched files: `tf_module_files_` plus its hub path, `/` as `_`.
+    """The repository for a module's files: `tf_module_files_` plus its hub path, `/` as `_`.
 
-    No module's `repo_name` starts with `tf_module_files_`, so the two never
-    collide.
+    Cannot collide with `repo_name`, whose names start with `tf_modules_`.
     """
     return "tf_module_files_" + path.replace("/", "_")
 
