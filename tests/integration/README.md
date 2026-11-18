@@ -94,8 +94,9 @@ the steps.
 `fixtures/network` into a tagged git repository and `fixtures/dns` into an
 archive at test time alongside `cloudposse/label/null` from the OpenTofu
 registry. It covers offline planning, tree tidying, commit and registry facts,
-`from_lock` with `pin`, and fetch-time error diagnostics; see the header of
-`tf_modules_test.sh` for the steps.
+`from_lock` with `pin`, fetch-time error diagnostics, and adding a module
+without re-fetching existing ones; see the header of `tf_modules_test.sh` for
+the steps.
 
 `run_directory/` (`run_directory_test`, driven by `run_directory_test.sh`)
 exercises `tf_deploy` launchers under `bazel run` and direct execution from
