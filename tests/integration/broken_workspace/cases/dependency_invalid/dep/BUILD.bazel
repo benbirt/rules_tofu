@@ -1,0 +1,18 @@
+load("@rules_tofu//tf:defs.bzl", "tf_library", "tf_test")
+
+package(default_visibility = ["//cases/dependency_invalid:__pkg__"])
+
+# Broken library for //cases/dependency_invalid; keep it invalid.
+tf_library(
+    name = "dep",
+    srcs = ["main.tf"],
+    fmt_test = False,
+)
+
+# Fails in :dep's validation before the test work tree is validated.
+tf_test(
+    name = "test",
+    srcs = ["main.tftest.hcl"],
+    fmt_test = False,
+    module = ":dep",
+)
