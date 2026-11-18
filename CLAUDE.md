@@ -116,14 +116,15 @@ Then `bazel shutdown` so the new startup flags take effect.
   `_cached_registry` also rejects a registry fact whose `location` fails to
   parse or doesn't match its `commit` or `sha256` pin.
 - End download repository rules (`_tofu_download`, `_tf_provider_download`,
-  `_tf_module_repo`) with `return reproducible(repository_ctx)`
+  `_tf_module_files`) with `return reproducible(repository_ctx)`
   (`tf/private/repo_metadata.bzl`). Bazel 9's repository contents cache then
   shares fetches across output bases, so the nested integration tests fetch
   each provider, `tofu` binary and module once per machine. Declaring it is
   sound only while every download those rules make is checked against a digest
   carried by their attributes or the lock: the registry supplies URLs, never
   contents. Any rule that fetches anything unpinned must stop declaring it. The
-  cheap hub repositories omit it.
+  cheap hub repositories omit it, and so does `_tf_module_repo`, whose symlinks
+  lead into one output base.
 - Silently ignore a dependency's `from_lock` (`README.md`, "Providers"): a
   dependency carries one from being developed as a root module of its own,
   while in a consumer workspace the root owns provider versions and libraries
@@ -246,6 +247,21 @@ Then `bazel shutdown` so the new startup flags take effect.
 - In `tf_modules` (`tf/modules/extensions.bzl`; `README.md`, "Modules"):
   - Generate `:_rules_tofu_module` aliased at `@tf_modules//<path>`, and keep
     per-module repositories private.
+  - Keep two repositories per module (issue #157; `tf_modules_test.sh`, step
+    10). `_tf_module_files` (`tf_module_files_<name>`) fetches and tidies into
+    `tree/` and takes only the module's own pin as attributes. `_tf_module_repo`
+    (`tf_modules_<name>`) runs `modscan` over that tree, symlinks it in
+    (`_link_files`) and writes the `BUILD` files. Only the second takes the
+    list of declared modules (`modules`) or `subdir` and `subdirs`: an
+    attribute on the first that changes with another tag makes Bazel fetch
+    every module again whenever one is declared, removed or changed.
+  - Pass what tidying learnt and the files no longer show, the git submodules
+    and the removed directory symlinks, through `metadata.json`, with paths
+    relative to `tree/` only: the files repository is shared across output
+    bases.
+  - Keep the root and each directory down to `subdir` real directories in
+    `_tf_module_repo`. A `BUILD.bazel` written through a symlink would land in
+    the shared files repository.
   - When `subdir` is non-empty, generate a root `//:_rules_tofu_files`
     filegroup and add it to `data` so relative paths leading outside `subdir`
     resolve.

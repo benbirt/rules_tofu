@@ -54,6 +54,10 @@
 #      fails during fetch naming the directory the link points to.
 #   9. Declaring a module by a //<subdir> (vendor/shared) inside a git
 #      submodule fails during fetch naming the submodule.
+#  10. Adding a tag for another module and building //app again fetches none
+#      of the modules already there: Bazel leaves the repositories holding
+#      their files alone, and generates the network module's library again
+#      from the new list of declared modules (issue #157).
 
 set -euo pipefail
 
@@ -289,5 +293,42 @@ fi
 echo "${out}" >&2
 grep -q -F '"/vendor/shared" is in the git submodule "vendor/shared" of the repository, and rules_tofu does not fetch git submodules' <<<"${out}" ||
   fail "the failure doesn't name the git submodule"
+
+echo "--- 10. another tag fetches no other module again ---" >&2
+bazel build //app >&2 || fail "//app doesn't build before the tag is added"
+external="$(bazel info output_base)/external"
+# What tells that Bazel ran a repository's rule again: `@<repository>.marker`
+# beside the repository, which it rewrites each time, and, where the rule
+# declares its contents reproducible and Bazel has a repository contents cache
+# (Bazel 9), the repository itself, a symlink into that cache which it makes
+# again. It touches neither while the repository is up to date. `find` does
+# not follow symlinks, so `-newer` reads the time of the link.
+files_repos() {
+  find "${external}" -maxdepth 1 -name '*tf_module_files_*' "$@" | sort
+}
+files_before="$(files_repos)"
+for module in network dns cloudposse_label_null; do
+  grep -q "tf_module_files_${module}\$" <<<"${files_before}" ||
+    fail "can't find the repository of the ${module} module's files among: '${files_before}'"
+done
+# File systems keep times to the second at worst.
+sleep 2
+touch "${_TMPDIR}/before_tag"
+sleep 2
+cat >>MODULE.bazel <<EOF
+tf_modules.module(
+    name = "shared",
+    source = "git::file://${FIXTURES}/network.git//shared?ref=v1.0.0",
+)
+EOF
+bazel build //app >&2 || fail "//app doesn't build with one more tag"
+fetched_again="$(files_repos -newer "${_TMPDIR}/before_tag")"
+[[ -z "${fetched_again}" ]] ||
+  fail "adding a tag fetched modules that did not change again: ${fetched_again}"
+# The check above would pass if a later Bazel left no such trace. The network
+# module's library is generated from the list of declared modules, so its
+# marker file must be new.
+find "${external}" -maxdepth 1 -name '@*tf_modules_network.marker' -newer "${_TMPDIR}/before_tag" | grep -q . ||
+  fail "the network module's library was not generated again: does Bazel still rewrite a marker file when it runs a repository rule?"
 
 echo "OK: tf_modules fetched git, archive and registry modules, pinned by commit" >&2

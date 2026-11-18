@@ -42,6 +42,14 @@ def repo_name(path):
     """The repository holding a module: `tf_modules_` plus its hub path, `/` as `_`."""
     return "tf_modules_" + path.replace("/", "_")
 
+def files_repo_name(path):
+    """The repository holding a module's fetched files: `tf_module_files_` plus its hub path, `/` as `_`.
+
+    No module's `repo_name` starts with `tf_module_files_`, so the two never
+    collide.
+    """
+    return "tf_module_files_" + path.replace("/", "_")
+
 def registry_download_endpoint(modules_url, parsed, version):
     """The registry endpoint giving the location of a module version's source."""
     return "{}{}/{}/{}/{}/download".format(modules_url, parsed.namespace, parsed.name, parsed.system, version)
