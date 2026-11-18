@@ -323,16 +323,18 @@ Then `bazel shutdown` so the new startup flags take effect.
   repositories visible to the module that defines the extension.
 - Don't check walked modules' `required_providers` in the manifest action, and
   don't parse `tofu`'s error output to suggest a label (issue #144):
-  - Every configuration file in a work tree is in one target's `srcs` because
-    no rule accepts configuration in `data` (issue #140). Strict deps (issue
-    #135) checks each non-built-in `required_providers` entry in `srcs` against
-    the target's `providers`, naming `file:line` and
-    `@tf_providers//<ns>/<name>` (`missing_provider`). Builds run in dependency
-    order (issue #143), reporting a dependency's error before dependants build.
-  - Any provider still missing, such as one implied by a resource with no
-    `required_providers` entry, fails `tofu init` in `TofuValidate` of the
-    target whose files need it (`implied_provider`). OpenTofu's error text can
-    change between releases.
+  - Every configuration file is in some target's `srcs`
+    (`check_no_config_in_data`, issue #140) and checked in dependency order
+    (issue #143). Strict deps below (issue #135) checks `required_providers` in
+    `srcs`, naming `file:line` and `@tf_providers//<ns>/<name>`
+    (`missing_provider`).
+  - Any provider still missing, such as one implied without
+    `required_providers`, fails `tofu init` in `TofuValidate`
+    (`implied_provider`). `TofuValidate` runs `tofu init` only in a target's
+    root module directory, so files in a subdirectory nothing in that target
+    calls (a bundle, `modules/*` or `subdirs`) fail in `TofuValidate` of the
+    first target whose root module calls them. OpenTofu's error text can change
+    between releases.
 - Enforce strict deps in the manifest action with no opt-out (issue #135;
   `README.md`, "Strict dependencies"; `strict_deps_*` cases):
   - Attribute requirements and calls by file (`own_srcs`), never by

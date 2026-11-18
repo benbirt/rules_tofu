@@ -123,6 +123,19 @@ func TestReadRequirements(t *testing.T) {
 	if !reflect.DeepEqual(entries, want) {
 		t.Errorf("got  %+v\nwant %+v", entries, want)
 	}
+	// The override replaces both primary entries of its name.
+	var effective []string
+	for _, d := range ApplyOverrides(got) {
+		effective = append(effective, d.Name+"="+d.Source)
+	}
+	wantEffective := []string{
+		"random=registry.opentofu.org/hashicorp/random",
+		"aws=registry.opentofu.org/hashicorp/aws",
+		"null=registry.opentofu.org/acme/null",
+	}
+	if !reflect.DeepEqual(effective, wantEffective) {
+		t.Errorf("ApplyOverrides: got %v, want %v", effective, wantEffective)
+	}
 }
 
 func writeFiles(t *testing.T, dir string, files map[string]string) {
