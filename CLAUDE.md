@@ -247,20 +247,26 @@ Then `bazel shutdown` so the new startup flags take effect.
 - In `tf_modules` (`tf/modules/extensions.bzl`; `README.md`, "Modules"):
   - Generate `:_rules_tofu_module` aliased at `@tf_modules//<path>`, and keep
     per-module repositories private.
-  - Keep two repositories per module (issue #157; `tf_modules_test.sh`, step
-    10):
+  - Keep two repositories per module (issue #157; `tf_modules_test.sh`, steps
+    10 and 11):
     - `_tf_module_files` (`files_repo_name`, `tf_module_files_<name>`) fetches
       and tidies `tree/`, writes `metadata.json` and an empty `BUILD.bazel`,
       and takes only `source` and the module's pin.
     - `_tf_module_repo` (`repo_name`, `tf_modules_<name>`) reads
-      `metadata.json` via `files` so re-fetches re-trigger it, runs
+      `metadata.json` via `files` so changes to that file re-trigger it, runs
       `_check_directories` and `modscan`, symlinks `tree/` in (`_link_files`)
       and writes the `BUILD` files.
-    Keep `modules`, `subdir` and `subdirs` off `_tf_module_files`. Attributes
-    are part of Bazel's rule key and Bazel 9's contents-cache key, so putting
-    them on `_tf_module_files` re-fetches modules when `subdirs` or another
-    tag changes. Regenerating `_tf_module_repo` reads local files and
-    downloads nothing.
+    Keep `modules` (label to `source`), `subdir` and `subdirs` off
+    `_tf_module_files`. Attributes are part of Bazel's rule key and Bazel 9's
+    contents-cache key, so putting them on `_tf_module_files` would re-fetch a
+    module when its `subdirs` changed or when another module was declared,
+    removed or changed `source`. Regenerating `_tf_module_repo` reads local
+    files and downloads nothing.
+  - Keep `pin` in `metadata.json` even though nothing reads it
+    (`tf_modules_test.sh`, step 11). `_tf_module_repo` has no pin attributes
+    and Bazel does not track the files `modscan` reads. Without `pin`, a new
+    commit or archive that edits only existing files leaves `metadata.json`
+    unchanged and the library's `BUILD` files stale.
   - Record `git_submodules` and removed `directory_symlinks`
     (`_check_directories`) in `metadata.json` using paths relative to `tree/`
     only (`"."` for the root, `null` outside `tree/`), never host paths. The

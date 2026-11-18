@@ -215,9 +215,11 @@ def _tidy(repository_ctx, root):
     if they cycle to an ancestor, while symlinks outside the tree would make
     its contents depend on the host machine.
 
-    Returns a list of `{"path": ..., "target": ...}` dicts recording removed
-    directory symlinks for `_check_directories`. Both paths are relative to
-    `root`. `target` is `"."` for `root` itself and `None` outside `root`.
+    Returns a list of `{"path": ..., "target": ...}` dicts, sorted by `path`,
+    recording removed directory symlinks for `_check_directories`. Sorting
+    keeps `metadata.json` independent of `walk`'s file-system order. Both
+    paths are relative to `root`. `target` is `"."` for `root` itself and
+    `None` outside `root`.
     """
     root_real = str(root.realpath)
     entries = walk(root)
@@ -229,21 +231,26 @@ def _tidy(repository_ctx, root):
     # them leads nowhere once it is gone, and goes with the rest.
     removed = []
     symlinks = [entry for entry in entries if entry.is_symlink and entry.path.basename not in _BAZEL_FILES]
-    for entry in symlinks:
-        if entry.path.exists and entry.path.is_dir:
-            target = str(entry.path.realpath)
-            if target == root_real:
-                target = "."
-            elif within(target, root_real):
-                target = target[len(root_real) + 1:]
-            else:
-                target = None
-            removed.append({"path": entry.rel, "target": target})
-            repository_ctx.delete(entry.path)
+
+    # Resolve every directory symlink before deleting any of them. Deleting
+    # one first breaks any link that traverses it, omitting that link from
+    # `removed`.
+    to_directories = [entry for entry in symlinks if entry.path.exists and entry.path.is_dir]
+    for entry in to_directories:
+        target = str(entry.path.realpath)
+        if target == root_real:
+            target = "."
+        elif within(target, root_real):
+            target = target[len(root_real) + 1:]
+        else:
+            target = None
+        removed.append({"path": entry.rel, "target": target})
+    for entry in to_directories:
+        repository_ctx.delete(entry.path)
     for entry in symlinks:
         if not entry.path.exists or not within(str(entry.path.realpath), root_real):
             repository_ctx.delete(entry.path)
-    return removed
+    return sorted(removed, key = lambda link: link["path"])
 
 def _check_directories(repository_ctx, directory_symlinks, context):
     """Fail if `subdir` or `subdirs` is or lies under a directory symlink.
@@ -298,16 +305,17 @@ def _dot_files(tree):
     return sorted(found)
 
 # Layout of a module's files repository: the tidied source tree and the JSON
-# file recording git submodules and removed directory symlinks.
+# file recording its pin, git submodules and removed directory symlinks.
 _TREE = "tree"
 _METADATA = "metadata.json"
 
 def _tf_module_files_impl(repository_ctx):
     """Fetch a module into `tree/`, tidy it and write `metadata.json`.
 
-    `metadata.json` passes `_tf_module_repo` the commit's unfetched git
-    submodules and the directory symlinks `_tidy` removed. Every path in it
-    is relative to `tree/`, keeping host paths out of the cached repository.
+    `metadata.json` records `pin`, the commit's unfetched `git_submodules`
+    and the `directory_symlinks` that `_tidy` removed. Submodule and symlink
+    paths are relative to `tree/`, keeping host paths out of the cached
+    repository.
     """
     attr = repository_ctx.attr
     context = "tf_modules.module `{}`".format(attr.source)
@@ -342,7 +350,15 @@ def _tf_module_files_impl(repository_ctx):
 
     repository_ctx.file(
         _METADATA,
-        content = json.encode_indent({"git_submodules": submodules, "directory_symlinks": directory_symlinks}) + "\n",
+        content = json.encode_indent({
+            # Nothing reads `pin`. `_tf_module_repo` takes no pin
+            # attributes and Bazel does not see the files modscan reads.
+            # Recording the pin here makes metadata.json change whenever
+            # the fetched files can differ.
+            "pin": {"remote": attr.remote, "commit": attr.commit, "url": attr.url, "sha256": attr.sha256, "archive_type": attr.archive_type},
+            "git_submodules": submodules,
+            "directory_symlinks": directory_symlinks,
+        }) + "\n",
         executable = False,
     )
 
@@ -354,9 +370,9 @@ def _tf_module_files_impl(repository_ctx):
     return reproducible(repository_ctx)
 
 # Fetches and tidies one module's files. Attributes carry only this module's
-# `source` and pin, not `subdir`, `subdirs` or `modules`. Changing `subdirs`,
-# or declaring, removing or changing another module, never re-fetches it
-# (issue #157).
+# `source` and pin, not `subdir`, `subdirs` or `modules`. Changing its
+# `subdirs`, or declaring, removing or changing another module, never
+# re-fetches it (issue #157).
 _tf_module_files = repository_rule(
     implementation = _tf_module_files_impl,
     attrs = {
@@ -422,8 +438,9 @@ def _tf_module_repo_impl(repository_ctx):
     attr = repository_ctx.attr
     context = "tf_modules.module `{}`".format(attr.source)
 
-    # Reading `files` records a dependency on the files repository, so Bazel
-    # regenerates this repository whenever the files are re-fetched.
+    # Reading `files` makes Bazel regenerate this repository whenever
+    # metadata.json changes. metadata.json includes `pin` so its digest
+    # changes with every new pin.
     metadata_path = repository_ctx.path(attr.files)
     metadata = json.decode(repository_ctx.read(metadata_path))
     tree = metadata_path.dirname.get_child(_TREE)
@@ -531,9 +548,10 @@ tf_library(
     # output base. Regenerating this repository downloads nothing.
 
 # Generates a module's BUILD files over symlinks to its `_tf_module_files`
-# tree. Taking `modules`, `subdir` and `subdirs` here means Bazel regenerates
-# this repository when `subdirs` changes or a module is declared, removed or
-# changed. That scans the local tree and downloads nothing.
+# tree. `modules` maps each declared label to `source`, so Bazel regenerates
+# this repository when a module is declared, removed or changes `source`, or
+# when this module's `subdir`, `subdirs`, `version` or metadata.json changes.
+# Regeneration scans the local tree and downloads nothing.
 _tf_module_repo = repository_rule(
     implementation = _tf_module_repo_impl,
     attrs = {
@@ -861,9 +879,9 @@ Every fetch is pinned:
     Fetching git modules requires `git` on `PATH`.
   - Archive modules verify `sha256`.
 
-A module is re-fetched only when its own `source` or pin changes. Declaring,
-removing or changing another module, or changing `subdirs`, only regenerates
-`BUILD` files.
+A module is re-fetched only when its own `source` or pin changes. Changing its
+`subdirs`, or declaring, removing or changing other modules, at most
+regenerates its `BUILD` files.
 
 Unpacking deletes upstream Bazel files: `.bazelignore`, `BUILD`, `BUILD.bazel`,
 `MODULE.bazel`, `REPO.bazel`, `WORKSPACE` and `WORKSPACE.bazel`. It also
