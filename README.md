@@ -161,27 +161,6 @@ arguments after `--`, or passed directly to the `.sh` script, are forwarded to
 only on the files in `srcs`, including those in subdirectories; other files in
 the package are left alone.
 
-### Build order
-
-Each target is checked only after its dependencies pass their checks. If
-`//app` has `//net` in `deps` and `//net` is broken, `bazel build //app` fails
-in `//net` without validating `//app`:
-
-```
-ERROR: net/BUILD.bazel:3:11: TofuValidate //net:net failed: (Exit 1): runner failed: error executing TofuValidate command ...
-```
-
-Launchers and tests wait for build checks too:
-
-- `bazel run` or `bazel build` on `:name.plan`, `:name.apply` or
-  `:name.destroy` validates the deploy and its `deps` and checks `var_files`
-  for duplicate keys.
-- `bazel test` on a `tf_test` validates `module`, `deps` and the test work tree
-  before running `tofu test`.
-
-On a cold build, validation along a chain of `deps` runs in sequence. Results
-are cached.
-
 ### Strict dependencies
 
 Each target lists the providers and modules that its own `srcs` use.
@@ -471,11 +450,9 @@ tf_modules.module(
 External modules called transitively must also be declared with
 `tf_modules.module`.
 
-Each fetched module is validated at its root directory before anything that
-depends on it, with no opt-out; see [Build order](#build-order). A module that
-does not validate fails in `TofuValidate @tf_modules//<path>` even if callers
-use only a `//<subdir>`. Declare a different version, or get the module fixed
-upstream.
+A fetched module that does not validate at its root directory fails in
+`TofuValidate @tf_modules//<path>`, even if callers use only a `//<subdir>`.
+Declare a different version, or get the module fixed upstream.
 
 #### Keeping modules up to date
 
@@ -744,7 +721,7 @@ validation and launchers. Each manifest action takes its direct
 dependencies' manifests as inputs. Each validate action takes their stamps,
 plus `<name>.var_files_check.stamp` on a deploy. Deploy launchers include the
 deploy's stamps in their runfiles and default outputs, and `tf_test` includes
-its validate stamp in its runfiles; see [Build order](#build-order).
+its validate stamp in its runfiles.
 
 `.plan`, `.apply` and `.destroy` locate their runfiles and state directory from
 `$0` and mirror the work tree as symlinks into
