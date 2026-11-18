@@ -395,7 +395,7 @@ Then `bazel shutdown` so the new startup flags take effect.
 - Validate `tf_library` inline via `DefaultInfo.files` so
   `bazel build :foo_lib` is the validation contract. Don't add `:foo.validate`
   or `validate_test`; the only generated test sub-target is `:foo.fmt_check`.
-- Check targets in dependency order (`README.md`, "Build order";
+- Check targets in dependency order (`README.md`, "How it works";
   `CONTRIBUTING.md`, invariant 2; issue #143; `dependency_invalid*`,
   `test_*_invalid` and `launcher_*` cases):
   - Carry check outputs in `TfLibraryInfo.validate_stamp`,
