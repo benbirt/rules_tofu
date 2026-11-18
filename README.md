@@ -643,6 +643,22 @@ To use a release that is not in `toolchain/versions.bzl`, either open a PR that
 adds it with `bazel run //tools:update_versions`, or register your own binary.
 `update_versions` verifies the cosign signature on `SHA256SUMS`.
 
+### Running `tofu` yourself
+
+`@rules_tofu//tofu` runs that binary, so no `tofu` on `PATH` is needed for the
+commands the rules have no target for, and the version is the one the build
+uses:
+
+```sh
+bazel run @rules_tofu//tofu -- version
+cd infra && bazel run @rules_tofu//tofu -- fmt -check -diff main.tf
+```
+
+It runs in the directory you start Bazel in, with the arguments after `--` and
+your environment. This is plain `tofu`: it gets no work tree, `tofu init`,
+variable flags or providers from the build. It honours a `tofu.version` tag and
+a toolchain you register yourself, and another target can take it as a tool.
+
 ### Bringing your own binary
 
 `opentofu_toolchain` wraps any OpenTofu 1.12+ executable, whether vendored,

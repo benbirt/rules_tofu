@@ -1,0 +1,18 @@
+"""Tests of `//tofu`, the runnable pinned `tofu`, used as another target's tool.
+
+`bazel run @rules_tofu//tofu` itself needs a Bazel to run it:
+`//tests/integration:module_dependency_*_test` and `custom_toolchain_run_test`
+cover that.
+"""
+
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
+# Runs the launcher from this test's runfiles, the way rules_lint's
+# `format_multirun` and `format_test` run their formatters. See tool_test.sh.
+sh_test(
+    name = "tool_test",
+    size = "small",
+    srcs = ["tool_test.sh"],
+    data = ["//tofu"],
+    env = {"TOFU": "$(rlocationpath //tofu)"},
+)

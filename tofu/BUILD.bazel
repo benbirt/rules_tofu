@@ -1,0 +1,16 @@
+load("//tf/private:tofu_binary.bzl", "tofu_binary")
+
+# The `tofu` that the build uses, for the commands the rules have no target
+# for: `bazel run @rules_tofu//tofu -- <arguments>` runs it in the directory
+# the command was typed in. Any target may also take it as a tool; it works as
+# the `terraform` formatter of rules_lint's `format_multirun`.
+tofu_binary(
+    name = "tofu",
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "all_files",
+    srcs = glob(["*"]),
+    visibility = ["//:__subpackages__"],
+)

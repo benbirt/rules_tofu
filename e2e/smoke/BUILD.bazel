@@ -21,3 +21,10 @@ tf_test(
     srcs = ["tests/smoke.tftest.hcl"],
     module = ":smoke",
 )
+
+# What `bazel run @rules_tofu//tofu` runs. Building it here, with `//...`,
+# checks that the published archive ships the package.
+alias(
+    name = "tofu",
+    actual = "@rules_tofu//tofu",
+)

@@ -65,10 +65,12 @@ two separate `_CASES` targets. The root module has no lock, while its
   than during extension evaluation, leaving `@lib_module//:lib` to fail for its
   own reason.
 
-`custom_toolchain/` (`custom_toolchain_test`, driven by `assert_bazel_fails.sh`
-via `_CASES`) registers a root `opentofu_toolchain` whose stand-in `tofu` exits
-non-zero with `"custom tofu toolchain selected"`. It verifies that a root
-toolchain registration wins over `rules_tofu`'s downloads.
+`custom_toolchain/` (`custom_toolchain_test` and `custom_toolchain_run_test`,
+driven by `assert_bazel_fails.sh` via `_CASES` and `_RUN_CASES`) registers a
+root `opentofu_toolchain` whose stand-in `tofu` exits non-zero with
+`"custom tofu toolchain selected"`. It verifies that a root toolchain
+registration wins over `rules_tofu`'s downloads, both when a library is
+validated and under `bazel run @rules_tofu//tofu`.
 
 `lock_update/` (`lock_update_test`, driven by `lock_update_test.sh`) keeps its
 lock in `infra/` and covers a workspace's first `@tf_providers//:pin`, a
@@ -81,7 +83,8 @@ See the header of `lock_update_test.sh` for the steps.
 `module_dependency/` (`module_dependency_<version>_test`, driven by
 `module_dependency_test.sh`) has `//app` call a `tf_library` in
 `network_module` by `module_source`, which calls one in `dns_module`, and
-exercises standalone library builds, offline planning and `tf_test`. Because
+exercises standalone library builds, offline planning, `tf_test` and
+`bazel run @rules_tofu//tofu` from a subdirectory. Because
 the module manifest (`.terraform/modules/modules.json`) is an internal OpenTofu
 format, `BUILD.bazel` generates one test per version in `KNOWN_VERSIONS`
 (`toolchain/versions.bzl`). See the header of `module_dependency_test.sh` for
