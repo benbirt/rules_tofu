@@ -427,6 +427,10 @@ Every fetch is pinned:
   hashes.
 - Archive modules verify `sha256`.
 
+A module is re-fetched only when its own `source` or pin changes. Changing its
+`subdirs`, or declaring, removing or changing other modules, at most
+regenerates its `BUILD` files.
+
 Unpacking removes upstream Bazel files, `.git/`, `.terraform/`, lock files and
 auto-loaded `.tfvars` files. Symlinks to directories, missing targets or paths
 outside the tree are also removed, and `//<subdir>` cannot be a symlink. Git
