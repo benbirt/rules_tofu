@@ -21,9 +21,11 @@
 #      loads a module from the manifest, and checks that tofu-test.json is
 #      written to its test outputs. The runner passes `tofu test` a flag
 #      (-json-into) that OpenTofu before 1.12 lacks, and tf_test once ran on no
-#      version except the default (issue #125). `bazel test //empty:test` runs
-#      a tf_test of an empty root module whose run block loads the library
-#      beside it (issue #119).
+#      version except the default (issue #125). Also checks that the test's
+#      runfiles manifest lists app_test.validate.stamp, ordering validation
+#      before tofu test (issue #143). `bazel test //empty:test` runs a tf_test
+#      of an empty root module whose run block loads the library beside it
+#      (issue #119).
 #   6. Run the README's formatting commands at the workspace root; rules_tofu
 #      generates no format targets, so these commands are how a workspace is
 #      formatted. `bazel run @rules_tofu//tofu -- fmt -check -diff -recursive .`
@@ -97,6 +99,8 @@ elif [[ -f "${outputs_dir}/outputs.zip" ]]; then
   json_log="$(unzip -p "${outputs_dir}/outputs.zip" tofu-test.json 2>/dev/null || true)"
 fi
 grep -q -F '"@message"' <<<"${json_log}" || fail "the test left no JSON log (tofu-test.json) in ${outputs_dir}"
+grep -q -F 'app/app_test.validate.stamp' "$(bazel info bazel-bin)/app/app_test.sh.runfiles_manifest" ||
+  fail "app_test.sh.runfiles_manifest lacks app/app_test.validate.stamp"
 # //empty:test has an empty root module; its run block loads ../nested.
 bazel test //empty:test --test_output=errors >&2 || fail "the test of an empty root module failed"
 

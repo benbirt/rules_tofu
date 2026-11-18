@@ -101,8 +101,9 @@ OpenTofu format, `BUILD.bazel` generates one test per version in
 `fixtures/network` into a tagged git repository and `fixtures/dns` into an
 archive at test time alongside `cloudposse/label/null` from the OpenTofu
 registry. It covers offline planning, tree tidying, commit and registry facts,
-`from_lock` with `pin`, and fetch-time error diagnostics; see the header of
-`tf_modules_test.sh` for the steps.
+`from_lock` with `pin`, fetch-time error diagnostics, and adding a module
+without re-fetching existing ones; see the header of `tf_modules_test.sh` for
+the steps.
 
 `run_directory/` (`run_directory_test`, driven by `run_directory_test.sh`)
 exercises `tf_deploy` launchers under `bazel run` and direct execution from
@@ -116,11 +117,12 @@ Bazel command `assert_bazel_fails.sh` runs:
 
 - `_CASES` (`bazel build`): failures from package loading, analysis, or build
   actions (`TofuModules`, `TofuValidate`, `dupcheck`, repository fetches).
-- `_RUN_CASES` (`bazel run`): targets that build cleanly and fail at run time.
-  `custom_toolchain_run` is `@rules_tofu//tofu` running the stand-in `tofu`,
-  while most cases are `tf_deploy` launchers refused by the runner. These cover
+- `_RUN_CASES` (`bazel run`): `custom_toolchain_run` is `@rules_tofu//tofu`
+  running the stand-in `tofu`, while most cases are `tf_deploy` launchers.
+  Some build cleanly and are refused at run time by the runner. These cover
   the wiring from BUILD attributes through the generated launcher script to
-  runner CLI flags, which the runner's Go unit tests do not exercise.
+  runner CLI flags, which the runner's Go unit tests do not exercise. Others
+  fail in the build before reaching the runner.
 
 Each row encodes to a `name|command|target|fragment` line in the driver's
 `CASES` environment variable.
@@ -157,7 +159,7 @@ For a loading, analysis, action or launcher failure inside `broken_workspace`:
 1. Add `broken_workspace/cases/<case>/BUILD.bazel` and any fixture files the
    failure requires.
 2. Add `("<case>", "broken_workspace", "//cases/<case>:<target>", "<stderr-fragment>")`
-   to `_CASES` (fails on `bazel build`) or `_RUN_CASES` (builds, fails on
+   to `_CASES` (fails on `bazel build`) or `_RUN_CASES` (fails on
    `bazel run`) in `tests/integration/BUILD.bazel`.
 3. Run `bazel run @rules_bazel_integration_test//tools:update_deleted_packages`
    to refresh `--deleted_packages` in `.bazelrc`.

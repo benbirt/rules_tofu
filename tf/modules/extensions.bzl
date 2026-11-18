@@ -26,6 +26,7 @@ load(
     ":source.bzl",
     "check_name",
     "check_version",
+    "files_repo_name",
     "hub_path",
     "is_commit",
     "looks_abbreviated",
@@ -101,6 +102,11 @@ _EXCLUDED = [
     "**/*.auto.tfvars.json",
     "BUILD.bazel",
 ]
+
+# Upstream test files, excluded from data globs. Validating the generated
+# library at the module's root makes tofu read test files there and under
+# tests/, where run blocks may load examples that srcs leave out.
+_TEST_GLOBS = ["**/*" + ext for ext in (".tftest.hcl", ".tofutest.hcl", ".tftest.json", ".tofutest.json")]
 
 # What tofu reads as a module's configuration. No rule takes a configuration
 # file as data, so the globs leave them all out. A generated library lists
@@ -204,22 +210,59 @@ def _cached_registry(module_ctx, key):
         return struct(fact = fact, location = location)
     return None
 
-def _tidy(repository_ctx, context):
-    """Remove files and symlinks that Bazel must not see in the fetched tree.
+def _tidy(repository_ctx, root):
+    """Remove files and symlinks that Bazel must not see in the fetched tree at `root`.
 
     Upstream Bazel files would split the module into packages or hide
     directories via `.bazelignore`. A symlink stays only if it resolves to a
-    regular file inside the repository, which Bazel reads as that file: `glob`
+    regular file inside the tree, which Bazel reads as that file: `glob`
     skips dangling symlinks, follows directory symlinks and fails the package
-    if they cycle to an ancestor, while symlinks outside the repository would
-    make its contents depend on the host machine.
+    if they cycle to an ancestor, while symlinks outside the tree would make
+    its contents depend on the host machine.
 
-    If `subdir` or a `subdirs` directory is or lies under a directory
-    symlink, removing that symlink leaves nothing there to serve, so fetching
-    fails naming the symlink target.
+    Returns a list of `{"path": ..., "target": ...}` dicts, sorted by `path`,
+    recording removed directory symlinks for `_check_directories`. Sorting
+    keeps `metadata.json` independent of `walk`'s file-system order. Both
+    paths are relative to `root`. `target` is `"."` for `root` itself and
+    `None` outside `root`.
     """
-    root = repository_ctx.path(".")
     root_real = str(root.realpath)
+    entries = walk(root)
+    for entry in entries:
+        if not entry.is_dir and entry.path.basename in _BAZEL_FILES:
+            repository_ctx.delete(entry.path)
+
+    # Symlinks to directories go first: a symlink to a file through one of
+    # them leads nowhere once it is gone, and goes with the rest.
+    removed = []
+    symlinks = [entry for entry in entries if entry.is_symlink and entry.path.basename not in _BAZEL_FILES]
+
+    # Resolve every directory symlink before deleting any of them. Deleting
+    # one first breaks any link that traverses it, omitting that link from
+    # `removed`.
+    to_directories = [entry for entry in symlinks if entry.path.exists and entry.path.is_dir]
+    for entry in to_directories:
+        target = str(entry.path.realpath)
+        if target == root_real:
+            target = "."
+        elif within(target, root_real):
+            target = target[len(root_real) + 1:]
+        else:
+            target = None
+        removed.append({"path": entry.rel, "target": target})
+    for entry in to_directories:
+        repository_ctx.delete(entry.path)
+    for entry in symlinks:
+        if not entry.path.exists or not within(str(entry.path.realpath), root_real):
+            repository_ctx.delete(entry.path)
+    return sorted(removed, key = lambda link: link["path"])
+
+def _check_directories(repository_ctx, directory_symlinks, context):
+    """Fail if `subdir` or `subdirs` is or lies under a directory symlink.
+
+    `_tidy` removed directory symlinks from the fetched tree. The error names
+    where the link pointed and the remedy.
+    """
     subdir = repository_ctx.attr.subdir
 
     # The directories the library must find in place: the module's own and
@@ -228,47 +271,36 @@ def _tidy(repository_ctx, context):
         (subdir + "/" if subdir else "") + s.strip("/")
         for s in repository_ctx.attr.subdirs
     ]
-    entries = walk(root)
-    for entry in entries:
-        if not entry.is_dir and entry.path.basename in _BAZEL_FILES:
-            repository_ctx.delete(entry.path)
+    for link in directory_symlinks:
+        path, target = link["path"], link["target"]
+        through = [d for d in needed if d == path or d.startswith(path + "/")]
+        if not through:
+            continue
+        remedy = "declare and call the module by the directory the link leads to"
+        if subdir not in through:
+            # `subdirs` takes a directory below the module's own.
+            if target not in (None, ".") and subdir == "":
+                remedy = "name `{}` in `subdirs` instead, and call that".format(target)
+            elif target != None and subdir and target.startswith(subdir + "/"):
+                remedy = "name `{}` in `subdirs` instead, and call that".format(target[len(subdir) + 1:])
+            else:
+                remedy = "declare the directory the link leads to as a module of its own"
+        fail(("{}: `{}` is a symlink in the fetched files, to {}; rules_tofu keeps no symlinks to " +
+              "directories, so {}").format(
+            context,
+            path,
+            {None: "a directory outside them", ".": "their root directory"}.get(target, target),
+            remedy,
+        ))
 
-    # Symlinks to directories go first: a symlink to a file through one of
-    # them leads nowhere once it is gone, and goes with the rest.
-    symlinks = [entry for entry in entries if entry.is_symlink and entry.path.basename not in _BAZEL_FILES]
-    for entry in symlinks:
-        if entry.path.exists and entry.path.is_dir:
-            through = [d for d in needed if d == entry.rel or d.startswith(entry.rel + "/")]
-            if through:
-                target = str(entry.path.realpath)
-                remedy = "declare and call the module by the directory the link leads to"
-                module_real = root_real + "/" + subdir if subdir else root_real
-                if subdir not in through:
-                    # `subdirs` takes a directory below the module's own.
-                    if within(target, module_real) and target != module_real:
-                        remedy = "name `{}` in `subdirs` instead, and call that".format(target[len(module_real) + 1:])
-                    else:
-                        remedy = "declare the directory the link leads to as a module of its own"
-                fail(("{}: `{}` is a symlink in the fetched files, to {}; rules_tofu keeps no symlinks to " +
-                      "directories, so {}").format(
-                    context,
-                    entry.rel,
-                    target[len(root_real) + 1:] if within(target, root_real) and target != root_real else target,
-                    remedy,
-                ))
-            repository_ctx.delete(entry.path)
-    for entry in symlinks:
-        if not entry.path.exists or not within(str(entry.path.realpath), root_real):
-            repository_ctx.delete(entry.path)
-
-def _dot_files(repository_ctx):
-    """Dot-prefixed files with a configuration extension, which tofu does not read.
+def _dot_files(tree):
+    """Dot-prefixed files below `tree` with a configuration extension, which tofu does not read.
 
     They are data like any other file, but `_CONFIG_GLOBS` keeps them out of
     the globs. Returns their paths, leaving out what `_EXCLUDED` does.
     """
     found = []
-    for entry in walk(repository_ctx.path(".")):
+    for entry in walk(tree):
         name = entry.path.basename
         if entry.is_dir or not name.startswith(".") or not name.endswith(_CONFIG_EXTS):
             continue
@@ -277,43 +309,94 @@ def _dot_files(repository_ctx):
         found.append(entry.rel)
     return sorted(found)
 
-def _fetch(repository_ctx):
-    """Fetch the module's files and tidy them.
+# Layout of a module's files repository: the tidied source tree and the JSON
+# file recording its pin, git submodules and removed directory symlinks.
+_TREE = "tree"
+_METADATA = "metadata.json"
 
-    Returns the paths of the fetched commit's git submodules, which are not
-    fetched: `modscan` fails the module if it is in one or calls into one.
+def _tf_module_files_impl(repository_ctx):
+    """Fetch a module into `tree/`, tidy it and write `metadata.json`.
+
+    `metadata.json` records `pin`, the commit's unfetched `git_submodules`
+    and the `directory_symlinks` that `_tidy` removed. Submodule and symlink
+    paths are relative to `tree/`, keeping host paths out of the cached
+    repository.
     """
     attr = repository_ctx.attr
     context = "tf_modules.module `{}`".format(attr.source)
+    tree = repository_ctx.path(_TREE)
     submodules = []
     if attr.kind == "git":
-        _git(repository_ctx, ["init", "-q"], context)
+        _git(repository_ctx, ["init", "-q", _TREE], context)
         fetched = repository_ctx.execute(
             ["git", "fetch", "-q", "--depth=1", attr.remote, attr.commit],
             environment = {"GIT_TERMINAL_PROMPT": "0"},
+            working_directory = _TREE,
             timeout = 600,
         )
         if fetched.return_code != 0:
             # Not every server lets a commit be fetched by ID; fetch it all.
-            _git(repository_ctx, ["fetch", "-q", attr.remote, "+refs/heads/*:refs/remotes/origin/*", "+refs/tags/*:refs/tags/*"], context)
-        _git(repository_ctx, ["-c", "advice.detachedHead=false", "checkout", "-q", attr.commit], context)
-        head = _git(repository_ctx, ["rev-parse", "HEAD"], context).strip()
+            _git(repository_ctx, ["fetch", "-q", attr.remote, "+refs/heads/*:refs/remotes/origin/*", "+refs/tags/*:refs/tags/*"], context, _TREE)
+        _git(repository_ctx, ["-c", "advice.detachedHead=false", "checkout", "-q", attr.commit], context, _TREE)
+        head = _git(repository_ctx, ["rev-parse", "HEAD"], context, _TREE).strip()
         if head != attr.commit:
             fail("{}: checked out {}, expected {}".format(context, head, attr.commit))
 
         # A submodule is a tree entry of mode 160000, a commit of another
         # repository: `<mode> commit <id>\t<path>`.
-        for line in _git(repository_ctx, ["-c", "core.quotepath=false", "ls-tree", "-r", attr.commit], context).splitlines():
+        for line in _git(repository_ctx, ["-c", "core.quotepath=false", "ls-tree", "-r", attr.commit], context, _TREE).splitlines():
             entry, _, path = line.partition("\t")
             if entry.startswith("160000 ") and path:
                 submodules.append(path)
-        repository_ctx.delete(".git")
+        repository_ctx.delete(tree.get_child(".git"))
     else:
-        repository_ctx.download_and_extract(url = attr.url, sha256 = attr.sha256, type = attr.archive_type)
-    _tidy(repository_ctx, context)
-    return submodules
+        repository_ctx.download_and_extract(url = attr.url, output = _TREE, sha256 = attr.sha256, type = attr.archive_type)
+    directory_symlinks = _tidy(repository_ctx, tree)
 
-def _scan(repository_ctx, submodules):
+    repository_ctx.file(
+        _METADATA,
+        content = json.encode_indent({
+            # Nothing reads `pin`. `_tf_module_repo` takes no pin
+            # attributes and Bazel does not see the files modscan reads.
+            # Recording the pin here makes metadata.json change whenever
+            # the fetched files can differ.
+            "pin": {"remote": attr.remote, "commit": attr.commit, "url": attr.url, "sha256": attr.sha256, "archive_type": attr.archive_type},
+            "git_submodules": submodules,
+            "directory_symlinks": directory_symlinks,
+        }) + "\n",
+        executable = False,
+    )
+
+    # Empty root package so metadata.json can be named by label.
+    repository_ctx.file("BUILD.bazel", "", executable = False)
+
+    # Every fetch is pinned by commit or sha256, so the rule's attributes
+    # determine its contents.
+    return reproducible(repository_ctx)
+
+# Fetches and tidies one module's files. Attributes carry only this module's
+# `source` and pin, not `subdir`, `subdirs` or `modules`. Changing its
+# `subdirs`, or declaring, removing or changing another module, never
+# re-fetches it (issue #157).
+_tf_module_files = repository_rule(
+    implementation = _tf_module_files_impl,
+    attrs = {
+        # Used in error messages.
+        "source": attr.string(mandatory = True),
+        "kind": attr.string(mandatory = True, values = ["git", "archive"]),
+        "remote": attr.string(),
+        "commit": attr.string(),
+        "url": attr.string(),
+        "sha256": attr.string(),
+        "archive_type": attr.string(),
+    },
+)
+
+def _child(directory, rel):
+    """Path at slash-separated `rel` below `directory`, or `directory` for `""`."""
+    return directory.get_child(*rel.split("/")) if rel else directory
+
+def _scan(repository_ctx, tree, submodules):
     # Every declared module, this one included: it may call its own address
     # for a submodule, and another tag may declare one of its subdirectories,
     # which then provides the calls into it.
@@ -324,7 +407,7 @@ def _scan(repository_ctx, submodules):
         args.append("--subdir=" + directory)
     for path in submodules:
         args.append("--git-submodule=" + path)
-    args += [repository_ctx.path("."), repository_ctx.attr.subdir]
+    args += [tree, repository_ctx.attr.subdir]
     result = repository_ctx.execute(args)
     if result.return_code != 0:
         fail("tf_modules.module `{}`: {}".format(repository_ctx.attr.source, result.stderr.strip()))
@@ -339,10 +422,35 @@ def _provider_label(source, context):
               "from registry.opentofu.org").format(context, source))
     return "@{}//{}".format(_PROVIDERS_HUB, rest)
 
+def _link_files(repository_ctx, tree, package):
+    """Symlink the fetched files under `tree` into this repository.
+
+    The repository root and each directory on the path to `package` are real
+    directories. Every other entry in those directories is a symlink to its
+    counterpart in `tree`. Generated `BUILD.bazel` files are written at the
+    root and in `package`. Writing one through a symlinked directory would
+    land in the files repository, which other output bases share.
+    """
+    parts = package.split("/") if package else []
+    own = [""] + ["/".join(parts[:i + 1]) for i in range(len(parts))]
+    for directory in own:
+        for entry in _child(tree, directory).readdir():
+            rel = directory + "/" + entry.basename if directory else entry.basename
+            if rel not in own:
+                repository_ctx.symlink(entry, rel)
+
 def _tf_module_repo_impl(repository_ctx):
     attr = repository_ctx.attr
     context = "tf_modules.module `{}`".format(attr.source)
-    scanned = _scan(repository_ctx, _fetch(repository_ctx))
+
+    # Reading `files` makes Bazel regenerate this repository whenever
+    # metadata.json changes. metadata.json includes `pin` so its digest
+    # changes with every new pin.
+    metadata_path = repository_ctx.path(attr.files)
+    metadata = json.decode(repository_ctx.read(metadata_path))
+    tree = metadata_path.dirname.get_child(_TREE)
+    _check_directories(repository_ctx, metadata["directory_symlinks"], context)
+    scanned = _scan(repository_ctx, tree, metadata["git_submodules"])
 
     if scanned["undeclared"]:
         fail("{} calls modules that MODULE.bazel doesn't declare. Add:\n{}".format(
@@ -352,6 +460,7 @@ def _tf_module_repo_impl(repository_ctx):
 
     providers = [p for p in [_provider_label(p, context) for p in scanned["providers"]] if p]
     package = attr.subdir
+    _link_files(repository_ctx, tree, package)
 
     # The configuration files of the directories the library serves are its
     # srcs. A local path may lead out of the module's own directory, to files
@@ -359,7 +468,7 @@ def _tf_module_repo_impl(repository_ctx):
     srcs = []
     outside = []
     for directory in scanned["dirs"]:
-        for entry in repository_ctx.path(directory or ".").readdir():
+        for entry in _child(tree, directory).readdir():
             name = entry.basename
 
             # tofu passes over a file whose name starts with a dot.
@@ -374,8 +483,8 @@ def _tf_module_repo_impl(repository_ctx):
                 outside.append(path)
     srcs = sorted(srcs) + ["//:" + path for path in sorted(outside)]
 
-    excluded = _EXCLUDED + _CONFIG_GLOBS
-    dot_files = _dot_files(repository_ctx)
+    excluded = _EXCLUDED + _CONFIG_GLOBS + _TEST_GLOBS
+    dot_files = _dot_files(tree)
     if package:
         own_dot_files = [path[len(package) + 1:] for path in dot_files if path.startswith(package + "/")]
         root_dot_files = [path for path in dot_files if not path.startswith(package + "/")]
@@ -423,10 +532,12 @@ tf_library(
     module_source = {source},
     module_version = {version},
     providers = {providers},
+    tf_modules_label = {label},
     visibility = ["@{hub}//:__subpackages__"],
     deps = {deps},
 )
 """.format(
+            label = repr(attr.label),
             name = repr(_MODULE_TARGET),
             srcs = repr(srcs),
             data = " + ".join(data),
@@ -439,23 +550,22 @@ tf_library(
         executable = False,
     )
 
-    # The files came from a git commit or an archive checked against `sha256`,
-    # and modscan is an input Bazel records, so the attributes determine the
-    # contents.
-    return reproducible(repository_ctx)
+    # Omit `reproducible`: `_link_files` writes absolute symlinks into this
+    # output base. Regenerating this repository downloads nothing.
 
+# Generates a module's BUILD files over symlinks to its `_tf_module_files`
+# tree. `modules` maps each declared label to `source`, so Bazel regenerates
+# this repository when a module is declared, removed or changes `source`, or
+# when this module's `subdir`, `subdirs`, `version` or metadata.json changes.
+# Regeneration scans the local tree and downloads nothing.
 _tf_module_repo = repository_rule(
     implementation = _tf_module_repo_impl,
     attrs = {
         "source": attr.string(mandatory = True),
         "version": attr.string(),
         "label": attr.string(mandatory = True),
-        "kind": attr.string(mandatory = True, values = ["git", "archive"]),
-        "remote": attr.string(),
-        "commit": attr.string(),
-        "url": attr.string(),
-        "sha256": attr.string(),
-        "archive_type": attr.string(),
+        # metadata.json in the module's `_tf_module_files` repository.
+        "files": attr.label(mandatory = True),
         # The module's directory in the fetched files.
         "subdir": attr.string(),
         # Directories below it that callers reach with `//<subdir>`.
@@ -711,17 +821,24 @@ def _tf_modules_extension_impl(module_ctx):
     labels = {path: "@{}//{}".format(_HUB, path) for path in resolved}
     declared = {labels[path]: r.source for path, r in resolved.items()}
     for path, r in resolved.items():
-        _tf_module_repo(
-            name = repo_name(path),
-            label = labels[path],
+        # Split fetching from BUILD generation so `declared`, `subdir` and
+        # `subdirs` are not inputs to `_tf_module_files` (issue #157).
+        _tf_module_files(
+            name = files_repo_name(path),
             source = r.source,
-            version = r.version,
             kind = r.kind,
             remote = r.remote,
             commit = r.commit,
             url = r.url,
             sha256 = r.sha256,
             archive_type = r.archive_type,
+        )
+        _tf_module_repo(
+            name = repo_name(path),
+            label = labels[path],
+            source = r.source,
+            version = r.version,
+            files = "@{}//:{}".format(files_repo_name(path), _METADATA),
             subdir = r.subdir,
             subdirs = r.subdirs,
             modules = declared,
@@ -768,6 +885,10 @@ Every fetch is pinned:
     Fetching git modules requires `git` on `PATH`.
   - Archive modules verify `sha256`.
 
+A module is re-fetched only when its own `source` or pin changes. Changing its
+`subdirs`, or declaring, removing or changing other modules, at most
+regenerates its `BUILD` files.
+
 Unpacking deletes upstream Bazel files: `.bazelignore`, `BUILD`, `BUILD.bazel`,
 `MODULE.bazel`, `REPO.bazel`, `WORKSPACE` and `WORKSPACE.bazel`. It also
 excludes `.git/`, `.terraform/`, `.terraform.lock.hcl`, `terraform.tfvars`,
@@ -777,10 +898,14 @@ submodules are not fetched.
 
 Each generated `tf_library` lists as `srcs` the configuration files of the
 module's root, its `modules/` subdirectories, directories it calls itself and
-directories named in `subdirs`, and carries the providers they require.
-Non-configuration files are `data`. Configuration files in other directories,
-such as examples, are left out and cannot be called. External modules called
-transitively must also be declared with `tf_modules.module`.
+directories named in `subdirs`, and carries the providers they require. Other
+files are `data`, except `.tftest.hcl`, `.tofutest.hcl`, `.tftest.json` and
+`.tofutest.json` test files, which are left out. Configuration files in other
+directories, such as examples, are also left out and cannot be called.
+External modules called transitively must also be declared with
+`tf_modules.module`. Each fetched module is validated at its root directory
+before anything that depends on it, failing in
+`TofuValidate @tf_modules//<path>` even if callers use only a `//<subdir>`.
 
 Across the module graph, each `@tf_modules` path resolves once. For registry
 modules, the root module's tag wins, else the highest version. Git and archive
