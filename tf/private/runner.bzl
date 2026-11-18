@@ -113,11 +113,18 @@ exec "$R/{runner}" \\
         ),
     )
 
+    # ctx.actions.write takes no inputs, so include deploy.stamps in runfiles
+    # for bazel run and in default outputs for bazel build before running the
+    # script directly.
     runfiles = ctx.runfiles(
-        files = [tofu.binary, deploy.modules_manifest] + ([deploy.lock] if deploy.lock else []) + deploy.work_tree_files.to_list(),
+        files = [tofu.binary, deploy.modules_manifest] + deploy.stamps + ([deploy.lock] if deploy.lock else []) + deploy.work_tree_files.to_list(),
     ).merge(ctx.attr._runner_bin[DefaultInfo].default_runfiles)
 
-    return [DefaultInfo(executable = out, runfiles = runfiles)]
+    return [DefaultInfo(
+        executable = out,
+        files = depset(direct = [out] + deploy.stamps),
+        runfiles = runfiles,
+    )]
 
 tf_runner = rule(
     implementation = _tf_runner_impl,

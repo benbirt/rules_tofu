@@ -37,6 +37,7 @@
 #      configuration of a directory outside modules/ that the module never
 #      calls, so //vpc/peering is not there to call (issues #76 and #140).
 #      No configuration file under examples/ is in the work tree either.
+#      Neither are the module's .tftest.hcl files.
 #   4. MODULE.bazel.lock records the git commit and registry module metadata.
 #      Replacing the git module's fact with a registry-module fact (location
 #      and sha256), shutting down Bazel and removing the output base's lockfile
@@ -54,6 +55,15 @@
 #      fails during fetch naming the directory the link points to.
 #   9. Declaring a module by a //<subdir> (vendor/shared) inside a git
 #      submodule fails during fetch naming the submodule.
+#  10. Adding another tf_modules.module tag and rebuilding //app leaves
+#      existing tf_module_files_* repositories untouched (issue #157). The
+#      network module's library repository is still regenerated.
+#  11. Editing vpc/peering/main.tf in place to drop hashicorp/time and
+#      updating commit on the network module's tag regenerates
+#      vpc/BUILD.bazel without that provider.
+#  12. Building //invalid_caller, which calls a fetched module that does not
+#      validate, fails in TofuValidate @tf_modules//invalid with remediation
+#      advice and without validating //invalid_caller (issue #143).
 
 set -euo pipefail
 
@@ -130,7 +140,7 @@ if command -v sha256sum >/dev/null; then
 else
   dns_sha256="$(shasum -a 256 "${FIXTURES}/dns.tar.gz" | cut -d' ' -f1)"
 fi
-for f in MODULE.bazel app/main.tf bad/main.tf; do
+for f in MODULE.bazel app/main.tf bad/main.tf invalid_caller/main.tf; do
   sed -i.bak \
     -e "s|path = \"../../..\"|path = \"${RULES_TOFU}\"|" \
     -e "s|@FIXTURES@|${FIXTURES}|g" \
@@ -169,6 +179,11 @@ echo "--- 3. a submodule the tag doesn't name ---" >&2
 work_tree="$(bazel info bazel-bin)/app/app.work"
 if find -L "${work_tree}" -path '*/examples/*' \( -name '*.tf' -o -name '*.tofu' -o -name '*.tf.json' -o -name '*.tofu.json' \) | grep -q .; then
   fail "the work tree holds an example's configuration"
+fi
+# Upstream test files are excluded from data; see
+# fixtures/network/vpc/defaults.tftest.hcl.
+if find -L "${work_tree}" -name '*.tftest.hcl' | grep -q .; then
+  fail "the work tree contains test files from the fetched module"
 fi
 # //vpc/peering is outside modules/ and nothing in the module calls it: only
 # the tag's `subdirs` makes it part of the library.
@@ -289,5 +304,94 @@ fi
 echo "${out}" >&2
 grep -q -F '"/vendor/shared" is in the git submodule "vendor/shared" of the repository, and rules_tofu does not fetch git submodules' <<<"${out}" ||
   fail "the failure doesn't name the git submodule"
+
+echo "--- 10. adding a module without re-fetching ---" >&2
+bazel build //app >&2 || fail "//app doesn't build before the tag is added"
+external="$(bazel info output_base)/external"
+# Running a repository rule rewrites @<repo>.marker. On Bazel 9, a
+# reproducible repository has no marker file there. Bazel instead recreates
+# its <repo> symlink into the repository contents cache. *tf_module_files_*
+# matches both. `find` does not follow symlinks, so `-newer` checks the
+# link's own time.
+files_repos() {
+  find "${external}" -maxdepth 1 -name '*tf_module_files_*' "$@" | sort
+}
+files_before="$(files_repos)"
+for module in network dns cloudposse_label_null; do
+  grep -q "tf_module_files_${module}\$" <<<"${files_before}" ||
+    fail "can't find tf_module_files_${module} in: '${files_before}'"
+done
+# Sleep on both sides of the timestamp file for one-second mtime resolution.
+sleep 2
+touch "${_TMPDIR}/before_tag"
+sleep 2
+cat >>MODULE.bazel <<EOF
+tf_modules.module(
+    name = "shared",
+    source = "git::file://${FIXTURES}/network.git//shared?ref=v1.0.0",
+)
+EOF
+bazel build //app >&2 || fail "//app doesn't build after adding a module tag"
+fetched_again="$(files_repos -newer "${_TMPDIR}/before_tag")"
+[[ -z "${fetched_again}" ]] ||
+  fail "adding a module re-fetched unchanged modules: ${fetched_again}"
+# Control: tf_modules_network depends on the declared module list, so its
+# marker file must be rewritten. Without this check, the assertion above
+# would pass vacuously if a future Bazel stopped leaving those traces.
+find "${external}" -maxdepth 1 -name '@*tf_modules_network.marker' -newer "${_TMPDIR}/before_tag" | grep -q . ||
+  fail "tf_modules_network marker was not updated; check whether Bazel still writes @<repo>.marker"
+# Second control: on Bazel 9, reproducible tf_module_files_* repositories
+# have no marker file, so the marker check above does not cover them. Fetch
+# the unused shared module's files repository directly to confirm that
+# `files_repos -newer` detects a new fetch.
+shared_files="@@$(basename "$(grep 'tf_module_files_network$' <<<"${files_before}")" | sed 's/network$/shared/')"
+bazel fetch --repo="${shared_files}" >&2 || fail "couldn't fetch ${shared_files}"
+files_repos -newer "${_TMPDIR}/before_tag" | grep -q 'tf_module_files_shared$' ||
+  fail "files_repos -newer did not detect fetching ${shared_files}"
+
+# An in-place edit changes neither git_submodules nor directory_symlinks.
+# _tf_module_repo has no pin attributes, so it regenerates vpc/BUILD.bazel
+# only because metadata.json records the pin.
+echo "--- 11. regenerating a library on a new pin ---" >&2
+library="${network_repo}/vpc/BUILD.bazel"
+grep -q -F '"@tf_providers//hashicorp/time"' "${library}" ||
+  fail "vpc/BUILD.bazel doesn't list hashicorp/time before the commit update"
+cat >"${FIXTURES}/network.git/vpc/peering/main.tf" <<'EOF'
+variable "peer" {
+  type = string
+}
+
+output "peer" {
+  value = "${var.peer}-peered"
+}
+EOF
+git_ commit -q -a -m v3
+third_commit="$(git_ rev-parse HEAD)"
+sed -i.bak "s|^    name = \"network\",\$|    name = \"network\", commit = \"${third_commit}\",|" MODULE.bazel
+rm MODULE.bazel.bak
+grep -q -F "commit = \"${third_commit}\"," MODULE.bazel || fail "couldn't set commit on the network module's tag"
+bazel build --nobuild @tf_modules//network >&2 || fail "couldn't load @tf_modules//network at the new commit"
+if grep -q -F 'hashicorp/time' "${library}"; then
+  fail "vpc/BUILD.bazel still lists hashicorp/time after re-fetching at a new commit"
+fi
+
+echo "--- 12. a fetched module that does not validate ---" >&2
+cat >>MODULE.bazel <<EOF
+tf_modules.module(
+    name = "invalid",
+    source = "git::file://${FIXTURES}/network.git//invalid?ref=v1.0.0",
+)
+EOF
+if out="$(bazel build //invalid_caller 2>&1)"; then
+  fail "//invalid_caller built despite depending on an invalid fetched module"
+fi
+echo "${out}" >&2
+grep -q -F 'TofuValidate @tf_modules//invalid failed' <<<"${out}" ||
+  fail "expected failure in TofuValidate @tf_modules//invalid"
+grep -q -F 'rules_tofu: fetched module @tf_modules//invalid failed validation.' <<<"${out}" ||
+  fail "missing fetched-module remediation message"
+if grep -q -F 'TofuValidate //invalid_caller' <<<"${out}"; then
+  fail "//invalid_caller was validated after @tf_modules//invalid failed"
+fi
 
 echo "OK: tf_modules fetched git, archive and registry modules, pinned by commit" >&2

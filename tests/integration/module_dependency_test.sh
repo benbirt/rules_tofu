@@ -18,7 +18,9 @@
 #      loads a module from the manifest, and checks that tofu-test.json is
 #      written to its test outputs. The runner passes `tofu test` a flag
 #      (-json-into) that OpenTofu before 1.12 lacks, and tf_test once ran on no
-#      version except the default (issue #125).
+#      version except the default (issue #125). Also checks that the test's
+#      runfiles manifest lists app_test.validate.stamp, ordering validation
+#      before tofu test (issue #143).
 #   6. `bazel run //app:app.apply` applies a deploy with no backend block and
 #      allow_ephemeral_state = True, writing terraform.tfstate in the run
 #      directory and leaving no .terraform/terraform.tfstate backend record.
@@ -91,6 +93,8 @@ elif [[ -f "${outputs_dir}/outputs.zip" ]]; then
   json_log="$(unzip -p "${outputs_dir}/outputs.zip" tofu-test.json 2>/dev/null || true)"
 fi
 grep -q -F '"@message"' <<<"${json_log}" || fail "the test left no JSON log (tofu-test.json) in ${outputs_dir}"
+grep -q -F 'app/app_test.validate.stamp' "$(bazel info bazel-bin)/app/app_test.sh.runfiles_manifest" ||
+  fail "app_test.sh.runfiles_manifest lacks app/app_test.validate.stamp"
 
 echo "--- 6. apply with no backend block ---" >&2
 out="$(bazel run //app:app.apply -- -auto-approve 2>&1)" || fail "the apply with no backend block failed: ${out}"

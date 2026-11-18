@@ -1,0 +1,3 @@
+module "dep" {
+  source = "./dep"
+}
