@@ -272,7 +272,7 @@ Then `bazel shutdown` so the new startup flags take effect.
   - Generate `:_rules_tofu_module` aliased at `@tf_modules//<path>`, and keep
     per-module repositories private.
   - Keep two repositories per module (issue #157; `tf_modules_test.sh`, steps
-    10 and 11):
+    9 and 10):
     - `_tf_module_files` (`files_repo_name`, `tf_module_files_<name>`) fetches
       and tidies `tree/`, writes `metadata.json` and an empty `BUILD.bazel`,
       and takes only `source` and the module's pin.
