@@ -550,6 +550,23 @@ Then `bazel shutdown` so the new startup flags take effect.
     direct invocation match.
   - Never read `BUILD_WORKSPACE_DIRECTORY` in launchers or the runner; only
     `.fmt` and `pin` may read it.
+- Keep `@rules_tofu//tofu` (`tf/private/tofu_binary.bzl`; issue #152) plain
+  `tofu`: no staging, no `tofu init`, no added flags and the environment
+  untouched:
+  - Keep `@rules_tofu//tofu` the only launcher that reads
+    `BUILD_WORKING_DIRECTORY`. Change directory only when it is set, and never
+    fail when it is unset: `rules_lint`'s `format_test` runs it under
+    `bazel test`, which does not set `BUILD_WORKING_DIRECTORY`.
+  - Look for the binary in `RUNFILES_DIR` and `TEST_SRCDIR` before
+    `$0.runfiles`, checking that the executable binary exists in each
+    (`//tests/tofu:tool_test`). As the `terraform` tool of `rules_lint`'s
+    `format_multirun`, the launcher is inside the other target's runfiles and
+    `$0.runfiles` does not exist.
+  - Keep the launcher as the target's only default output. `rules_lint` expands
+    `$(rlocationpaths)` of its tool and expects one path.
+  - Keep the rule under `tf/private/`, and keep `tofu/` free of dev-only
+    dependencies. `tofu/` ships in the release archive, and `//tofu:all_files`
+    is in `//:local_repository_files` so nested integration workspaces see it.
 - Isolate `tofu`'s environment and init flags in the runner (`tofuEnv`):
   - Pin `TF_DATA_DIR` to the run directory's `.terraform` so an inherited
     `TF_DATA_DIR` cannot make `tofu init -get=false` miss the module manifest
