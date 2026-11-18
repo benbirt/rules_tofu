@@ -1,0 +1,20 @@
+"""Tests for `//tofu` used as another target's tool.
+
+`bazel run @rules_tofu//tofu` needs a nested Bazel and is covered by
+`//tests/integration:module_dependency_*_test` and
+`//tests/integration:custom_toolchain_run_test`.
+"""
+
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
+# Runs the `//tofu` launcher from this test's runfiles, where the launcher has
+# no runfiles tree of its own. `rules_lint`'s `format_multirun` and
+# `format_test` run a formatter the same way. `TOFU` is the launcher's runfiles
+# path.
+sh_test(
+    name = "tool_test",
+    size = "small",
+    srcs = ["tool_test.sh"],
+    data = ["//tofu"],
+    env = {"TOFU": "$(rlocationpath //tofu)"},
+)

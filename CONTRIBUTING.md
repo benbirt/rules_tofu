@@ -30,9 +30,11 @@ bazel test //...
 | `tf/private/cmd/{runner,dupcheck,pin,lockjson,modscan,modules}/` | Go binaries: runtime `tofu` wrapper, duplicate-variable check, `@tf_providers//:pin`, lock reader, module scanner and module manifest writer |
 | `tf/private/cmd/internal/{flags,tfconfig}/` | Shared Go packages: repeatable CLI flags and HCL / module-source parsing |
 | `toolchain/` | OpenTofu binary download and toolchain registration |
+| `tofu/` | `@rules_tofu//tofu`, the toolchain's runnable `tofu` (rule in `tf/private/tofu_binary.bzl`) |
 | `docs/` | `starlark_doc_extract` target per public `.bzl` file, shipped as the BCR `docs_url` archive |
 | `tools/` | Maintainer tools (excluded from releases): `update_versions` pins an OpenTofu release |
 | `tests/integration/` | Bazel-in-Bazel integration tests ([`tests/integration/README.md`](tests/integration/README.md)) |
+| `tests/tofu/` | Tests for `//tofu` used as another target's tool |
 | `examples/` | Usage examples |
 | `e2e/smoke/` | Standalone consumer module; BCR presubmit test module |
 | `.bcr/` | Bazel Central Registry metadata, source and presubmit templates |
@@ -65,6 +67,12 @@ bazel test //...
    checkout, require `bazel run`. `tofu` runs in
    `<name>.rules_tofu-state/work/<pkg>`, never in runfiles or `<name>.work/`,
    and resolves `backend` blocks itself without runner rewrites.
+   `@rules_tofu//tofu` is the only launcher that reads
+   `BUILD_WORKING_DIRECTORY`. It changes to that directory only when the
+   variable is set, so it also works under `bazel test` and in other tool runs
+   where `BUILD_WORKING_DIRECTORY` is unset. It looks for the binary in
+   `RUNFILES_DIR` and `TEST_SRCDIR` before `$0.runfiles`, because as a tool in
+   another target's runfiles it has no runfiles tree of its own.
 
 ## Running the tests
 
