@@ -535,10 +535,10 @@ func TestBuild_RootPackageCycle(t *testing.T) {
 	}
 }
 
-// Only the target's own files are checked against its providers. What the
-// modules it calls require is left to their own targets and to tofu: a local
-// module, a dep called by module_source, and a submodule reached by
-// `//<subdir>` (issues #76 and #144). A built-in provider needs no plugin.
+// Only the target's own files are checked against its providers. Providers
+// required by a local module, a module_source dep or a //<subdir> submodule
+// are not checked here (issues #76 and #144). A built-in provider needs no
+// plugin.
 func TestBuild_RequiredProviders(t *testing.T) {
 	files := map[string]string{
 		"app/main.tf": `

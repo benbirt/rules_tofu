@@ -416,9 +416,9 @@ def modules_manifest(ctx, work_tree_outputs, infos, strict, srcs, data, root = N
     is recorded, local ones by their directory in the work tree and others by
     the dep whose `module_source` they name, so `tofu init -get=false` finds
     them all installed. The validate action and the runner copy the manifest
-    into place. The action also fails when
-    `srcs` use a provider or module absent from `strict`, other than `own`, or
-    call a directory that holds no files from `srcs`, `data` or `strict`.
+    into place. The action also fails when `srcs` use a provider or module
+    absent from `strict`, other than `own`, or call a directory that holds no
+    files from `srcs`, `data` or `strict`.
 
     Args:
       ctx: rule ctx. Must declare `_modules_bin` (cfg = "exec") on the rule.

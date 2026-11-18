@@ -1,20 +1,18 @@
 load("@rules_tofu//tf:defs.bzl", "tf_library")
 
-# main.tf declares required_providers { random = ... } but the library has
-# no providers = [...], so the plugin tree materialised for validate lacks
-# hashicorp/random. The modules manifest action reads required_providers and
-# fails naming the label to add, before `tofu init -plugin-dir=<empty>` would
-# fail with "Failed to query available provider packages". Do not add
-# providers here.
+# main.tf declares required_providers { random = ... } and :missing sets no
+# providers. The manifest action's strict-deps check (issue #135) fails naming
+# "@tf_providers//hashicorp/random" to add. Do not add providers here.
 tf_library(
     name = "missing",
     srcs = ["main.tf"],
     fmt_test = False,
 )
 
-# implied.tf uses a hashicorp/random resource with no required_providers
-# entry, so only tofu sees that the provider is needed. Its own error is the
-# message (issue #144). Do not add providers here.
+# implied.tf has only resource "random_pet" "name" {}, with no
+# required_providers entry. TofuValidate fails in `tofu init` with OpenTofu's
+# "Failed to query available provider packages" error (issue #144). Do not add
+# providers here.
 tf_library(
     name = "implied",
     srcs = ["implied.tf"],

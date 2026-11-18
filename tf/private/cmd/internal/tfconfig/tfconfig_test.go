@@ -253,9 +253,8 @@ func TestReadCalls_Tofu(t *testing.T) {
 	}
 }
 
-// pin hands ReadRequirements the
-// files Bazel lists, both halves of a shadowed pair included; the .tf one
-// must not count.
+// pin hands ReadRequirements the files Bazel lists, both halves of a shadowed
+// pair included; the .tf one must not count.
 func TestReadRequirements_TofuShadowsTf(t *testing.T) {
 	dir := t.TempDir()
 	null := func(version string) string {
