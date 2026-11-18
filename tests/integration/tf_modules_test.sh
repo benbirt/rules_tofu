@@ -41,6 +41,7 @@
 #      configuration of a directory outside modules/ that the module never
 #      calls, so //vpc/peering is not there to call (issues #76 and #140).
 #      No configuration file under examples/ is in the work tree either.
+#      Neither are the module's .tftest.hcl files.
 #   4. MODULE.bazel.lock records the git commit and registry module metadata.
 #      Replacing the git module's fact with a registry-module fact (location
 #      and sha256), shutting down Bazel and removing the output base's lockfile
@@ -59,6 +60,9 @@
 #  10. Editing vpc/peering/main.tf in place to drop hashicorp/time and
 #      updating commit on the network module's tag regenerates
 #      vpc/BUILD.bazel without that provider.
+#  11. Building //invalid_caller, which calls a fetched module that does not
+#      validate, fails in TofuValidate @tf_modules//invalid with remediation
+#      advice and without validating //invalid_caller (issue #143).
 
 set -euo pipefail
 
@@ -135,7 +139,7 @@ if command -v sha256sum >/dev/null; then
 else
   dns_sha256="$(shasum -a 256 "${FIXTURES}/dns.tar.gz" | cut -d' ' -f1)"
 fi
-for f in MODULE.bazel app/main.tf bad/main.tf; do
+for f in MODULE.bazel app/main.tf bad/main.tf invalid_caller/main.tf; do
   sed -i.bak \
     -e "s|path = \"../../..\"|path = \"${RULES_TOFU}\"|" \
     -e "s|@FIXTURES@|${FIXTURES}|g" \
@@ -194,6 +198,11 @@ echo "--- 3. a submodule the tag doesn't name ---" >&2
 work_tree="$(bazel info bazel-bin)/app/app.work"
 if find -L "${work_tree}" -path '*/examples/*' \( -name '*.tf' -o -name '*.tofu' -o -name '*.tf.json' -o -name '*.tofu.json' \) | grep -q .; then
   fail "the work tree holds an example's configuration"
+fi
+# Upstream test files are excluded from data; see
+# fixtures/network/vpc/defaults.tftest.hcl.
+if find -L "${work_tree}" -name '*.tftest.hcl' | grep -q .; then
+  fail "the work tree contains test files from the fetched module"
 fi
 # //vpc/peering is outside modules/ and nothing in the module calls it: only
 # the tag's `subdirs` makes it part of the library.
@@ -355,6 +364,25 @@ grep -q -F "commit = \"${third_commit}\"," MODULE.bazel || fail "couldn't set co
 bazel build --nobuild @tf_modules//network >&2 || fail "couldn't load @tf_modules//network at the new commit"
 if grep -q -F 'hashicorp/time' "${library}"; then
   fail "vpc/BUILD.bazel still lists hashicorp/time after re-fetching at a new commit"
+fi
+
+echo "--- 11. a fetched module that does not validate ---" >&2
+cat >>MODULE.bazel <<EOF
+tf_modules.module(
+    name = "invalid",
+    source = "git::file://${FIXTURES}/network.git//invalid?ref=v1.0.0",
+)
+EOF
+if out="$(bazel build //invalid_caller 2>&1)"; then
+  fail "//invalid_caller built despite depending on an invalid fetched module"
+fi
+echo "${out}" >&2
+grep -q -F 'TofuValidate @tf_modules//invalid failed' <<<"${out}" ||
+  fail "expected failure in TofuValidate @tf_modules//invalid"
+grep -q -F 'rules_tofu: fetched module @tf_modules//invalid failed validation.' <<<"${out}" ||
+  fail "missing fetched-module remediation message"
+if grep -q -F 'TofuValidate //invalid_caller' <<<"${out}"; then
+  fail "//invalid_caller was validated after @tf_modules//invalid failed"
 fi
 
 echo "OK: tf_modules fetched git, archive and registry modules, pinned by commit" >&2

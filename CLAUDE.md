@@ -446,6 +446,36 @@ Then `bazel shutdown` so the new startup flags take effect.
 - Validate `tf_library` inline via `DefaultInfo.files` so
   `bazel build :foo_lib` is the validation contract. Don't add `:foo.validate`
   or `validate_test`; the only generated test sub-target is `:foo.fmt_check`.
+- Check targets in dependency order (`README.md`, "How it works";
+  `CONTRIBUTING.md`, invariant 2; issue #143; `dependency_invalid*`,
+  `test_*_invalid` and `launcher_*` cases):
+  - Carry check outputs in `TfLibraryInfo.validate_stamp`,
+    `TfLibraryInfo.modules_manifest` and `TfDeployInfo.stamps`, and pass direct
+    dependencies' outputs to `tf_init_validate` (`required_stamps`) and
+    `modules_manifest` (`infos`). Direct dependencies suffice because each
+    output already depends on its upstream outputs.
+  - Pass manifests rather than validate stamps to `modules_manifest` so
+    strict-deps checks do not wait for upstream `tofu init`.
+  - Include `var_files_check_stamp` in `required_stamps` on `tf_deploy`
+    validation (issue #150).
+  - Don't use Bazel's `_validation` output group: validation actions run in
+    parallel with downstream actions and tests rather than gating them, and
+    `--norun_validations` skips them.
+  - Put `TfDeployInfo.stamps` in both `runfiles` and `DefaultInfo.files` of
+    `tf_runner`, and a `tf_test`'s own `validate_stamp` in its `runfiles`.
+    `ctx.actions.write` takes no inputs; `bazel run` and `bazel test` build the
+    executable and `runfiles`, while `bazel build` builds `DefaultInfo.files`
+    for direct script execution. In `DefaultInfo.files` alone on `tf_test`,
+    validation ran in parallel with `tofu test`.
+  - Validate `tf_modules` libraries like any other, with no opt-out. Set
+    `tf_modules_label` (`display_label`) for `TofuValidate` and `TofuModules`
+    progress messages and `--label` so failures report `@tf_modules//<path>`
+    instead of `:_rules_tofu_module` (`tf_modules_test` step 11).
+- Keep `tf_deploy`'s `DefaultInfo.files` to its stamps (`TfDeployInfo.stamps`;
+  issue #156; `run_directory_test` step 4). Including `work_tree_files` there
+  made remote-cached builds download whole provider packages (~170 MB) for
+  every top-level deploy; `work_tree_files` still feeds validation and
+  `TfDeployInfo.work_tree_files` feeds launchers.
 - Keep `tofu test` in the separate `tf_test` rule (`tf/private/test.bzl`;
   `README.md`, "Tests") with its own `deps` and `providers`.
 - Allow empty root modules in `tf_library` and `tf_test` (issue #119; the
@@ -471,7 +501,9 @@ Then `bazel shutdown` so the new startup flags take effect.
 - Reject `TEST_SRC_EXTS` in `tf_library` and `tf_deploy` `srcs`
   (`check_no_test_files`; `test_file_in_srcs`). `ALLOWED_SRC_EXTS` admits
   `.hcl`, and `tofu` would otherwise load library test files in dependants.
-  Fetched modules' tests in `data` stay unchecked and inert unless loaded.
+  `tf_modules` excludes test files from `data` too (`_TEST_GLOBS`), because
+  validating a fetched module at its root makes `tofu` read tests in its root
+  and `tests/` directories, whose `run` blocks may load excluded examples.
 - Reject configuration files in every rule's `data` (`check_no_config_in_data`;
   `config_in_data`; issue #140). `data` is not code: only `srcs` are checked
   against `providers` and `deps`, and formatted. Don't go back to

@@ -2,10 +2,10 @@
 
 `TfProviderInfo` carries one platform's package of a vendored OpenTofu provider
 and its optional lock file. `TfLibraryInfo` carries a `tf_library`'s files,
-providers and `module_source` metadata to downstream libraries, deploys and
-tests. `TfDeployInfo` gives the deploy's `.plan`, `.apply` and `.destroy`
-runners and any `tf_test` targeting the deploy everything needed to stage and
-run `tofu`.
+providers, `module_source` metadata and build-check outputs to downstream
+libraries, deploys and tests. `TfDeployInfo` gives the deploy's `.plan`,
+`.apply` and `.destroy` runners and any `tf_test` targeting the deploy
+everything needed to stage and run `tofu`.
 """
 
 visibility(["public"])
@@ -49,6 +49,11 @@ TfLibraryInfo = provider(
         "package_dir": "string: the work-tree directory of this library's package, `<workspace_root>/<package>`; " +
                        "the root module directory when the library is tested. Carried here so a `tf_test` " +
                        "reads it from the provider, which an `alias` passes through unchanged.",
+        "modules_manifest": "File: this library's `<name>.modules.json`, written by `TofuModules` after its " +
+                            "strict-deps check passes. Direct dependants pass it as an input to their own " +
+                            "`TofuModules` actions to order the build.",
+        "validate_stamp": "File: empty stamp written by `TofuValidate` after this library and its deps " +
+                          "validate. Direct dependants pass it as an input to their own `TofuValidate` actions.",
     },
 )
 
@@ -76,5 +81,8 @@ TfDeployInfo = provider(
                 "relative path from `tf_test`.",
         "tfvars_content": "string: the `rules_tofu.auto.tfvars.json` rendered from `vars`.",
         "var_files": "list[File]: the `var_files`, in declaration order.",
+        "stamps": "list[File]: empty stamps from the deploy's build checks: `TofuValidate` and, when " +
+                  "`var_files` is non-empty, the duplicate-variable check. Included in launcher runfiles " +
+                  "and default outputs and required by `tf_test`.",
     },
 )

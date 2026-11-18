@@ -439,9 +439,10 @@ submodules are not fetched; see [Known gaps](#known-gaps).
 Each generated `tf_library` lists as `srcs` the configuration files of the
 module's root, its `modules/` subdirectories and directories it calls itself,
 and carries the providers they require. Configuration files in other
-directories, such as examples, are left out and cannot be called. To call a
-`//<subdir>` outside `modules/` that the module does not call itself, name it
-in `subdirs`, which adds it to the library:
+directories, such as examples, are left out and cannot be called. Upstream test
+files are also left out. To call a `//<subdir>` outside `modules/` that the
+module does not call itself, name it in `subdirs`, which adds it to the
+library:
 
 ```python
 tf_modules.module(
@@ -453,6 +454,10 @@ tf_modules.module(
 
 External modules called transitively must also be declared with
 `tf_modules.module`.
+
+A fetched module that does not validate at its root directory fails in
+`TofuValidate @tf_modules//<path>`, even if callers use only a `//<subdir>`.
+Declare a different version, or get the module fixed upstream.
 
 #### Keeping modules up to date
 
@@ -712,7 +717,15 @@ packages into `bazel-bin/<pkg>/<name>.plugins/` and write the module manifest to
 scratch directory, installs that manifest at
 `<pkg>/.terraform/modules/modules.json`, and runs
 `tofu init -backend=false -get=false -plugin-dir=... && tofu validate` as a
-cached action.
+cached action, writing the empty file `bazel-bin/<pkg>/<name>.validate.stamp`.
+A `tf_deploy` with `var_files` also writes `<name>.var_files_check.stamp` after
+checking for duplicate variable keys. Those stamps are the target's only
+default outputs; the work tree and plugin tree are built as inputs to
+validation and launchers. Each manifest action takes its direct
+dependencies' manifests as inputs. Each validate action takes their stamps,
+plus `<name>.var_files_check.stamp` on a deploy. Deploy launchers include the
+deploy's stamps in their runfiles and default outputs, and `tf_test` includes
+its validate stamp in its runfiles.
 
 `.plan`, `.apply` and `.destroy` locate their runfiles and state directory from
 `$0` and mirror the work tree as symlinks into

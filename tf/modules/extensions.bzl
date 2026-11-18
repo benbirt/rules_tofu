@@ -103,6 +103,11 @@ _EXCLUDED = [
     "BUILD.bazel",
 ]
 
+# Upstream test files, excluded from data globs. Validating the generated
+# library at the module's root makes tofu read test files there and under
+# tests/, where run blocks may load examples that srcs leave out.
+_TEST_GLOBS = ["**/*" + ext for ext in (".tftest.hcl", ".tofutest.hcl", ".tftest.json", ".tofutest.json")]
+
 # What tofu reads as a module's configuration. No rule takes a configuration
 # file as data, so the globs leave them all out. A generated library lists
 # those of the directories it serves in srcs; an example's are in no target.
@@ -478,7 +483,7 @@ def _tf_module_repo_impl(repository_ctx):
                 outside.append(path)
     srcs = sorted(srcs) + ["//:" + path for path in sorted(outside)]
 
-    excluded = _EXCLUDED + _CONFIG_GLOBS
+    excluded = _EXCLUDED + _CONFIG_GLOBS + _TEST_GLOBS
     dot_files = _dot_files(tree)
     if package:
         own_dot_files = [path[len(package) + 1:] for path in dot_files if path.startswith(package + "/")]
@@ -528,10 +533,12 @@ tf_library(
     module_source = {source},
     module_version = {version},
     providers = {providers},
+    tf_modules_label = {label},
     visibility = ["@{hub}//:__subpackages__"],
     deps = {deps},
 )
 """.format(
+            label = repr(attr.label),
             name = repr(_MODULE_TARGET),
             srcs = repr(srcs),
             data = " + ".join(data),
@@ -892,10 +899,14 @@ submodules are not fetched.
 
 Each generated `tf_library` lists as `srcs` the configuration files of the
 module's root, its `modules/` subdirectories, directories it calls itself and
-directories named in `subdirs`, and carries the providers they require.
-Non-configuration files are `data`. Configuration files in other directories,
-such as examples, are left out and cannot be called. External modules called
-transitively must also be declared with `tf_modules.module`.
+directories named in `subdirs`, and carries the providers they require. Other
+files are `data`, except `.tftest.hcl`, `.tofutest.hcl`, `.tftest.json` and
+`.tofutest.json` test files, which are left out. Configuration files in other
+directories, such as examples, are also left out and cannot be called.
+External modules called transitively must also be declared with
+`tf_modules.module`. Each fetched module is validated at its root directory
+before anything that depends on it, failing in
+`TofuValidate @tf_modules//<path>` even if callers use only a `//<subdir>`.
 
 Across the module graph, each `@tf_modules` path resolves once. For registry
 modules, the root module's tag wins, else the highest version. Git and archive
