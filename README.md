@@ -550,40 +550,22 @@ Variable keys must not overlap across `vars` and `var_files` on a `tf_deploy`;
 
 ## State and backends
 
-A deploy managing real infrastructure should declare a remote `backend "..." {}`
-or `cloud {}` block in `srcs`. The runner never rewrites `backend` blocks and
-passes no `-backend-config`, `-state` or `-state-out` flags; `tofu` resolves
-state paths from the deploy's run directory,
-`bazel-bin/<pkg>/<name>.rules_tofu-state/work/<pkg>`.
+Launchers run `tofu` in the deploy's run directory,
+`bazel-bin/<pkg>/<name>.rules_tofu-state/work/<pkg>`. `apply` and `destroy`
+refuse to run without `allow_ephemeral_state = True` in two cases:
 
-State is treated as ephemeral in two cases:
-
-- No `backend` or `cloud` block: `tofu` keeps state in the run directory at
-  `bazel-bin/<pkg>/<name>.rules_tofu-state/work/<pkg>/terraform.tfstate`, where
-  `tofu workspace` works too.
+- No `backend` or `cloud` block, which writes state to
+  `bazel-bin/<pkg>/<name>.rules_tofu-state/work/<pkg>/terraform.tfstate`.
 - `backend "local"`, unless both `path` and `workspace_dir` resolve to absolute
-  paths outside `bazel-out` after following symlinks. Those attributes default
-  to `terraform.tfstate` and `terraform.tfstate.d` in the run directory. Even
-  with paths outside `bazel-out`, local backend state remains single-machine.
+  paths outside `bazel-out` after following symlinks.
 
-State under `bazel-out` is machine-local, forks across build configurations and
-checkouts, and is deleted by `bazel clean`, so `apply` and `destroy` refuse
-ephemeral state unless `allow_ephemeral_state = True` is set. `plan` is never
-gated. The runner checks the backend that `tofu init` recorded in
-`.terraform/terraform.tfstate` before running `tofu apply` or `tofu destroy`,
-and refuses if that record cannot be parsed. OpenTofu has already merged
-`_override` files and evaluated variables from `vars` and `var_files`, so
-`backend "local"` paths using variables are checked by their resolved values.
+`plan` is never gated.
 
-Set `allow_ephemeral_state = True` only for demos, throwaway sandboxes or
-state-bucket bootstrap. After bootstrapping a state bucket, add the remote
-`backend` block, run `tofu init -migrate-state` in the run directory, and remove
-`allow_ephemeral_state`. Adding a `backend` or `cloud` block while
-`terraform.tfstate` in the run directory holds resources or outputs makes
-`tofu init` fail in every launcher because `-input=false` blocks the migration
-prompt. In the run directory, run `tofu init -migrate-state` for a `backend`
-block, or delete `terraform.tfstate`; `cloud` blocks reject `-migrate-state`, so
-run plain `tofu init` there and answer its prompt.
+Adding a `backend` or `cloud` block while `terraform.tfstate` in the run
+directory holds resources or outputs makes `tofu init` fail in every launcher.
+In the run directory, run `tofu init -migrate-state` for a `backend` block, or
+delete `terraform.tfstate`; `cloud` blocks reject `-migrate-state`, so run plain
+`tofu init` there and answer its prompt.
 
 ## Tests
 
@@ -732,12 +714,8 @@ consistent across runs until `bazel clean`. If a leftover regular file in the
 state tree collides with a configuration path, the runner fails rather than
 overwriting it. Each run installs `<name>.modules.json` at
 `.terraform/modules/modules.json`, pins `TF_DATA_DIR` to `.terraform`, and
-unsets `TF_PLUGIN_CACHE_DIR`. It removes `.terraform/terraform.tfstate` from
-any previous run so `tofu init` reads any `backend` or `cloud` block afresh,
-then runs `tofu init -input=false -get=false -plugin-dir=...` and the `tofu`
-command, both with the `-var-file` flags. For `apply` and `destroy`, it checks
-the backend recorded by `tofu init` before running the command; see
-[State and backends](#state-and-backends).
+unsets `TF_PLUGIN_CACHE_DIR`. It then runs `tofu init` followed by the `tofu`
+command.
 
 `tf_test` validates `module` and `srcs` during `bazel build`. During
 `bazel test`, it copies the work tree into `$TEST_TMPDIR`, installs

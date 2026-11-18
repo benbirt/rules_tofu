@@ -132,29 +132,22 @@ func localBackendEphemeral(config json.RawMessage, outputRoot string) (string, e
 	return "", nil
 }
 
-// ephemeralExplanation completes a sentence explaining why state in the output
-// tree is unsafe; optInAdvice explains allow_ephemeral_state.
+// ephemeralExplanation explains why state in Bazel's output tree is unsafe;
+// optInAdvice explains allow_ephemeral_state.
 const (
-	ephemeralExplanation = `is machine-local and disposable. It sits under bazel-bin, so
-"bazel clean" deletes it; it embeds the build configuration, so building with
--c opt or a different --platforms silently forks to a different state file; and
-a colleague running this target from their own checkout gets their own private
-copy. Losing or forking that file orphans every resource this command creates:
-the infrastructure carries on existing with nothing tracking it.`
+	ephemeralExplanation = `State under bazel-out is machine-local, forks across build configurations and
+checkouts, and is deleted by "bazel clean". Losing or forking that state file
+orphans the resources this command creates.`
 
-	optInAdvice = `If disposable state is the point — a demo or example, a throwaway sandbox, or
-bootstrapping the bucket that will later hold real state — opt in explicitly by
-setting
+	optInAdvice = `For demos, throwaway sandboxes or state-bucket bootstrap, opt in on the
+tf_deploy target:
 
     allow_ephemeral_state = True
 
-on the tf_deploy target. For the bootstrap case, add the remote backend block
-once the bucket exists and move the existing state into it by running this in
-the run directory above:
-
-    tofu init -migrate-state
-
-The deploy's .plan target is never gated, so planning still works either way.`
+After bootstrapping, add the backend or cloud {} block and migrate state in the
+run directory above: run "tofu init -migrate-state" for a backend block, or run
+"tofu init" and answer its prompt for a cloud {} block, then remove
+allow_ephemeral_state. The .plan target is never gated.`
 )
 
 // ephemeralStateError formats the refusal for apply or destroy when the deploy
@@ -164,10 +157,9 @@ func ephemeralStateError(command, cwd string) error {
 
     %s
 
-State there %s
+%s
 
-Recommended fix — declare a remote backend in a .tf file listed in this
-deploy's srcs:
+Declare a remote backend or cloud {} block in this deploy's srcs:
 
     terraform {
       backend "gcs" {
@@ -176,10 +168,8 @@ deploy's srcs:
       }
     }
 
-(Any remote backend or a cloud {} block will do. A backend "local" block
-counts only when its path and workspace_dir are both absolute paths outside
-Bazel's output tree, and that state is still local to this machine.)
-With one present, this check no longer applies.
+backend "local" counts only when path and workspace_dir are both absolute paths
+outside Bazel's output tree, and its state remains single-machine.
 
 %s`,
 		command, defaultStateFile, cwd, ephemeralExplanation, optInAdvice)
@@ -190,15 +180,15 @@ With one present, this check no longer applies.
 func localBackendError(command, reason, cwd string) error {
 	return fmt.Errorf(`rules_tofu: refusing to run "tofu %s": this deploy's backend "local" does not keep state outside Bazel's output tree: %s.
 
-tofu resolves that block itself, from this deploy's run directory,
+tofu resolves relative and default paths from the run directory:
 
     %s
 
-which is where a relative path, or the default of an attribute left unset,
-leads. State there %s
+%s
 
-To keep this state, set both path and workspace_dir to absolute paths outside
-Bazel's output tree:
+Set both path and workspace_dir to absolute paths outside Bazel's output tree,
+which still keeps state on one machine, or declare a remote backend or cloud {}
+block:
 
     terraform {
       backend "local" {
@@ -206,8 +196,6 @@ Bazel's output tree:
         workspace_dir = "/var/lib/tofu/prod/workspaces"
       }
     }
-
-or declare a remote backend (s3, gcs, ...) or a cloud {} block.
 
 %s`,
 		command, reason, cwd, ephemeralExplanation, optInAdvice)
