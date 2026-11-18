@@ -10,6 +10,7 @@ load(
     "//tf/modules:source.bzl",
     "check_name",
     "check_version",
+    "files_repo_name",
     "hub_path",
     "looks_abbreviated",
     "ls_remote_commit",
@@ -31,6 +32,7 @@ def _hub_path_test_impl(ctx):
     default = struct(host = "registry.opentofu.org", namespace = "Terraform-AWS-Modules", name = "VPC", system = "aws")
     asserts.equals(env, "terraform-aws-modules/vpc/aws", hub_path(default))
     asserts.equals(env, "tf_modules_terraform-aws-modules_vpc_aws", repo_name(hub_path(default)))
+    asserts.equals(env, "tf_module_files_terraform-aws-modules_vpc_aws", files_repo_name(hub_path(default)))
 
     other = struct(host = "example.com", namespace = "acme", name = "net", system = "aws")
     asserts.equals(env, "example.com/acme/net/aws", hub_path(other))
