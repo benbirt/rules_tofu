@@ -629,8 +629,8 @@ tree by itself.
 
 ### `tofu fmt`
 
-Run the pinned [`@rules_tofu//tofu`](#running-tofu-yourself) binary at the
-workspace root:
+Run the pinned [`@rules_tofu//tofu`](#running-tofu) binary at the workspace
+root:
 
 ```sh
 bazel run @rules_tofu//tofu -- fmt -recursive .
@@ -689,22 +689,6 @@ on an unformatted file.
 
   Do not use the sandboxed `format_test(srcs = ...)` form: with `rules_lint`
   2.9.1 it passed with an unformatted file in `srcs`.
-
-### Upgrading from 0.5.0
-
-Up to `rules_tofu` 0.5.0, every `tf_library`, `tf_deploy` and `tf_test` with
-`srcs` took a `fmt_test` attribute and generated two format targets:
-`:name.fmt` rewrote its `srcs` under `bazel run`, and `:name.fmt_check` ran as
-a test. All three are removed:
-
-- Delete `fmt_test` from every target. A target that still sets it fails to
-  load with `no such attribute 'fmt_test'`.
-- Instead of running `bazel run //pkg:name.fmt` per target, run
-  `bazel run @rules_tofu//tofu -- fmt -recursive .` once at the workspace root.
-- `bazel test //...` no longer checks formatting. Add one of the two checks
-  above to CI, and remove `.fmt_check` labels from scripts and `test_suite`s.
-- Generated files and files from other repositories in `srcs` are no longer
-  checked.
 
 ## The `tofu` binary
 

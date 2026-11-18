@@ -31,8 +31,9 @@
 #      writing one unformatted .tf, .tofu, .tfvars, .tftest.hcl and
 #      .tofutest.hcl file at several depths, `fmt -check -recursive .` fails and
 #      lists exactly those files. `fmt -recursive .` rewrites them and the check
-#      passes again. Unformatted files behind a directory symlink and in a
-#      dot-directory are neither reported nor rewritten.
+#      passes again. Unformatted files behind a directory symlink, in a
+#      dot-directory or with a dot-prefixed name are neither reported nor
+#      rewritten.
 #
 # Runs once per tofu version rules_tofu pins because the module manifest is
 # tofu's internal format.
@@ -111,11 +112,13 @@ fmt_files=(scratch.tf app/scratch.tofu app/scratch.tfvars app/tests/scratch.tfte
 for f in "${fmt_files[@]}"; do
   echo "${unformatted}" >"${f}"
 done
-# Files behind a directory symlink or in a dot-directory must be skipped.
+# Files behind a directory symlink, in a dot-directory or with a dot-prefixed
+# name must be skipped.
 mkdir "${_TMPDIR}/linked" .hidden
 echo "${unformatted}" >"${_TMPDIR}/linked/scratch.tf"
 ln -s "${_TMPDIR}/linked" linked
 echo "${unformatted}" >.hidden/scratch.tf
+echo "${unformatted}" >app/.scratch.tf
 
 if out="$(bazel run @rules_tofu//tofu -- fmt -check -recursive . 2>/dev/null)"; then
   fail "tofu fmt -check passed on unformatted files: ${out}"
@@ -128,9 +131,9 @@ bazel run @rules_tofu//tofu -- fmt -check -diff -recursive . >&2 || fail "tofu f
 for f in "${fmt_files[@]}"; do
   grep -q -x -F 'variable "unformatted" {}' "${f}" || fail "tofu fmt didn't rewrite ${f}: $(cat "${f}")"
 done
-for f in linked/scratch.tf .hidden/scratch.tf; do
+for f in linked/scratch.tf .hidden/scratch.tf app/.scratch.tf; do
   grep -q -x -F "${unformatted}" "${f}" || fail "tofu fmt rewrote ${f}, which -recursive should not reach"
 done
-rm -r "${fmt_files[@]}" linked .hidden "${_TMPDIR}/linked"
+rm -r "${fmt_files[@]}" linked .hidden app/.scratch.tf "${_TMPDIR}/linked"
 
 echo "OK: with tofu ${TOFU_VERSION}, modules from other Bazel modules were called by module_source, and tofu fmt formatted the workspace" >&2

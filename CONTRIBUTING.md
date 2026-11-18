@@ -155,7 +155,7 @@ writes the five platform digests into
 hand.
 
 Test an entry that is not the default with its generated per-version
-integration tests (dots replaced by underscores):
+integration test (dots replaced by underscores):
 
 ```sh
 bazel test //tests/integration:module_dependency_1_12_1_test

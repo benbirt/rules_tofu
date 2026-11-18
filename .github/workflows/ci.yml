@@ -195,6 +195,7 @@ jobs:
           repository-cache: |
             - MODULE.bazel
             - MODULE.bazel.lock
+            - toolchain/versions.bzl
 
       - name: Run buildifier (format check)
         run: bazel run @buildifier_prebuilt//:buildifier -- -mode=check -r .
