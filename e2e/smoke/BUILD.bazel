@@ -22,8 +22,9 @@ tf_test(
     module = ":smoke",
 )
 
-# What `bazel run @rules_tofu//tofu` runs. Building it here, with `//...`,
-# checks that the published archive ships the package.
+# This alias makes `bazel build //...` in this module build `@rules_tofu//tofu`.
+# Because the BCR presubmit builds this module against the published archive,
+# building `:tofu` checks that the archive ships the `tofu` package.
 alias(
     name = "tofu",
     actual = "@rules_tofu//tofu",

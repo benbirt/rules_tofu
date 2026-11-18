@@ -1,17 +1,23 @@
 #!/usr/bin/env bash
-# Test of //tofu as a tool in another target's runfiles, where it has no
-# runfiles tree of its own. TOFU is the launcher's path in the runfiles.
+# Tests //tofu used as a tool in another target's runfiles, where the launcher
+# has no runfiles tree of its own. TOFU is the launcher's runfiles path.
 #
 # Steps:
-#   1. The launcher finds the tofu binary through either of RUNFILES_DIR and
-#      TEST_SRCDIR on its own, skips a variable that points somewhere without
-#      the binary, and says where it looked when neither leads to it.
-#   2. With BUILD_WORKING_DIRECTORY set, as under `bazel run`, it runs tofu in
-#      that directory: rules_lint's format.sh changes to it, leaves the
-#      variable set, and passes file names relative to it through `xargs`,
-#      first to `fmt -check -diff` and then to `fmt`.
-#   3. Without BUILD_WORKING_DIRECTORY, as under `bazel test` (rules_lint's
-#      format_test), it runs tofu in the caller's directory.
+#   1. The launcher finds the binary with only RUNFILES_DIR set and with only
+#      TEST_SRCDIR set. When RUNFILES_DIR points to a directory without the
+#      binary, it falls through to TEST_SRCDIR. With neither set, it fails and
+#      reports that it cannot find the binary.
+#   2. With BUILD_WORKING_DIRECTORY set (as under `bazel run`) and started from
+#      a different directory, the launcher runs tofu in
+#      BUILD_WORKING_DIRECTORY. File names relative to that directory,
+#      including one with a space, are passed through `xargs -0` first to
+#      `fmt -check -diff` (which must fail and name both files), then to `fmt`,
+#      and then to `fmt -check -diff` (which must pass). This mirrors
+#      rules_lint's format.sh, which changes to that directory, leaves
+#      BUILD_WORKING_DIRECTORY set and passes relative names through `xargs`.
+#   3. Without BUILD_WORKING_DIRECTORY (as under `bazel test`, for example
+#      rules_lint's format_test), the launcher runs tofu in the caller's
+#      current directory.
 
 set -euo pipefail
 
@@ -24,7 +30,8 @@ RUNFILES="${TEST_SRCDIR:?run this as a Bazel test}"
 launcher="${RUNFILES}/${TOFU:?set by the test target}"
 [[ -x "${launcher}" ]] || fail "no launcher at ${launcher}"
 
-# Starts from nothing Bazel set, so each step names what the launcher gets.
+# Remove RUNFILES_DIR, TEST_SRCDIR, BUILD_WORKING_DIRECTORY and
+# BUILD_WORKSPACE_DIRECTORY so each step states what the launcher receives.
 clean() {
   env -u RUNFILES_DIR -u TEST_SRCDIR \
     -u BUILD_WORKING_DIRECTORY -u BUILD_WORKSPACE_DIRECTORY "$@"
@@ -37,7 +44,7 @@ for vars in \
   "RUNFILES_DIR=${RUNFILES}" \
   "TEST_SRCDIR=${RUNFILES}" \
   "RUNFILES_DIR=${empty} TEST_SRCDIR=${RUNFILES}"; do
-  # shellcheck disable=SC2086 # one word per variable
+  # shellcheck disable=SC2086 # split vars into NAME=VALUE arguments
   out="$(clean env ${vars} "${launcher}" version 2>&1)" || fail "with ${vars}: ${out}"
   grep -q '^OpenTofu v' <<<"${out}" || fail "with ${vars}, not tofu's version: ${out}"
 done
@@ -55,7 +62,8 @@ echo "${unformatted}" >"${work}/sub/spaced name.tofu"
 files() {
   printf '%s\0' main.tf "sub/spaced name.tofu"
 }
-# The launcher is started somewhere else and has to change directory itself.
+# Start in another directory so the launcher must change to
+# BUILD_WORKING_DIRECTORY itself.
 cd "${TEST_TMPDIR}"
 lint() {
   files | clean env "RUNFILES_DIR=${RUNFILES}" "BUILD_WORKING_DIRECTORY=${work}" xargs -0 "${launcher}" "$@"

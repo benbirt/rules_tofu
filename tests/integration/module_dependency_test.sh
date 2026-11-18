@@ -10,10 +10,10 @@
 #      root modules in their own repositories.
 #   3. `bazel run //app:app.plan` plans offline against the generated module
 #      manifest and checks the module chain's output.
-#   4. `bazel run @rules_tofu//tofu`, started in app/, runs the tofu of
-#      TOFU_VERSION there with the arguments it is given. That is the pinned
-#      binary as a consumer of rules_tofu reaches it, and it catches a version
-#      override that did not take effect.
+#   4. From app/, `bazel run @rules_tofu//tofu -- version` reports TOFU_VERSION,
+#      catching a version override that did not take effect. A second run passes
+#      `fmt -list=false -write=false -diff` a relative file path and checks the
+#      diff, verifying that tofu runs in the directory Bazel was started in.
 #   5. `bazel test //app:app_test` runs the deploy's tf_test, whose run block
 #      loads a module from the manifest, and checks that tofu-test.json is
 #      written to its test outputs. The runner passes `tofu test` a flag
@@ -65,7 +65,7 @@ grep -q -F 'www.app.example.com' <<<"${out}" || fail "the plan doesn't show the 
 echo "--- 4. run the pinned tofu ---" >&2
 version="$(cd app && bazel run @rules_tofu//tofu -- version)" || fail "bazel run @rules_tofu//tofu failed"
 grep -q -x -F "OpenTofu v${TOFU_VERSION}" <<<"${version}" || fail "expected tofu ${TOFU_VERSION}, got: ${version}"
-# A relative path reaches a file only if tofu runs where Bazel was started.
+# A relative path resolves only if tofu runs in the directory Bazel started in.
 printf 'variable   "unformatted" {}\n' >app/scratch.tf
 out="$(cd app && bazel run @rules_tofu//tofu -- fmt -list=false -write=false -diff scratch.tf)" || fail "tofu fmt of a file in the directory Bazel was started in failed"
 grep -q -x -F '+variable "unformatted" {}' <<<"${out}" || fail "tofu fmt did not print the diff of app/scratch.tf: ${out}"

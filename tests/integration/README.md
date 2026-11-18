@@ -65,12 +65,12 @@ two separate `_CASES` targets. The root module has no lock, while its
   than during extension evaluation, leaving `@lib_module//:lib` to fail for its
   own reason.
 
-`custom_toolchain/` (`custom_toolchain_test` and `custom_toolchain_run_test`,
-driven by `assert_bazel_fails.sh` via `_CASES` and `_RUN_CASES`) registers a
-root `opentofu_toolchain` whose stand-in `tofu` exits non-zero with
-`"custom tofu toolchain selected"`. It verifies that a root toolchain
-registration wins over `rules_tofu`'s downloads, both when a library is
-validated and under `bazel run @rules_tofu//tofu`.
+`custom_toolchain/` registers a root `opentofu_toolchain` whose stand-in `tofu`
+exits non-zero with `"custom tofu toolchain selected"`. `assert_bazel_fails.sh`
+drives two tests on it: `custom_toolchain_test` (`_CASES`) and
+`custom_toolchain_run_test` (`_RUN_CASES`). Together they check that the root's
+toolchain wins over `rules_tofu`'s downloads both when a library is validated
+at build time and when `bazel run @rules_tofu//tofu` is run.
 
 `lock_update/` (`lock_update_test`, driven by `lock_update_test.sh`) keeps its
 lock in `infra/` and covers a workspace's first `@tf_providers//:pin`, a
@@ -82,11 +82,11 @@ See the header of `lock_update_test.sh` for the steps.
 
 `module_dependency/` (`module_dependency_<version>_test`, driven by
 `module_dependency_test.sh`) has `//app` call a `tf_library` in
-`network_module` by `module_source`, which calls one in `dns_module`, and
+`network_module` by `module_source`, which calls one in `dns_module`. It
 exercises standalone library builds, offline planning, `tf_test` and
-`bazel run @rules_tofu//tofu` from a subdirectory. Because
-the module manifest (`.terraform/modules/modules.json`) is an internal OpenTofu
-format, `BUILD.bazel` generates one test per version in `KNOWN_VERSIONS`
+`bazel run @rules_tofu//tofu` from `app/`. Because the module manifest
+(`.terraform/modules/modules.json`) is an internal OpenTofu format,
+`BUILD.bazel` generates one test per version in `KNOWN_VERSIONS`
 (`toolchain/versions.bzl`). See the header of `module_dependency_test.sh` for
 the steps.
 
@@ -116,10 +116,11 @@ Bazel command `assert_bazel_fails.sh` runs:
 
 - `_CASES` (`bazel build`): failures from package loading, analysis, or build
   actions (`TofuModules`, `TofuValidate`, `dupcheck`, repository fetches).
-- `_RUN_CASES` (`bazel run`): targets that build cleanly and are refused at run
-  time by a `tf_deploy` launcher. These cover the wiring from BUILD attributes
-  through the generated launcher script to runner CLI flags, which the runner's
-  Go unit tests do not exercise.
+- `_RUN_CASES` (`bazel run`): targets that build cleanly and fail at run time.
+  `custom_toolchain_run` is `@rules_tofu//tofu` running the stand-in `tofu`,
+  while most cases are `tf_deploy` launchers refused by the runner. These cover
+  the wiring from BUILD attributes through the generated launcher script to
+  runner CLI flags, which the runner's Go unit tests do not exercise.
 
 Each row encodes to a `name|command|target|fragment` line in the driver's
 `CASES` environment variable.

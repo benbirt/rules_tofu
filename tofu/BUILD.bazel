@@ -1,9 +1,9 @@
 load("//tf/private:tofu_binary.bzl", "tofu_binary")
 
-# The `tofu` that the build uses, for the commands the rules have no target
-# for: `bazel run @rules_tofu//tofu -- <arguments>` runs it in the directory
-# the command was typed in. Any target may also take it as a tool; it works as
-# the `terraform` formatter of rules_lint's `format_multirun`.
+# Runs the `tofu` binary the build uses, for OpenTofu commands the rules have
+# no target for. `bazel run @rules_tofu//tofu -- <arguments>` runs it in the
+# directory `bazel run` was started in. Other targets may also use it as a
+# tool.
 tofu_binary(
     name = "tofu",
     visibility = ["//visibility:public"],
