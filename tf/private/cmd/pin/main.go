@@ -37,20 +37,20 @@
 //     nothing, pin writes an empty lock containing only tofu's header comment
 //     without running tofu, so a provider moved from the lock to a tag stops
 //     conflicting with it.
-//   - Otherwise pin writes a scratch configuration in a temporary directory
-//     with one child module per directory. OpenTofu combines the constraints
-//     as it would for nested modules: exact pins in a versions.tf decide the
-//     versions, and without one OpenTofu picks the newest version every
+//   - Otherwise pin combines constraints across directories by provider
+//     source and writes a scratch main.tf.json in a temporary directory with
+//     one root required_providers block. Exact pins in a versions.tf decide
+//     the versions, and without one OpenTofu picks the newest version every
 //     constraint accepts.
-//   - `tofu get` and `tofu providers lock` run in that scratch directory with
-//     no existing lock, since `tofu providers lock` keeps versions from an
-//     existing lock and has no -upgrade flag. The resulting lock replaces
+//   - `tofu providers lock` runs in that scratch directory with no existing
+//     lock, since it keeps versions from an existing lock and has no -upgrade
+//     flag. The resulting lock replaces
 //     <workspace>/<lock-dir>/.terraform.lock.hcl.
 //
 // Progress and errors go to stderr. When `tofu providers lock` fails, OpenTofu
-// does not report which module contributed each constraint, so pin prints
-// every directory's constraints by provider. When `bazel query` fails other
-// than with partial-result exit code 3, or when `tofu get` or
+// sees only the combined constraints, not which directory contributed each
+// one, so pin prints every directory's constraints by provider. When
+// `bazel query` fails other than with partial-result exit code 3, or when
 // `tofu providers lock` exits non-zero, pin exits with that subprocess's exit
 // code. Unrecognised or malformed flags exit 2, and other errors exit 1.
 package main
@@ -172,7 +172,11 @@ func run(workspace, lockDir, tofu, bazel string, defaultPlatforms, excludedSourc
 		return err
 	}
 	defer os.RemoveAll(scratch)
-	if err := writeScratch(scratch, modules); err != nil {
+	var all []tfconfig.Requirement
+	for _, m := range modules {
+		all = append(all, m.Reqs...)
+	}
+	if err := writeScratch(scratch, combine(all)); err != nil {
 		return err
 	}
 
@@ -184,10 +188,7 @@ func run(workspace, lockDir, tofu, bazel string, defaultPlatforms, excludedSourc
 	}
 	args = append(args, extraArgs...)
 
-	if err := runTofu(tofu, io.Discard, log, "-chdir="+scratch, "get"); err != nil {
-		return fmt.Errorf("tofu get: %w", err)
-	}
-	if err := runTofu(tofu, log, log, args...); err != nil {
+	if err := runTofu(tofu, args, log); err != nil {
 		fmt.Fprint(log, constraintsSummary(modules))
 		return fmt.Errorf("tofu providers lock: %w", err)
 	}
@@ -238,14 +239,27 @@ func requirements(files []string) ([]tfconfig.Requirement, error) {
 	if err != nil {
 		return nil, err
 	}
+	effective := tfconfig.ApplyOverrides(declared)
+	reqs := make([]tfconfig.Requirement, len(effective))
+	for i, d := range effective {
+		reqs[i] = tfconfig.Requirement{Source: d.Source, Version: d.Version}
+	}
+	return combine(reqs), nil
+}
+
+// combine returns one Requirement per provider source, sorted by source.
+// Distinct non-empty version strings for a source are sorted and joined with
+// ", ", which OpenTofu reads as requiring all of them. If every entry for a
+// source has an empty Version, the combined Version is "".
+func combine(reqs []tfconfig.Requirement) []tfconfig.Requirement {
 	versions := map[string][]string{}
-	for _, d := range tfconfig.ApplyOverrides(declared) {
-		if _, ok := versions[d.Source]; !ok {
-			versions[d.Source] = nil
+	for _, r := range reqs {
+		if _, ok := versions[r.Source]; !ok {
+			versions[r.Source] = nil
 		}
 		// No version is no constraint: nothing to add to the others.
-		if d.Version != "" && !slices.Contains(versions[d.Source], d.Version) {
-			versions[d.Source] = append(versions[d.Source], d.Version)
+		if r.Version != "" && !slices.Contains(versions[r.Source], r.Version) {
+			versions[r.Source] = append(versions[r.Source], r.Version)
 		}
 	}
 	sources := make([]string, 0, len(versions))
@@ -253,12 +267,12 @@ func requirements(files []string) ([]tfconfig.Requirement, error) {
 		sources = append(sources, s)
 	}
 	sort.Strings(sources)
-	reqs := make([]tfconfig.Requirement, 0, len(sources))
+	combined := make([]tfconfig.Requirement, 0, len(sources))
 	for _, s := range sources {
 		sort.Strings(versions[s])
-		reqs = append(reqs, tfconfig.Requirement{Source: s, Version: strings.Join(versions[s], ", ")})
+		combined = append(combined, tfconfig.Requirement{Source: s, Version: strings.Join(versions[s], ", ")})
 	}
-	return reqs, nil
+	return combined
 }
 
 // localNames gives each requirement in a scratch module a unique local name
@@ -282,10 +296,10 @@ func localNames(reqs []tfconfig.Requirement) []string {
 	return names
 }
 
-func runTofu(tofu string, stdout, stderr io.Writer, args ...string) error {
+func runTofu(tofu string, args []string, log io.Writer) error {
 	cmd := exec.Command(tofu, args...)
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
+	cmd.Stdout = log
+	cmd.Stderr = log
 	cmd.Env = append(os.Environ(), "TF_IN_AUTOMATION=1")
 	return cmd.Run()
 }
@@ -421,60 +435,16 @@ func parseTargets(out []byte) ([]target, error) {
 	return targets, nil
 }
 
-// moduleNames gives each child module a unique, valid module name derived
-// from its directory, e.g. `examples/lock/greeting` -> `examples_lock_greeting`.
-func moduleNames(children []module) []string {
-	names := make([]string, len(children))
-	used := map[string]bool{}
-	for i, m := range children {
-		var b strings.Builder
-		for _, r := range m.Dir {
-			if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-' {
-				b.WriteRune(r)
-			} else {
-				b.WriteRune('_')
-			}
-		}
-		base := b.String()
-		if base == "" || !(base[0] >= 'a' && base[0] <= 'z' || base[0] >= 'A' && base[0] <= 'Z') {
-			base = "m_" + base
-		}
-		name := base
-		for n := 2; used[name]; n++ {
-			name = fmt.Sprintf("%s_%d", base, n)
-		}
-		used[name] = true
-		names[i] = name
+// writeScratch writes main.tf.json in scratch for `tofu providers lock`: a
+// root module containing only a required_providers block, with local names
+// from localNames.
+func writeScratch(scratch string, reqs []tfconfig.Requirement) error {
+	required := map[string]tfconfig.Requirement{}
+	for i, local := range localNames(reqs) {
+		required[local] = reqs[i]
 	}
-	return names
-}
-
-// writeScratch writes the configuration that `providers lock` runs against:
-// each directory's requirements in a child module of its own, so tofu
-// combines them exactly as it would for nested modules. A child's local
-// names are made up (see localNames).
-func writeScratch(scratch string, children []module) error {
-	rootDoc := map[string]any{}
-	calls := map[string]any{}
-	for i, name := range moduleNames(children) {
-		dir := filepath.Join(scratch, "modules", name)
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return err
-		}
-		required := map[string]tfconfig.Requirement{}
-		for j, local := range localNames(children[i].Reqs) {
-			required[local] = children[i].Reqs[j]
-		}
-		doc := map[string]any{"terraform": map[string]any{"required_providers": required}}
-		if err := writeJSON(filepath.Join(dir, "main.tf.json"), doc); err != nil {
-			return err
-		}
-		calls[name] = map[string]string{"source": "./modules/" + name}
-	}
-	if len(calls) > 0 {
-		rootDoc["module"] = calls
-	}
-	return writeJSON(filepath.Join(scratch, "main.tf.json"), rootDoc)
+	doc := map[string]any{"terraform": map[string]any{"required_providers": required}}
+	return writeJSON(filepath.Join(scratch, "main.tf.json"), doc)
 }
 
 func writeJSON(path string, v any) error {
