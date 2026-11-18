@@ -17,9 +17,17 @@
 #      written to its test outputs. The runner passes `tofu test` a flag
 #      (-json-into) that OpenTofu before 1.12 lacks, and tf_test once ran on no
 #      version except the default (issue #125).
+#   6. `bazel run //app:app.apply`, a deploy with no backend block and the
+#      opt-in, leaves tofu's default terraform.tfstate in the run directory and
+#      no backend record.
+#   7. `bazel run //app:durable.apply`, a deploy with a `backend "local"` and no
+#      opt-in, is refused while the variable in its paths makes them relative,
+#      and runs once the variable is an absolute path outside Bazel's output
+#      tree, writing state there. The paths come from an override file.
 #
-# Runs once per tofu version rules_tofu pins because the module manifest is
-# tofu's internal format.
+# Runs once per tofu version rules_tofu pins because the module manifest and
+# the backend record `tofu init` writes, which the runner reads to decide
+# whether state is ephemeral, are tofu's internal formats.
 
 set -euo pipefail
 
@@ -76,5 +84,26 @@ elif [[ -f "${outputs_dir}/outputs.zip" ]]; then
   json_log="$(unzip -p "${outputs_dir}/outputs.zip" tofu-test.json 2>/dev/null || true)"
 fi
 grep -q -F '"@message"' <<<"${json_log}" || fail "the test left no JSON log (tofu-test.json) in ${outputs_dir}"
+
+echo "--- 6. apply with no backend block ---" >&2
+out="$(bazel run //app:app.apply -- -auto-approve 2>&1)" || fail "the apply with no backend block failed: ${out}"
+echo "${out}" >&2
+RUN_DIR="$(bazel info bazel-bin)/app/app.rules_tofu-state/work/app"
+grep -q -F 'www.app.example.com' "${RUN_DIR}/terraform.tfstate" || fail "no state at ${RUN_DIR}/terraform.tfstate"
+[[ ! -e "${RUN_DIR}/.terraform/terraform.tfstate" ]] || fail "tofu init recorded a backend for a deploy with no backend block: $(cat "${RUN_DIR}/.terraform/terraform.tfstate")"
+
+echo "--- 7. the ephemeral-state gate reads the backend tofu init recorded ---" >&2
+if out="$(bazel run //app:durable.apply -- -auto-approve 2>&1)"; then
+  fail "the apply ran against a backend \"local\" with relative paths: ${out}"
+fi
+echo "${out}" >&2
+grep -q -F 'its `path` ("state/app.tfstate") is relative' <<<"${out}" || fail "the refusal doesn't name the path tofu resolved"
+
+STATE_ROOT="${_TMPDIR}/durable_state"
+sed -i.bak "s|\"state_root\": \"state\"|\"state_root\": \"${STATE_ROOT}\"|" app/BUILD.bazel
+rm app/BUILD.bazel.bak
+out="$(bazel run //app:durable.apply -- -auto-approve 2>&1)" || fail "the apply against a backend \"local\" outside Bazel's output tree failed: ${out}"
+echo "${out}" >&2
+grep -q -F 'www.app.example.com' "${STATE_ROOT}/app.tfstate" || fail "no state at ${STATE_ROOT}/app.tfstate"
 
 echo "OK: with tofu ${TOFU_VERSION}, modules from other Bazel modules were called by module_source" >&2

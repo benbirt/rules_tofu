@@ -18,13 +18,14 @@ import (
 // path to a different file, in a tree Bazel prunes; and the declared one under
 // bazel-bin is an input to build actions, which must not find tofu's files in
 // it. The run directory is the runner's own, one per deploy, and holds
-// whatever tofu writes beside the configuration: .terraform/, the lock and
-// the state of a `backend "local"` with relative paths.
+// whatever tofu writes beside the configuration: .terraform/, the lock, the
+// state of a deploy with no backend block and that of a `backend "local"`
+// with relative paths.
 //
 // The links are what the runner put there, and the only links in the run
 // directory outside tofu's .terraform/, so bringing it up to date needs no
 // record of earlier runs: remove every link, then link the current work tree.
-// Regular files are tofu's or the user's and are never touched, bar the two
+// Regular files are tofu's or the user's and are never touched, bar the three
 // stale ones noted below. One in the way of a link is an error: it would
 // shadow a file of the configuration.
 func syncRunDir(workTree, runRoot, cwd string) error {
@@ -49,14 +50,20 @@ func syncRunDir(workTree, runRoot, cwd string) error {
 	}
 
 	// Left by an earlier run, and wrong for this one: the lock tofu wrote
-	// records the provider versions of that build, and .terraform/providers
-	// links into that launcher's plugin tree, which init relinks.
-	// installLockFile writes any managed lock after this.
+	// records the provider versions of that build, .terraform/providers
+	// links into that launcher's plugin tree, which init relinks, and the
+	// backend record describes that run's backend block. Without the record
+	// init configures the backend afresh, and a configuration whose backend
+	// block has gone leaves none for the ephemeral-state check to read (see
+	// backend.go). installLockFile writes any managed lock after this.
 	if err := os.Remove(filepath.Join(cwd, ".terraform.lock.hcl")); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("remove the previous run's lock file: %w", err)
 	}
 	if err := os.RemoveAll(filepath.Join(dataDir, "providers")); err != nil {
 		return fmt.Errorf("remove the previous run's provider links: %w", err)
+	}
+	if err := os.Remove(backendRecordPath(cwd)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("remove the previous run's backend record: %w", err)
 	}
 
 	if err := linkTree(workTree, runRoot); err != nil {

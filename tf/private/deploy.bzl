@@ -145,8 +145,9 @@ tf_deploy_rule = rule(
         "allow_ephemeral_state": attr.bool(
             default = False,
             doc = "Permit `apply` and `destroy` when state lives under `bazel-bin`: either no " +
-                  "`backend` or `cloud` block, or a `backend \"local\"` without literal absolute " +
-                  "`path` and `workspace_dir` outside `bazel-out`. `plan` is never gated. See " +
+                  "`backend` or `cloud` block, or a `backend \"local\"` whose `path` and " +
+                  "`workspace_dir` are not both absolute paths outside `bazel-out`. `plan` is " +
+                  "never gated. See " +
                   "[State and backends](https://github.com/benbirt/rules_tofu#state-and-backends).",
         ),
         "_dupcheck_bin": attr.label(
@@ -225,7 +226,7 @@ def tf_deploy(name, srcs = None, deps = None, vars = None, var_files = None, dat
           state lives under `bazel-bin`:
           - no `backend` or `cloud` block is declared; or
           - `backend "local"` does not set both `path` and `workspace_dir` to
-            literal absolute paths outside `bazel-out`.
+            absolute paths outside `bazel-out`.
           Defaults to `False`. See
           [State and backends](https://github.com/benbirt/rules_tofu#state-and-backends).
       fmt_test: Emit `:<name>.fmt_check` when `True` and `srcs` is non-empty;

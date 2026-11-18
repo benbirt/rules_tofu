@@ -108,7 +108,7 @@ _RUN_CASES = [
     # (case_name, workspace_path, target inside that workspace, stderr fragment)
     ("ephemeral_state_refused", "broken_workspace", "//cases/ephemeral_state_refused:deploy.apply", "allow_ephemeral_state"),
     # A `backend "local"` with a relative path keeps state under bazel-bin too.
-    ("local_backend_refused", "broken_workspace", "//cases/local_backend_refused:deploy.apply", "does not provably keep state outside"),
+    ("local_backend_refused", "broken_workspace", "//cases/local_backend_refused:deploy.apply", "does not keep state outside"),
 ]
 
 # A nested Bazel is a whole build system: it writes to the repository cache
@@ -197,9 +197,11 @@ bazel_integration_test(
 
 # Cross-module module_source dependencies: a root module calls a tf_library
 # from another Bazel module by its module_source, which calls one from a third,
-# then builds, plans, and runs tf_test offline. Runs on every tofu version
-# rules_tofu pins because the module manifest is tofu's internal format and
-# tf_test passes flags that older OpenTofu releases lack. See
+# then builds, plans, and runs tf_test offline, and applies deploys with no
+# backend block and with a backend "local". Runs on every tofu version
+# rules_tofu pins because the module manifest and the backend record that the
+# ephemeral-state gate reads are tofu's internal formats, and tf_test passes
+# flags that older OpenTofu releases lack. See
 # module_dependency_test.sh.
 sh_binary(
     name = "module_dependency_driver",

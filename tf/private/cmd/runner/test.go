@@ -6,8 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-
-	"github.com/benbirt/rules_tofu/tf/private/cmd/internal/tfconfig"
+	"strings"
 )
 
 // runTest implements --command=test: `tofu test` for a tf_test target, run as
@@ -60,7 +59,7 @@ func runTest(extraArgs []string) error {
 	// action: `tofu init` does nothing there, so it installs no provider and
 	// leaves the lock as it is, which tofu then holds against the empty
 	// plugin cache.
-	if *lockFile != "" && tfconfig.HasConfig(cwd) {
+	if *lockFile != "" && hasConfig(cwd) {
 		if err := installLockFile(*lockFile, cwd); err != nil {
 			return err
 		}
@@ -176,4 +175,26 @@ func copyFile(src, dst string) error {
 		mode = 0o755
 	}
 	return os.WriteFile(dst, data, mode)
+}
+
+// hasConfig reports whether dir holds a configuration file tofu reads: a
+// `.tf`, `.tf.json`, `.tofu` or `.tofu.json` file whose name doesn't start
+// with a dot. It is tfconfig.HasConfig, written out here so the runner does
+// not link an HCL parser; keep the two in step.
+func hasConfig(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		for _, ext := range []string{".tf", ".tf.json", ".tofu", ".tofu.json"} {
+			if strings.HasSuffix(e.Name(), ext) {
+				return true
+			}
+		}
+	}
+	return false
 }

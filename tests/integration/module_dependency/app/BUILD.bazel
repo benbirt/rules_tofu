@@ -7,6 +7,24 @@ tf_deploy(
     deps = ["@network_module//vpc"],
 )
 
+# The same root module with a `backend "local"` and no opt-in, for the
+# driver's check of the ephemeral-state gate on every pinned tofu. The gate
+# reads the backend from what `tofu init` records, which is tofu's internal
+# format. Here tofu has to merge backend_override.tf over backend.tf and
+# evaluate `var.state_root` to get the paths. A relative `state_root` keeps
+# state in the run directory under bazel-bin, so apply is refused; the driver
+# then rewrites it to an absolute path outside Bazel's output tree.
+tf_deploy(
+    name = "durable",
+    srcs = [
+        "backend.tf",
+        "backend_override.tf",
+        "main.tf",
+    ],
+    vars = {"state_root": "state"},
+    deps = ["@network_module//vpc"],
+)
+
 # The deploy's test loads the dns module from a `.tofutest.hcl` run block,
 # so building it checks the manifest key tofu uses for that extension. The
 # driver runs it too, on every pinned tofu. Because the deploy reaches dns
