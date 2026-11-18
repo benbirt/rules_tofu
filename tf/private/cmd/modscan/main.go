@@ -231,15 +231,9 @@ func scan(repo, moduleDir string, modules []Module, self string, extra, submodul
 			if err != nil {
 				return nil, err
 			}
-			// ReadRequirements returns primary entries before _override
-			// entries, so an override replaces the primary entry of the
-			// same local name. Duplicate primary names are left to tofu.
-			byName := map[string]string{}
-			for _, d := range declared {
-				byName[d.Name] = d.Source
-			}
-			for _, p := range byName {
-				providers[p] = true
+			// Duplicate primary entries are left to tofu.
+			for _, d := range tfconfig.ApplyOverrides(declared) {
+				providers[d.Source] = true
 			}
 			found, err := tfconfig.ReadCalls(abs)
 			if err != nil {

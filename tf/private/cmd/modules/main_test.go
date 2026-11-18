@@ -53,7 +53,7 @@ module "local" { source = "../shared" }
 		{Label: "@infra//vpc", Source: "git::https://example.com/infra.git//vpc?ref=v1.0.0", Dir: "external/infra+/vpc", Direct: true},
 		{Label: "@dns//:dns", Source: "registry.opentofu.org/acme/dns/aws", Version: "0.1.0", Dir: "external/dns+"},
 	}
-	got, err := build(tree, "app", "//app:app", deps, nil)
+	got, err := build(tree, "app", "//app:app", deps)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestBuild_RootPackage(t *testing.T) {
 		"a/main.tf":   ``,
 		"versions.tf": `terraform {}`,
 	})
-	got, err := build(tree, "", "//:root", nil, nil)
+	got, err := build(tree, "", "//:root", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestBuild_JSONAndOverride(t *testing.T) {
 		"app/new/main.tf":    ``,
 		"app/unused/main.tf": ``,
 	})
-	got, err := build(tree, "app", "//app", nil, nil)
+	got, err := build(tree, "app", "//app", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +233,7 @@ func TestBuild_Errors(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tree := writeTree(t, tc.files)
-			_, err := build(tree, "app", "//app", tc.deps, nil)
+			_, err := build(tree, "app", "//app", tc.deps)
 			if err == nil {
 				t.Fatalf("expected an error containing %q", tc.want)
 			}
@@ -260,11 +260,11 @@ func TestBuild_MostSpecificMatch(t *testing.T) {
 		{Label: "@whole", Source: "registry.opentofu.org/acme/n/aws", Version: "1.0.0", Dir: "external/whole+", Direct: true},
 		{Label: "@sub", Source: "acme/n/aws//modules", Version: "1.0.0", Dir: "external/sub+", Direct: true},
 	}
-	_, err := build(tree, "app", "//app", deps, nil)
+	_, err := build(tree, "app", "//app", deps)
 	if err == nil || !strings.Contains(err.Error(), "no module call uses @whole") {
 		t.Fatalf("expected @whole to go unused, got %v", err)
 	}
-	got, err := build(tree, "app", "//app", deps[1:], nil)
+	got, err := build(tree, "app", "//app", deps[1:])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +290,7 @@ func TestBuild_SelfCall(t *testing.T) {
 	dns := dep{Label: "@dns", Source: "acme/dns/aws", Version: "0.1.0", Dir: "external/dns+", Direct: true}
 
 	t.Run("resolved in the library's own files", func(t *testing.T) {
-		got, err := build(writeTree(t, files), "external/net+", "@net", []dep{self, dns}, nil)
+		got, err := build(writeTree(t, files), "external/net+", "@net", []dep{self, dns})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -306,7 +306,7 @@ func TestBuild_SelfCall(t *testing.T) {
 
 	t.Run("a dep nothing calls is still unused", func(t *testing.T) {
 		unused := dep{Label: "@unused", Source: "acme/unused/aws", Version: "1.0.0", Dir: "external/unused+", Direct: true}
-		_, err := build(writeTree(t, files), "external/net+", "@net", []dep{self, dns, unused}, nil)
+		_, err := build(writeTree(t, files), "external/net+", "@net", []dep{self, dns, unused})
 		if err == nil || !strings.Contains(err.Error(), "no module call uses @unused") || strings.Contains(err.Error(), "@net (") {
 			t.Errorf("got %v", err)
 		}
@@ -318,7 +318,7 @@ func TestBuild_SelfCall(t *testing.T) {
 			withSub[name] = content
 		}
 		y := dep{Label: "@y", Source: "acme/net/aws//modules/y", Version: "1.0.0", Dir: "external/y+", Direct: true}
-		got, err := build(writeTree(t, withSub), "external/net+", "@net", []dep{self, y, dns}, nil)
+		got, err := build(writeTree(t, withSub), "external/net+", "@net", []dep{self, y, dns})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -333,7 +333,7 @@ func TestBuild_SelfCall(t *testing.T) {
 
 	t.Run("its own address is a cycle", func(t *testing.T) {
 		tree := writeTree(t, map[string]string{"external/net+/main.tf": `module "me" { source = "acme/net/aws" }`})
-		_, err := build(tree, "external/net+", "@net", []dep{self}, nil)
+		_, err := build(tree, "external/net+", "@net", []dep{self})
 		if err == nil || !strings.Contains(err.Error(), "so the module calls form a cycle") {
 			t.Errorf("got %v", err)
 		}
@@ -346,7 +346,7 @@ func TestBuild_SelfCall(t *testing.T) {
 		}
 		direct := self
 		direct.Direct = true
-		_, err := build(writeTree(t, withApp), "app", "//app", []dep{direct, dns}, nil)
+		_, err := build(writeTree(t, withApp), "app", "//app", []dep{direct, dns})
 		if err == nil || !strings.Contains(err.Error(), "no module call uses @dns") {
 			t.Errorf("got %v", err)
 		}
@@ -407,7 +407,7 @@ func TestBuild_DirectUse(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tree := writeTree(t, tc.files)
-			if _, err := build(tree, tc.root, "//"+tc.root, tc.deps, nil); err != nil {
+			if _, err := build(tree, tc.root, "//"+tc.root, tc.deps); err != nil {
 				t.Fatal(err)
 			}
 		})
@@ -463,7 +463,7 @@ func TestBuild_RepeatedCall(t *testing.T) {
 		"app/shared/main.tf":       `module "inner" { source = "./inner" }`,
 		"app/shared/inner/main.tf": ``,
 	})
-	got, err := build(tree, "app", "//app", nil, nil)
+	got, err := build(tree, "app", "//app", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -488,7 +488,7 @@ func TestBuild_BackslashLocalSource(t *testing.T) {
 		"shared/main.tf":       `module "inner" { source = ".\\inner\\" }`,
 		"shared/inner/main.tf": ``,
 	})
-	got, err := build(tree, "app", "//app", nil, nil)
+	got, err := build(tree, "app", "//app", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -527,7 +527,7 @@ func TestBuild_RootPackageCycle(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tree := writeTree(t, tc.files)
-			_, err := build(tree, "", "//:root", nil, nil)
+			_, err := build(tree, "", "//:root", nil)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("got %v, want an error containing %q", err, tc.want)
 			}
@@ -585,7 +585,7 @@ func TestBuild_RequiredProviderFromAnotherRegistry(t *testing.T) {
 	tree := writeTree(t, map[string]string{
 		"app/main.tf": "terraform {\n  required_providers {\n    aws = { source = \"registry.terraform.io/hashicorp/aws\" }\n  }\n}",
 	})
-	_, err := build(tree, "app", "//app", nil, nil)
+	_, err := build(tree, "app", "//app", nil)
 	want := "    app/main.tf:3 requires registry.terraform.io/hashicorp/aws\nrules_tofu can't vendor registry.terraform.io/hashicorp/aws: it only vendors providers from registry.opentofu.org."
 	if err == nil || !strings.Contains(err.Error(), want) {
 		t.Errorf("got %v, want an error containing %q", err, want)
@@ -611,7 +611,7 @@ func TestBuildManifest_TestRuns(t *testing.T) {
 	deps := []dep{
 		{Label: "@infra//vpc", Source: "git::https://example.com/infra.git//vpc?ref=v1.0.0", Dir: "external/infra+/vpc", Direct: true},
 	}
-	got, err := buildLenient(tree, "app", "//app:app_test", deps, nil, "tests")
+	got, err := buildLenient(tree, "app", "//app:app_test", deps, "tests")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -630,7 +630,7 @@ func TestBuildManifest_TestRuns(t *testing.T) {
 	}
 
 	// Without --test-dir the test files are not read, so the dep is unused.
-	if _, err := build(tree, "app", "//app:app", deps, nil); err == nil || !strings.Contains(err.Error(), "no module call uses @infra//vpc") {
+	if _, err := build(tree, "app", "//app:app", deps); err == nil || !strings.Contains(err.Error(), "no module call uses @infra//vpc") {
 		t.Errorf("build without tests: err = %v, want the unused dep", err)
 	}
 }
@@ -654,7 +654,7 @@ func TestBuild_EmptyRoot(t *testing.T) {
 		"an external, empty root": {tree, "external/empty+"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			got, err := build(tc.workTree, tc.root, "//x:x", nil, nil)
+			got, err := build(tc.workTree, tc.root, "//x:x", nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -666,18 +666,18 @@ func TestBuild_EmptyRoot(t *testing.T) {
 
 	// An empty root calls nothing, so a dep that must be called is unused.
 	deps := []dep{{Label: "@net//:net", Source: "acme/network/aws", Version: "1.2.3", Dir: "external/net+", Direct: true}}
-	if _, err := build(tree, "absent", "//absent:lib", deps, nil); err == nil || !strings.Contains(err.Error(), "no module call uses @net//:net") {
+	if _, err := build(tree, "absent", "//absent:lib", deps); err == nil || !strings.Contains(err.Error(), "no module call uses @net//:net") {
 		t.Errorf("err = %v, want the unused dep", err)
 	}
 
 	// Something that isn't a directory where the root should be is not an
 	// empty module.
-	if _, err := build(tree, "lib/main.tf", "//x:x", nil, nil); err == nil {
+	if _, err := build(tree, "lib/main.tf", "//x:x", nil); err == nil {
 		t.Error("a file in place of the root module's directory was taken for an empty module")
 	}
 	// Nor is a path through a file, which fails differently: there the
 	// stat itself does, and not because nothing is there.
-	if _, err := build(tree, "lib/main.tf/sub", "//x:x", nil, nil); err == nil {
+	if _, err := build(tree, "lib/main.tf/sub", "//x:x", nil); err == nil {
 		t.Error("a root module's directory below a file was taken for an empty module")
 	}
 }
@@ -690,7 +690,7 @@ func TestBuildManifest_EmptyRootTestRuns(t *testing.T) {
 		"lib/main.tf":                 ``,
 		"empty/tests/main.tftest.hcl": "run \"lib\" {\n  module {\n    source = \"../lib\"\n  }\n}\n",
 	})
-	got, err := buildLenient(tree, "empty", "//empty:test", nil, nil, "tests")
+	got, err := buildLenient(tree, "empty", "//empty:test", nil, "tests")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -712,7 +712,7 @@ func TestBuildManifest_TestRunsRootOnly(t *testing.T) {
 		"tests/y.tftest.hcl":   "run \"b\" {\n  module {\n    source = \"./nowhere\"\n  }\n}\n",
 		"tests/helper/main.tf": ``,
 	})
-	got, err := buildLenient(tree, "", "//:root_test", nil, nil, ".")
+	got, err := buildLenient(tree, "", "//:root_test", nil, ".")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -756,7 +756,7 @@ func TestBuildManifest_TestRunErrors(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			tree := writeTree(t, tc.files)
-			_, err := buildLenient(tree, "app", "//app:app_test", tc.deps, nil, "tests")
+			_, err := buildLenient(tree, "app", "//app:app_test", tc.deps, "tests")
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Errorf("err = %v, want containing %q", err, tc.want)
 			}
@@ -765,15 +765,15 @@ func TestBuildManifest_TestRunErrors(t *testing.T) {
 }
 
 // build is buildLenient for a rule with no test files.
-func build(workTree, root, label string, deps []dep, providers []string) (*Manifest, error) {
-	return buildLenient(workTree, root, label, deps, providers, "")
+func build(workTree, root, label string, deps []dep) (*Manifest, error) {
+	return buildLenient(workTree, root, label, deps, "")
 }
 
-// buildLenient calls buildManifest with inputs that satisfy strict deps. It
-// puts every file at or below root in srcs, marks every dep callable, adds
-// every work-tree directory to depDirs, and lists every provider in
-// own.providers.
-func buildLenient(workTree, root, label string, deps []dep, providers []string, testDir string) (*Manifest, error) {
+// buildLenient calls buildManifest with inputs that satisfy strict deps for
+// module calls. It puts every file at or below root in srcs, marks every dep
+// callable, adds every work-tree directory to depDirs, and leaves
+// own.providers empty.
+func buildLenient(workTree, root, label string, deps []dep, testDir string) (*Manifest, error) {
 	callable := make([]dep, len(deps))
 	for i, d := range deps {
 		d.Callable = true
@@ -782,7 +782,7 @@ func buildLenient(workTree, root, label string, deps []dep, providers []string, 
 		}
 		callable[i] = d
 	}
-	mine := own{providers: providers}
+	var mine own
 	err := filepath.WalkDir(workTree, func(p string, e os.DirEntry, err error) error {
 		// A rule with no files at all has no work tree.
 		if errors.Is(err, fs.ErrNotExist) {
@@ -858,6 +858,11 @@ Add "@tf_providers//hashicorp/random" to the providers of //app.`,
 			files: map[string]string{"app/main.tf": ``, "app/modules/unused/main.tf": requires("null")},
 			own:   own{srcs: []string{"app/main.tf", "app/modules/unused/main.tf"}},
 			want:  "    app/modules/unused/main.tf:3 requires hashicorp/null\n",
+		},
+		{
+			name:  "an override entry replaces the entry of its name",
+			files: map[string]string{"app/main.tf": requires("random"), "app/x_override.tf": "terraform {\n  required_providers {\n    random = { source = \"hashicorp/null\" }\n  }\n}\n"},
+			own:   own{srcs: []string{"app/main.tf", "app/x_override.tf"}, providers: []string{null}},
 		},
 		{
 			name:  "every missing provider is named",
@@ -1004,7 +1009,7 @@ func TestBuild_GeneratedLibraryLacksDirectory(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(tree, "app/main.tf"), []byte(`module "m" { source = "git::https://example.com/net.git//`+tc.subdir+`?ref=v1" }`), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			_, err := build(tree, "app", "//app", []dep{tc.dep}, nil)
+			_, err := build(tree, "app", "//app", []dep{tc.dep})
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Errorf("got %v, want an error containing %q", err, tc.want)
 			}

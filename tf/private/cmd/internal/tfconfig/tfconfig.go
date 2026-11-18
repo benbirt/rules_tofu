@@ -10,6 +10,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -307,6 +308,19 @@ func ReadRequirements(files []string) ([]Declared, error) {
 		}
 	}
 	return declared, nil
+}
+
+// ApplyOverrides drops each entry in declared that a later _override entry of
+// the same local name replaces. declared must be in ReadRequirements order.
+func ApplyOverrides(declared []Declared) []Declared {
+	var effective []Declared
+	for _, d := range declared {
+		if d.Override {
+			effective = slices.DeleteFunc(effective, func(e Declared) bool { return e.Name == d.Name })
+		}
+		effective = append(effective, d)
+	}
+	return effective
 }
 
 func readRequirement(name string, expr hcl.Expression) (Requirement, error) {

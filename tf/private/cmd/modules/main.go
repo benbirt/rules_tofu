@@ -39,32 +39,29 @@
 //     configuration files;
 //   - two deps claim the same normalised module_source;
 //   - module calls form a cycle;
-//   - a direct dep outside --root is not used by any call in checked files;
-//   - checked files require a non-built-in provider or call a module or
-//     directory not declared directly on the target.
-//
-// Missing-provider errors name the @tf_providers//<namespace>/<name> label to
-// add to providers, or report that a provider outside registry.opentofu.org
-// cannot be vendored. Built-in providers under terraform.io/builtin/ and
-// opentofu.org/builtin/ need no plugin and are skipped. Modules reached by
-// calls are not checked for required_providers here (issue #144). Each
-// module's configuration belongs to one target's srcs and is checked before
-// dependants build (issues #140 and #143). Any provider still missing, such as
-// one implied without required_providers, is reported by `tofu init` during
-// validation.
+//   - a direct dep outside --root is not used by any call in checked files.
 //
 // Strict deps (issue #135) checks the target's own_srcs against its direct
-// declarations. Files from deps are not re-checked here, even when
-// they sit in --root, because each dep is checked when built. Only own_srcs
-// holds configuration files, since no rule takes one as data (issue #140).
-// On tf_test, run blocks in test files listed in own_srcs are checked as
-// direct calls. Test files from the module under test are not. In checked
-// files, the build fails on:
+// declarations. On tf_test, run blocks in test files listed in own_srcs are
+// checked as direct calls. Test files from the module under test are not. In
+// checked files, the build also fails on:
 //   - a non-built-in required_providers entry with no matching
 //     --direct-provider;
 //   - a non-local call resolving to a dep with callable false;
 //   - a local call resolving to a directory outside own_srcs, own_data and
 //     dep_dirs.
+//
+// Missing-provider errors name the @tf_providers//<namespace>/<name> label to
+// add to providers, or report that a provider outside registry.opentofu.org
+// cannot be vendored. Built-in providers under terraform.io/builtin/ and
+// opentofu.org/builtin/ need no plugin and are skipped.
+//
+// Files from deps are not checked here, whether in --root or in modules
+// reached by calls (issue #144). No rule takes configuration as data (issue
+// #140), so every configuration file belongs to one target's srcs. Each dep is
+// checked before dependants build (issue #143). Any provider still missing,
+// such as one implied without required_providers, is reported by `tofu init`
+// during validation.
 //
 // A direct dep counts as used when its dir is --root, or when a checked file
 // calls it by module_source or by a local path to one of its dirs.
@@ -401,7 +398,7 @@ func buildManifest(workTree, root, label string, deps []dep, testDir string, own
 		// Report each missing provider once per directory, even when several
 		// files or an _override file repeat it.
 		reported := map[string]bool{}
-		for _, r := range declared {
+		for _, r := range tfconfig.ApplyOverrides(declared) {
 			p := r.Source
 			if listed[p] || isBuiltin(p) || reported[p] {
 				continue
