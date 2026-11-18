@@ -1,11 +1,12 @@
 """Build-time `tofu init -backend=false` and `tofu validate` for a materialised work tree.
 
 `tf_library`, `tf_deploy` and `tf_test` call `tf_init_validate` and include its
-stamp in `DefaultInfo.files`, so `bazel build :foo` runs cached validation.
-Each call takes upstream stamps in `required_stamps`, deploy launchers carry
-the deploy's stamps in default outputs and runfiles, and `tf_test` carries its
-stamp in runfiles, so targets validate in dependency order before dependants,
-launchers or tests run (issue #143).
+stamp in `DefaultInfo.files`, so `bazel build :foo` runs cached validation. The
+`TofuValidate` action invokes `//tf/private/cmd/runner` with
+`--command=validate`. Each call takes upstream stamps in `required_stamps`,
+deploy launchers carry the deploy's stamps in default outputs and runfiles, and
+`tf_test` carries its stamp in runfiles, so targets validate in dependency
+order before dependants, launchers or tests run (issue #143).
 
 `-plugin-dir` is always passed, keeping `tofu init` offline whether or not
 `required_providers` is declared. It points at the sibling plugin tree from
@@ -13,10 +14,10 @@ launchers or tests run (issue #143).
 are in scope and the plugin tree has no files.
 
 When providers come from `tf_providers.from_lock` and the root module has
-configuration files, the workspace's lock is copied next to the configuration
-after checking that `srcs` and `data` brought none of their own. `tofu init`
-then checks both `required_providers` constraints and the vendored packages'
-hashes against the lock.
+configuration files, the runner copies the workspace's lock next to the
+configuration. `materialize` in `work_tree.bzl` rejects `.terraform.lock.hcl`
+in the work tree at analysis. `tofu init` then checks both `required_providers`
+constraints and the vendored packages' hashes against the lock.
 
 Modules are never fetched either: `.terraform/modules/modules.json` (from
 `modules_manifest` in `work_tree.bzl`) records where in the work tree each
@@ -30,18 +31,18 @@ load(":work_tree.bzl", "display_label")
 RUNNER_BIN = "//tf/private/cmd/runner:runner"
 
 def tf_init_validate(ctx, work_tree_files, work_tree_root, package_dir, plugin_tree_root, modules_manifest, required_stamps, lock = None, test_dir = None, fetched_module = None):
-    """Emit a build-time `tofu init -backend=false` + `tofu validate` action.
+    """Emit the `TofuValidate` build action for a materialised work tree.
 
     Args:
       ctx: rule ctx. Must list `TOOLCHAIN_TYPE` in `toolchains` and declare
-          `_runner_bin` (cfg = "exec").
+          `_runner_bin` (cfg = "exec", `RUNNER_BIN`) on the rule.
       work_tree_files: depset[File] of every materialised work tree file plus
           the sibling plugin tree's provider packages, which are read in place
           via `-plugin-dir` and must still be listed as action inputs.
       work_tree_root: string, exec-root-relative path to the work tree root,
           e.g. `<bin>/<pkg>/<name>.work`.
-      package_dir: string, work-tree-relative directory of the root module
-          passed via `-chdir`.
+      package_dir: string, work-tree-relative directory of the root module;
+          the runner runs `tofu` with that directory as its working directory.
       plugin_tree_root: string, exec-root-relative path to the sibling plugin
           tree root, e.g. `<bin>/<pkg>/<name>.plugins`. Pinned via
           `-plugin-dir` so init runs offline.
@@ -68,9 +69,10 @@ def tf_init_validate(ctx, work_tree_files, work_tree_root, package_dir, plugin_t
     tofu = ctx.toolchains[TOOLCHAIN_TYPE].tofu
     stamp = ctx.actions.declare_file(ctx.label.name + ".validate.stamp")
 
-    # The runner copies the work tree into a scratch directory and runs tofu
-    # there (see //tf/private/cmd/runner). The provider packages are read in
-    # place via --plugin-dir.
+    # The runner stages a writable copy of --work-tree in a scratch directory,
+    # reads provider packages in place from --plugin-dir, and writes --stamp
+    # when init and validate pass (see //tf/private/cmd/runner). An empty
+    # test_dir means tests live in package_dir itself, passed as ".".
     args = ctx.actions.args()
     args.add("--command=validate")
     args.add("--tofu", tofu.binary)

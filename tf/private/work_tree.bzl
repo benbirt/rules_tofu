@@ -179,6 +179,10 @@ def materialize(ctx, entries, tfvars_content = None, tfvars_dir = None):
     and symlinks it to `file`. If `tfvars_content` is non-None, also writes
     `rules_tofu.auto.tfvars.json` in `tfvars_dir` under `<name>.work/`.
 
+    Fails if any entry in any directory is named `.terraform.lock.hcl`, if two
+    distinct files share a work-tree path, or if an entry collides with the
+    generated `rules_tofu.auto.tfvars.json`.
+
     Args:
       ctx: rule ctx.
       entries: list[struct(path, file)] of work-tree paths (`work_tree_path`) and Files.
@@ -198,9 +202,13 @@ def materialize(ctx, entries, tfvars_content = None, tfvars_dir = None):
     for entry in entries:
         path = entry.path
         if path.rpartition("/")[2] == ".terraform.lock.hcl":
-            fail(("`{}`: `{}` is a lock file, which `srcs` and `data` cannot list. rules_tofu supplies the " +
-                  "lock that `tf_providers.from_lock` names; remove this one (README, " +
-                  "\"Restrictions\").").format(ctx.label, entry.file.short_path))
+            fail(("`{}`: `{}` is an OpenTofu provider lock file, which `srcs` and `data` cannot " +
+                  "include because `rules_tofu` manages the provider lock itself. Remove or exclude " +
+                  "it from `srcs` and `data`, and pass the workspace's lock to " +
+                  "`tf_providers.from_lock` in `MODULE.bazel` (README, \"Restrictions\").").format(
+                ctx.label,
+                entry.file.short_path,
+            ))
         if path in seen:
             other = seen[path]
             if other != entry.file:
@@ -415,10 +423,10 @@ def modules_manifest(ctx, work_tree_outputs, infos, strict, srcs, data, root = N
     See //tf/private/cmd/modules: every module call from the root module down
     is recorded, local ones by their directory in the work tree and others by
     the dep whose `module_source` they name, so `tofu init -get=false` finds
-    them all installed. The validate action and the runner copy the manifest
-    into place. The action also fails when `srcs` use a provider or module
-    absent from `strict`, other than `own`, or call a directory that holds no
-    files from `srcs`, `data` or `strict`.
+    them all installed. The runner copies the manifest into place for
+    validation, tests and deploys. The action also fails when `srcs` use a
+    provider or module absent from `strict`, other than `own`, or call a
+    directory that holds no files from `srcs`, `data` or `strict`.
 
     Args:
       ctx: rule ctx. Must declare `_modules_bin` (cfg = "exec") on the rule.

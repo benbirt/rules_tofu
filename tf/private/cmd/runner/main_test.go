@@ -1226,7 +1226,7 @@ func TestRunner_Test_ErroredStateFails(t *testing.T) {
 	}
 }
 
-// `--command=test` needs no --state-dir; the other commands still do.
+// `--command=test` needs no --state-dir; plan, apply and destroy still do.
 func TestRunner_Test_StateDirNotRequired(t *testing.T) {
 	cmd, _, _, _, _ := setupTest(t)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -1821,11 +1821,12 @@ func TestRunner_Test_KeepsExecutableBit(t *testing.T) {
 	}
 }
 
-// setupValidate builds a `--command=validate` invocation as the TofuValidate
-// action makes it: every path relative to the working directory, a bare name
-// for tofu included, and a TMPDIR to stage in. The fake tofu prints a line of
-// progress on stdout and fails the subcommand FAKE_FAIL names. It returns the
-// command, its working directory and the stamp's path.
+// setupValidate builds a `--command=validate` invocation matching the
+// TofuValidate action: all flag paths are relative to the runner's working
+// directory, including a bare filename for --tofu, and TMPDIR is set to a
+// directory under dir. The fake tofu prints a progress line on stdout and
+// exits 3 on the subcommand named by FAKE_FAIL. It returns the command, its
+// working directory, the stamp path and a reader for recorded tofu calls.
 func setupValidate(t *testing.T) (cmd *exec.Cmd, dir, stamp string, invocations func() []invocation) {
 	t.Helper()
 	bin := runnerBin(t)
@@ -1883,10 +1884,10 @@ func setupValidate(t *testing.T) (cmd *exec.Cmd, dir, stamp string, invocations 
 	return cmd, dir, filepath.Join(dir, "validate.stamp"), invocations
 }
 
-// `--command=validate` takes paths relative to its working directory, stages
-// a copy of the work tree under TMPDIR, runs init and validate there, writes
-// the stamp and removes the copy. init's stdout is dropped; validate's is
-// shown.
+// `--command=validate` resolves paths relative to its working directory and
+// stages a copy of the work tree under TMPDIR. It runs `tofu init` with stdout
+// discarded and `tofu validate` with stdout kept, writes --stamp, removes the
+// scratch directory and leaves the input work tree untouched.
 func TestRunner_Validate_InitsValidatesAndStamps(t *testing.T) {
 	cmd, dir, stamp, invocations := setupValidate(t)
 	cmd.Args = append(cmd.Args, "--lock-file=lock/.terraform.lock.hcl", "--test-dir=tests", "--var-file=sources/main.tf", "--", "-json")
@@ -1932,9 +1933,9 @@ func TestRunner_Validate_InitsValidatesAndStamps(t *testing.T) {
 	}
 }
 
-// A rule with no files declares no work tree: validation runs on an empty
-// root module. `--test-dir=.` is the root module's own directory, which tofu
-// reads without -test-directory.
+// When a rule has no files, --work-tree does not exist and validation runs on
+// an empty root module. `--test-dir=.` names the root module's own directory
+// and passes no -test-directory flag.
 func TestRunner_Validate_NoWorkTree(t *testing.T) {
 	cmd, dir, stamp, invocations := setupValidate(t)
 	if err := os.RemoveAll(filepath.Join(dir, "work")); err != nil {
@@ -1954,8 +1955,9 @@ func TestRunner_Validate_NoWorkTree(t *testing.T) {
 	}
 }
 
-// A failure writes no stamp, exits with tofu's code, removes the staged copy
-// and prints the advice that applies.
+// When `tofu init` or `tofu validate` fails, the runner prints only the
+// remediation hints that apply, writes no stamp, removes its scratch
+// directory under TMPDIR and exits with tofu's status code.
 func TestRunner_Validate_FailureAdvice(t *testing.T) {
 	const (
 		pin     = "bazel run @tf_providers//:pin"
@@ -2023,7 +2025,7 @@ func TestRunner_Validate_FailureAdvice(t *testing.T) {
 	}
 }
 
-// `--command=validate` needs --stamp.
+// `--command=validate` requires --stamp.
 func TestRunner_Validate_StampRequired(t *testing.T) {
 	cmd, _, _, _ := setupValidate(t)
 	for i, a := range cmd.Args {

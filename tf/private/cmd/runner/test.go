@@ -13,16 +13,15 @@ import (
 )
 
 // runTest implements --command=test: `tofu test` for a tf_test target, run as
-// a Bazel test, so --state-dir and --output-root play no part.
+// a Bazel test without --state-dir or --output-root.
 //
-// The work tree is copied into TEST_TMPDIR, or a temporary directory when
-// unset, because the runfiles tree is Bazel's and tofu writes .terraform/ and
-// the lock beside the configuration. The provider plugin tree is read in
-// place when present. Init runs with -backend=false: `tofu test` keeps state
-// in memory and ignores backend and cloud blocks, so no backend is contacted.
-// When a run's destroy fails, tofu writes the resources it could not remove to
-// errored_test.tfstate and still exits 0; runTest fails the test on that file
-// and copies it to TEST_UNDECLARED_OUTPUTS_DIR when set.
+// It stages the work tree in TEST_TMPDIR, or in a temporary directory removed
+// on exit when TEST_TMPDIR is unset (see stage). It then initialises and runs
+// `tofu test` with -no-color, writing tofu-test.json to
+// TEST_UNDECLARED_OUTPUTS_DIR when set. If a run block's destroy fails, tofu
+// writes the resources it could not remove to errored_test.tfstate and still
+// exits 0; runTest copies that file to TEST_UNDECLARED_OUTPUTS_DIR when set and
+// fails the test.
 func runTest(extraArgs []string) error {
 	scratch := os.Getenv("TEST_TMPDIR")
 	if scratch == "" {
@@ -75,32 +74,35 @@ func runTest(extraArgs []string) error {
 	return nil
 }
 
-// staged is a scratch copy of the work tree, set up for `tofu init`.
+// staged holds a writable scratch copy of the work tree prepared for offline
+// `tofu init`.
 type staged struct {
-	// root is the copy of the work tree and cwd the root module's directory
-	// in it.
+	// root is the copied work tree root; cwd is the root module's directory
+	// within it.
 	root, cwd string
-	// plugins is the directory passed to tofu as -plugin-dir.
+	// plugins is the provider plugin directory passed as -plugin-dir.
 	plugins string
-	// hasConfig is whether the root module's directory holds configuration.
+	// hasConfig reports whether cwd contains any configuration files.
 	hasConfig bool
-	// env is the environment tofu runs in (see tofuEnv).
+	// env is the environment passed to tofu (see tofuEnv).
 	env []string
-	// dirArgs is the -test-directory flag, when --test-dir names a
-	// directory below the root module's.
+	// dirArgs holds -test-directory=<dir> when --test-dir names a
+	// subdirectory of cwd, and is empty otherwise.
 	dirArgs []string
 }
 
-// stage copies --work-tree into scratch and installs the lock and the module
-// manifest in the root module's directory, for --command=test and
-// --command=validate.
+// stage copies --work-tree into scratch/rules_tofu.work and prepares the root
+// module's directory for --command=test and --command=validate. Bazel owns
+// --work-tree in the exec root or runfiles, while `tofu init` writes
+// .terraform/ and the lock beside the configuration. The provider plugin tree
+// is read in place when present.
 func stage(scratch string) (*staged, error) {
 	s := &staged{root: filepath.Join(scratch, "rules_tofu.work")}
 	if err := os.RemoveAll(s.root); err != nil {
 		return nil, err
 	}
-	// A rule with no files at all declares nothing under its work tree, so
-	// the directory is absent: an empty module.
+	// A rule with no files at all declares nothing under <name>.work, so
+	// --work-tree does not exist; treat it as an empty module.
 	if _, err := os.Stat(*workTree); err == nil {
 		if err := copyTree(*workTree, s.root); err != nil {
 			return nil, fmt.Errorf("copy work tree: %w", err)
@@ -108,17 +110,16 @@ func stage(scratch string) (*staged, error) {
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return nil, err
 	}
-	// The root module's directory, which the work tree lacks when no file
-	// is at or below it: an empty module, as in the run directory of a
-	// deploy (see rundir.go).
+	// Create the root module's directory, which --work-tree lacks when no
+	// file sits at or below --package-dir (issue #119).
 	s.cwd = filepath.Join(s.root, filepath.FromSlash(*packageDir))
 	if err := os.MkdirAll(s.cwd, 0o755); err != nil {
 		return nil, fmt.Errorf("work-tree cwd %s: %w", s.cwd, err)
 	}
 
-	// With no providers in scope the plugin tree has no files, so Bazel
-	// makes no directory for it: give tofu an empty one, and never write
-	// into Bazel's tree.
+	// With no providers in scope, Bazel declares nothing under --plugin-dir
+	// and creates no directory for it. Give tofu an empty directory in
+	// scratch rather than writing into Bazel's tree.
 	s.plugins = *pluginDir
 	if _, err := os.Stat(s.plugins); err != nil {
 		s.plugins = filepath.Join(scratch, "rules_tofu.plugins")
@@ -126,9 +127,10 @@ func stage(scratch string) (*staged, error) {
 			return nil, fmt.Errorf("create plugin dir %s: %w", s.plugins, err)
 		}
 	}
-	// Not for a root module without configuration: `tofu init` does nothing
-	// there, so it installs no provider and leaves the lock as it is, which
-	// tofu then holds against the empty plugin cache.
+	// Skip the lock when the root module has no configuration: `tofu init`
+	// installs no providers there and leaves the lock unpruned, causing
+	// `tofu validate` and `tofu test` to fail against the empty
+	// .terraform/providers directory.
 	s.hasConfig = tfconfig.HasConfig(s.cwd)
 	if *lockFile != "" && s.hasConfig {
 		if err := installLockFile(*lockFile, s.cwd); err != nil {
@@ -139,16 +141,20 @@ func stage(scratch string) (*staged, error) {
 		return nil, err
 	}
 	s.env = tofuEnv(s.cwd)
-	// The test files' directory, which tofu reads alongside the root module's
-	// own. Absent, tofu reads its default, `tests`.
+	// Pass -test-directory only when test files live in a subdirectory of
+	// the root module. "." means the root module's own directory, which
+	// tofu already reads; "" means no test files on validate, or OpenTofu's
+	// default "tests" on test.
 	if *testDir != "" && *testDir != "." {
 		s.dirArgs = []string{"-test-directory=" + *testDir}
 	}
 	return s, nil
 }
 
-// init runs `tofu init` offline in the staged root module, with stdout sent
-// to stdout and flags added to the command line.
+// init runs `tofu init` offline in s.cwd with -backend=false, writing its
+// standard output to stdout and adding flags to the command line. Validation
+// needs no state and `tofu test` keeps state in memory, ignoring backend and
+// cloud blocks, whereas plain `tofu init` would contact any configured backend.
 func (s *staged) init(stdout io.Writer, flags ...string) error {
 	args := append([]string{"init"}, flags...)
 	args = append(args, "-backend=false", "-input=false", "-get=false", "-plugin-dir="+s.plugins)
