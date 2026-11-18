@@ -79,7 +79,7 @@ jobs:
             - tests/integration/lock_update/versions.tf
 
       # On the pinned version, a MODULE.bazel.lock that needs any update
-      # (e.g. a provider digest not yet recorded as a fact) fails the build
+      # (e.g. a module commit not yet recorded as a fact) fails the build
       # rather than being rewritten. Other versions write the lockfile in
       # their own format, so they can't use it.
       - name: Build

@@ -1,7 +1,7 @@
 """`tf_provider` rule.
 
-A `tf_provider` target wraps one platform's package and the optional lock file
-of one OpenTofu provider version, such as `hashicorp/aws` at `5.70.0` for
+A `tf_provider` target wraps one platform's unpacked package and optional lock
+file for an OpenTofu provider version, such as `hashicorp/aws` at `5.70.0` for
 `linux_amd64`.
 
 Instantiated by the `tf_providers` module extension (see
@@ -9,20 +9,20 @@ Instantiated by the `tf_providers` module extension (see
 Providers are pinned via `tf_providers.from_lock` or `tf_providers.provider` in
 `MODULE.bazel` and referenced as `@tf_providers//<namespace>/<name>` in the
 `providers` attribute of `tf_library`, `tf_deploy` or `tf_test`. Each generated
-`tf_provider` target is visible only to its `@tf_providers` alias, which
-selects the execution platform's.
+`tf_provider` target is visible only to `@tf_providers`, whose alias selects
+the execution platform's package.
 """
 
 load(":providers.bzl", "TfProviderInfo")
 
 visibility(["public"])
 
-# Where the provider's repository unpacks the zip.
+# Subdirectory where the provider repository extracts the zip.
 _PACKAGE_PREFIX = "package/"
 
 def _tf_provider_impl(ctx):
-    # Each file sits at `package/<path>` in the provider's repo; the plugin
-    # tree wants `<path>`.
+    # Strip `package/` so `path` is relative to `<os>_<arch>/` in the plugin
+    # tree.
     files = []
     for f in ctx.files.files:
         if not f.owner.name.startswith(_PACKAGE_PREFIX):
@@ -53,15 +53,14 @@ tf_provider = rule(
         ),
         "platform": attr.string(
             mandatory = True,
-            doc = "The `<os>_<arch>` platform the package is for, e.g. \"linux_amd64\".",
+            doc = "`<os>_<arch>` platform key for this package, e.g. \"linux_amd64\".",
         ),
         "files": attr.label_list(
             mandatory = True,
             allow_files = True,
-            doc = "Every file of the platform's unpacked zip, the provider binary and files such " +
-                  "as `LICENSE` and `README.md` alike. Each file's target name must start with " +
-                  "`package/`, which is stripped to give its path inside `<os>_<arch>/` in the " +
-                  "plugin tree.",
+            doc = "All files from the platform's unpacked zip, including the provider binary, " +
+                  "`LICENSE` and `README.md`. Each target name must begin with `package/`, which " +
+                  "is stripped to form the path under `<os>_<arch>/` in the plugin tree.",
         ),
         "lock": attr.label(
             allow_single_file = True,
@@ -71,5 +70,5 @@ tf_provider = rule(
         ),
     },
     provides = [TfProviderInfo],
-    doc = "Wraps one platform's package and the optional lock file of one OpenTofu provider version.",
+    doc = "Wraps one platform's unpacked package and optional lock file for an OpenTofu provider version.",
 )

@@ -234,13 +234,13 @@ def materialize_plugin_tree(ctx, providers_depset):
 
     Declares outputs under `<name>.plugins/` beside the work tree for each
     unique `(address, version)`, using OpenTofu's canonical plugin-dir layout
-    `<host>/<namespace>/<name>/<version>/<os>_<arch>/`: a symlink to each
-    file of the provider's zip, so the directory hashes to the lock's `h1:`
-    value and `tofu init` finds the binary in it.
+    `<host>/<namespace>/<name>/<version>/<os>_<arch>/`: a symlink to every
+    file from the unpacked zip so the directory matches the lock's `h1:` hash
+    and `tofu init` locates the binary.
 
-    Each provider carries the package of one platform, the execution platform
-    of the target that lists it (see `TfProviderInfo`). Fails if two providers
-    share an address with different versions or different platforms.
+    Each `TfProviderInfo` carries one platform's package, selected for the
+    execution platform of the target listing it. Fails if two entries for the
+    same address disagree on `version` or `platform`.
 
     Args:
       ctx: rule ctx.
@@ -267,15 +267,14 @@ def materialize_plugin_tree(ctx, providers_depset):
                     ),
                 )
 
-            # Bazel resolves an execution platform for each target, and each
-            # target's providers are selected for its own. One plugin tree
-            # serves one `tofu`, so they have to agree.
+            # Execution platforms are resolved per target, so a target and its
+            # deps can select different platforms for the same provider; one
+            # plugin tree cannot mix them.
             if prior.platform != prov.platform:
                 fail(
-                    ("`{label}` has provider `{addr}` for different platforms: `{a}` and `{b}`. " +
-                     "The targets that list it in `providers` were given different execution " +
-                     "platforms. Make `{label}` and its `deps` resolve the same one, for example " +
-                     "with the same `exec_compatible_with`.").format(
+                    ("`{label}` receives provider `{addr}` for two execution platforms: `{a}` and `{b}`. " +
+                     "Configure `{label}` and its `deps` to resolve the same execution platform " +
+                     "(for example with matching `exec_compatible_with`).").format(
                         label = ctx.label,
                         addr = prov.address,
                         a = prior.platform,

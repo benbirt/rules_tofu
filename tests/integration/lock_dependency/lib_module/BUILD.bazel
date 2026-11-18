@@ -9,12 +9,11 @@ tf_library(
     visibility = ["//visibility:public"],
 )
 
-# Names the provider this module tags twice, at versions that can't be
-# ordered.
+# Names the provider this module tags, which the root module does not pin.
 tf_library(
-    name = "unorderable",
+    name = "tagged",
     srcs = ["main.tf"],
     fmt_test = False,
-    providers = ["@tf_providers//acme/unorderable"],
+    providers = ["@tf_providers//acme/tagged"],
     visibility = ["//visibility:public"],
 )

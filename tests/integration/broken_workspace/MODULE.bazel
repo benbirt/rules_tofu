@@ -33,56 +33,29 @@ use_repo(tofu, "tofu_toolchains")
 
 register_toolchains("@tofu_toolchains//:all")
 
-# Brought in so missing_provider has a provider it could reference. The case
-# fails because the library omits providers = [...], not because the provider
-# itself is unknown. hashicorp/random because it is small (~6 MB a platform).
 tf_providers = use_extension("@rules_tofu//tf/providers:extensions.bzl", "tf_providers")
-tf_providers.provider(
-    sha256 = {
-        "linux_amd64": "624fb6ed552abc34a5aaac41e76a373da65ac08e524b09b672f29c60e6ac896a",
-        "linux_arm64": "09aaf19b0d22726d2378e0e89fbbefc183494d7bd585759d6c4e69ba50951a2f",
-        "darwin_amd64": "aaa51d905b0e80a28e02f9bee2cf6c91ffade7389d77ab9198aa12809ed04955",
-        "darwin_arm64": "a2259540854d5f699c36b89244fb202ebb2c219b64669a51072687d04fb47152",
-        "windows_amd64": "6a4760d55132b9750ac1a04f6fc32e247034daa999f71452dba9cbca225a529a",
-    },
-    source = "hashicorp/random",
-    version = "3.9.1",
-)
 
-# A provider's repos, one per platform, are private to the `@tf_providers`
-# hub, and the extension doesn't report them as direct dependencies. One is
-# imported anyway so the provider_repo_private case can show that its
-# `:provider` target is not visible outside the hub.
+# Workspace lock: pins hashicorp/null 3.2.4 for stale_lock, and
+# hashicorp/random (~6 MB per platform) so missing_provider fails because the
+# library omits providers = [...] rather than because the provider is unpinned.
+tf_providers.from_lock(lock_file = "//lock:.terraform.lock.hcl")
+
+# Per-platform provider repos are private to `@tf_providers` and omitted from
+# direct deps. Import one explicitly so provider_repo_private can assert that
+# its `:provider` target is not visible outside the hub.
 use_repo(tf_providers, "tf_providers_hashicorp_random_linux_amd64")
 
-# A provider pinned for one platform only, which no test runs on, so the
-# missing_platform case finds no package for its own. The digest is never
-# checked: nothing selects the package.
+# Off-registry provider tagged only for windows_amd64, which no test host runs
+# on, so missing_platform fails `select()` in the hub without fetching the repo
+# or checking the placeholder digest.
 tf_providers.provider(
     sha256 = {
         "windows_amd64": "0000000000000000000000000000000000000000000000000000000000000000",
     },
     source = "acme/windows-only",
+    url_template = "https://example.invalid/terraform-provider-{name}_{version}_{os}_{arch}.zip",
     version = "1.0.0",
 )
-
-# A provider pinned with a deliberately wrong sha256 on every platform so the
-# registry_sha256_mismatch case fails whichever platform runs it; do not fix
-# these digests.
-tf_providers.provider(
-    sha256 = {
-        "linux_amd64": "0000000000000000000000000000000000000000000000000000000000000000",
-        "linux_arm64": "0000000000000000000000000000000000000000000000000000000000000000",
-        "darwin_amd64": "0000000000000000000000000000000000000000000000000000000000000000",
-        "darwin_arm64": "0000000000000000000000000000000000000000000000000000000000000000",
-        "windows_amd64": "0000000000000000000000000000000000000000000000000000000000000000",
-    },
-    source = "PostHog/posthog",
-    version = "1.0.24",
-)
-
-# The workspace lock, pinning hashicorp/null 3.2.4, for the stale_lock case.
-tf_providers.from_lock(lock_file = "//lock:.terraform.lock.hcl")
 
 # Every provider, tagged or locked, is named through the hub.
 use_repo(tf_providers, "tf_providers")

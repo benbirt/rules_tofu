@@ -4,9 +4,8 @@ package(default_visibility = ["//visibility:public"])
 
 # This library uses PostHog/posthog, a provider outside the hashicorp
 # namespace. BUILD files always name providers in lower case, so its target is
-# @tf_providers//posthog/posthog. MODULE.bazel omits sha256 on the provider
-# tag, so Bazel records the digests from registry.opentofu.org in
-# MODULE.bazel.lock.
+# @tf_providers//posthog/posthog. Its version is pinned in
+# //examples/lock:.terraform.lock.hcl.
 tf_library(
     name = "dashboard_lib",
     srcs = ["main.tf"],

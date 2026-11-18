@@ -1,8 +1,8 @@
 load("@rules_tofu//tf:defs.bzl", "tf_library")
 load("@rules_tofu//tf/private:provider.bzl", "tf_provider")
 
-# Stand-in provider packages, laid out as a provider repository lays its one
-# out: `package/<file>`. The placeholder file's contents are irrelevant because
+# Stand-in provider packages under `package/<file>`, matching the layout
+# generated in provider download repositories. File contents are unused because
 # analysis fails before any action runs.
 
 # Two tf_provider targets with the same address at different versions must
@@ -33,10 +33,9 @@ tf_library(
     ],
 )
 
-# The same version, as packages of two platforms. That is what a target gets
-# when it and one of its deps are given different execution platforms: each
-# target's providers are selected for its own. One plugin tree serves one
-# `tofu`, so :platforms fails naming both.
+# Same provider and version for two execution platforms, as happens when a
+# target and one of its deps resolve different execution platforms. One plugin
+# tree serves a single `tofu` binary, so :platforms fails naming both.
 tf_provider(
     name = "prov1_arm64",
     address = "registry.opentofu.org/hashicorp/aws",

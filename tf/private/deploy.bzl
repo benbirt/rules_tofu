@@ -139,8 +139,7 @@ tf_deploy_rule = rule(
         ),
         "providers": attr.label_list(
             providers = [TfProviderInfo],
-            # `tofu` loads the plugins on the execution platform, so the hub's
-            # `select()` must choose that platform's package.
+            # Select for the execution platform, where `tofu` loads plugins.
             cfg = "exec",
             doc = "`@tf_providers//<namespace>/<name>` targets required by `srcs`. Providers " +
                   "from `deps` are also installed in the plugin tree.",

@@ -21,7 +21,7 @@ GitHub releases page for the latest version):
 # comment inside the call breaks MODULE.bazel (as happened in 0.1.1).
 #
 # Bazel 8.5.0 is the floor because it introduced extension facts, which
-# tf_providers uses to record registry digests in MODULE.bazel.lock.
+# tf_modules uses to record commits and registry digests in MODULE.bazel.lock.
 module(
     name = "rules_tofu",
     bazel_compatibility = [">=8.5.0"],
@@ -64,48 +64,36 @@ use_repo(tf_providers_hub, "tf_providers")
 
 # Provider plugins, downloaded once per workspace and symlinked into plugin
 # trees so `tofu init` runs offline. BUILD files name every provider through
-# the hub, e.g. @tf_providers//hashicorp/aws. aws and google pin sha256
-# directly; posthog takes its digests from the OpenTofu registry and records
-# them in MODULE.bazel.lock.
+# the hub, e.g. @tf_providers//hashicorp/aws.
 #
-# These declarations exist only for examples/aws, examples/gcp and
-# examples/posthog, so the usage is marked dev_dependency. That keeps the
-# example pins out of the published module, where they would affect downstream
-# tf_providers version resolution.
-#
-# A build downloads only its own platform's package (aws and google are
-# ~170 MB each), from among the platforms that sha256 lists.
+# Marked dev_dependency because these pins exist only for examples/.
 tf_providers = use_extension("//tf/providers:extensions.bzl", "tf_providers", dev_dependency = True)
+
+# Registry providers used by examples/, updated by
+# `bazel run @tf_providers//:pin`, Renovate or Dependabot.
+tf_providers.from_lock(lock_file = "//examples/lock:.terraform.lock.hcl")
+
+# Off-registry provider for examples/off_registry, which `tofu providers lock`
+# cannot resolve. Uses PostHog's GitHub release zips under a stand-in source;
+# see examples/off_registry/BUILD.bazel.
 tf_providers.provider(
     sha256 = {
-        "linux_amd64": "49ecd456fb8fee5562725c36bd5992b6982704100ead0164d26c6cbb11b07653",
-        "darwin_arm64": "b05796c799ab11b12f2510a06343d30fd61fdad09835ec24ac1741970a3d8f48",
+        "linux_amd64": "4afb3cb829dee5e97f98b51ebdb761b8cc4daf6d0a7f541f9f5a89e0ab86251d",
+        "linux_arm64": "672f48fedf6661afce7e36ff333cd9ea199af2decc5a2985e5d3b25cff8014ab",
+        "darwin_amd64": "f6e42b058b5a2f6074490601ef370aa312714840b5fab3054f3b618bf125014b",
+        "darwin_arm64": "1bc9647121eac3694a5ab816e25397e58be2595b0fb1322aad86d4f9ba15872b",
+        "windows_amd64": "d01ed2764f869608ef856444b1bef9ae32e751a3dc4045d5f972b000f9ef5351",
     },
-    source = "hashicorp/aws",
-    version = "6.45.0",
-)
-tf_providers.provider(
-    sha256 = {
-        "linux_amd64": "84cba090b3d9eee432a5121e4484ef592976fc4918cb10eb0182dea00cecd8c1",
-        "darwin_arm64": "46722e5509ba24cad6ab85cb5dae6f06e97e416660b68b8ff4cbce682f597d59",
-    },
-    source = "hashicorp/google",
-    version = "7.32.0",
-)
-tf_providers.provider(
-    source = "PostHog/posthog",
+    source = "example-corp/posthog",
+    url_template = "https://github.com/PostHog/terraform-provider-posthog/releases/download/v{version}/terraform-provider-{name}_{version}_{os}_{arch}.zip",
     version = "1.0.24",
 )
-
-# examples/lock takes its providers from a .terraform.lock.hcl instead, which
-# Renovate and Dependabot can update. `@tf_providers//:pin` regenerates it.
-tf_providers.from_lock(lock_file = "//examples/lock:.terraform.lock.hcl")
 
 # Real modules for the examples under examples/modules:
 # - label calls cloudposse/label/null from the OpenTofu registry;
 # - stack calls a submodule of cloudposse/stack-config/yaml, which in turn
-#   calls cloudposse/label/null and requires providers that the examples' lock
-#   pins (//examples/lock);
+#   calls cloudposse/label/null and requires providers pinned in
+#   examples/lock/.terraform.lock.hcl;
 # - git calls Cloud Posse's label module straight from GitHub, by tag.
 tf_modules = use_extension("//tf/modules:extensions.bzl", "tf_modules", dev_dependency = True)
 tf_modules.module(

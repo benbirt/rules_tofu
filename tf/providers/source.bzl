@@ -19,10 +19,9 @@ visibility(["//tf/providers/..."])
 # vendors the same binaries a plain `tofu init` would fetch.
 DEFAULT_HOST = "registry.opentofu.org"
 
-# The `<os>_<arch>` platforms a provider can be vendored for: the ones
-# rules_tofu downloads `tofu` for, which are the hosts Bazel and OpenTofu
-# commonly run on. A tag's `sha256` map may use these keys, and a tag without
-# one or a lock gets whichever of them the registry publishes.
+# Supported `<os>_<arch>` platforms for providers, shared with `tofu`
+# toolchain downloads. `pin` locks these by default, locked providers declare a
+# repository for each, and a tag's `sha256` keys must come from this list.
 DEFAULT_PLATFORMS = [platform[0] for platform in PLATFORMS]
 
 # The placeholders a `url_template` may use.
@@ -54,7 +53,7 @@ def parse_source(source):
     return struct(namespace = parts[0].lower(), name = parts[1].lower(), error = None)
 
 def repo_name(namespace, name, platform):
-    """The repository one platform's package of a provider is vendored into.
+    """Repository name for one platform's package of a provider.
 
     For example, `hashicorp`, `aws` and `linux_amd64` give
     `tf_providers_hashicorp_aws_linux_amd64`.
@@ -62,51 +61,96 @@ def repo_name(namespace, name, platform):
     return "tf_providers_{}_{}_{}".format(namespace, name, platform)
 
 def check_platforms(platforms):
-    """Check the platform keys of a tag's `sha256` map.
+    """Validate the `<os>_<arch>` keys of a provider tag's `sha256` map.
 
     Args:
-        platforms: The keys, as `<os>_<arch>` strings.
+        platforms: `<os>_<arch>` strings from `sha256`.
 
     Returns:
-        An error string, or None if every key is one of `DEFAULT_PLATFORMS`.
+        An error string, or None if every key is in `DEFAULT_PLATFORMS`.
     """
     unknown = sorted([p for p in platforms if p not in DEFAULT_PLATFORMS])
     if not unknown:
         return None
-    return "`sha256` names {} {}, but providers are vendored only for {}".format(
+    return "unsupported {} {} in `sha256`; supported platforms are {}".format(
         "platform" if len(unknown) == 1 else "platforms",
         ", ".join(["`{}`".format(p) for p in unknown]),
         ", ".join(["`{}`".format(p) for p in DEFAULT_PLATFORMS]),
     )
 
 def missing_platform_error(source, version, platforms):
-    """The error for a build on a platform the provider is not vendored for.
+    """Format `no_match_error` for a `@tf_providers//<namespace>/<name>` alias.
 
-    It is the `no_match_error` of the `select()` behind
-    `@tf_providers//<namespace>/<name>`, which chooses the execution
-    platform's package.
+    Used by the hub `select()` that chooses the execution platform's package.
 
     Args:
-        source: The provider's `<namespace>/<name>`.
-        version: Its version.
-        platforms: The `<os>_<arch>` platforms it is vendored for.
+        source: Normalised `<namespace>/<name>`.
+        version: Provider version.
+        platforms: `<os>_<arch>` platforms the provider has repositories for.
 
     Returns:
-        The message.
+        The error message.
     """
-    message = ("Provider `{}@{}` is vendored for {}, and this build runs OpenTofu on a different " +
-               "execution platform.").format(
+    message = ("Provider `{}@{}` has packages only for {}, not for this build's execution " +
+               "platform.").format(
         source,
         version,
         ", ".join(["`{}`".format(p) for p in platforms]),
     )
     if len(platforms) < len(DEFAULT_PLATFORMS):
-        message += (" If its tf_providers.provider tag in MODULE.bazel pins `sha256`, add the " +
-                    "platform's digest to the map. Otherwise the registry listed no package for " +
-                    "the platform when this version was resolved: check that it publishes one, " +
-                    "and if it has since, delete the `{}@{}` entry under `tf_providers` in " +
-                    "MODULE.bazel.lock so that the registry is asked again.").format(source, version)
+        message += (" Add the execution platform's zip digest to `sha256` on its " +
+                    "`tf_providers.provider` tag in MODULE.bazel.")
     return message
+
+def check_tag(sha256, url_template):
+    """Validate a root module's `tf_providers.provider` tag.
+
+    `url_template` and `sha256` are validated here rather than via `mandatory`
+    on the tag class so ignored tags in dependencies always load.
+
+    Args:
+        sha256: The tag's `sha256` map.
+        url_template: The tag's `url_template`.
+
+    Returns:
+        An error string, or None if the tag is valid.
+    """
+    if not url_template:
+        return ("missing `url_template`. Pin `registry.opentofu.org` providers in `.terraform.lock.hcl` " +
+                "instead: remove this tag, add `tf_providers.from_lock(lock_file = " +
+                "\"//:.terraform.lock.hcl\")` and run `bazel run @tf_providers//:pin`. For an " +
+                "off-registry provider, set `url_template` and `sha256`")
+    error = check_url_template(url_template)
+    if error:
+        return error
+    if not sha256:
+        return "missing `sha256`: map each `<os>_<arch>` platform to its zip's SHA-256 digest"
+    error = check_platforms(sha256.keys())
+    if error:
+        return error
+    for platform, digest in sha256.items():
+        if not is_sha256(digest):
+            return "`sha256[\"{}\"]` must be a 64-character lower-case hex SHA-256 digest, got {}".format(platform, repr(digest))
+    return None
+
+def ignored_tag_error(source, modules):
+    """Format the load-time error for a provider tagged only by dependencies.
+
+    Args:
+        source: Normalised `<namespace>/<name>`.
+        modules: Names of dependency modules that tag `source`.
+
+    Returns:
+        The error message for the hub package.
+    """
+    return ("Provider `{source}` is tagged with `tf_providers.provider` by {modules}, but " +
+            "only the root module pins providers. If `{source}` is on `registry.opentofu.org`, " +
+            "declare `tf_providers.from_lock` in the root MODULE.bazel and run " +
+            "`bazel run @tf_providers//:pin`; otherwise add a `tf_providers.provider` tag " +
+            "there.").format(
+        source = source,
+        modules = ", ".join(["`{}`".format(m) for m in modules]),
+    )
 
 def registry_download_endpoint(namespace, name, version, os, arch):
     """The OpenTofu registry endpoint giving one platform's zip URL and SHA256."""
@@ -119,19 +163,11 @@ def registry_download_endpoint(namespace, name, version, os, arch):
         arch = arch,
     )
 
-def registry_versions_endpoint(namespace, name):
-    """The OpenTofu registry endpoint listing a provider's versions and their platforms."""
-    return "https://{host}/v1/providers/{ns}/{name}/versions".format(
-        host = DEFAULT_HOST,
-        ns = namespace,
-        name = name,
-    )
-
 def download_location(namespace, name, version, os, arch, url_template = ""):
     """Where to fetch one platform's provider zip from.
 
-    `url_template`, when set, is expanded and used directly. Otherwise the
-    OpenTofu registry's download endpoint says where the zip is.
+    Expands `url_template` directly for a tagged provider; otherwise returns
+    the OpenTofu registry download endpoint for a locked provider.
 
     Args:
         namespace: Normalised provider namespace (see `parse_source`).
@@ -139,7 +175,7 @@ def download_location(namespace, name, version, os, arch, url_template = ""):
         version: Provider version.
         os: Platform OS, e.g. `linux`.
         arch: Platform architecture, e.g. `amd64`.
-        url_template: Optional template using `{namespace}`, `{name}`,
+        url_template: Optional URL template using `{namespace}`, `{name}`,
             `{version}`, `{os}` and `{arch}`.
 
     Returns:
@@ -168,35 +204,6 @@ def download_location(namespace, name, version, os, arch, url_template = ""):
         error = None,
     )
 
-def published_platforms(versions_response, version, context):
-    """The `DEFAULT_PLATFORMS` the registry publishes for `version`.
-
-    Args:
-        versions_response: The decoded JSON body of the registry's versions endpoint.
-        version: The provider version wanted.
-        context: A description of the provider, for messages.
-
-    Returns:
-        `struct(platforms, error)`: platform keys in `DEFAULT_PLATFORMS` order;
-        `error` is None on success.
-    """
-    for entry in versions_response.get("versions", []):
-        if entry.get("version") != version:
-            continue
-        published = ["{}_{}".format(p.get("os"), p.get("arch")) for p in entry.get("platforms", [])]
-        platforms = [p for p in DEFAULT_PLATFORMS if p in published]
-        if not platforms:
-            return struct(
-                platforms = None,
-                error = "the registry publishes {} for none of {} (only {})".format(
-                    context,
-                    ", ".join(DEFAULT_PLATFORMS),
-                    ", ".join(published) or "nothing",
-                ),
-            )
-        return struct(platforms = platforms, error = None)
-    return struct(platforms = None, error = "the registry has no version {} of {}".format(version, context))
-
 def registry_shasum(response, context):
     """Read the zip's SHA256 from an OpenTofu registry download response.
 
@@ -220,91 +227,6 @@ def is_sha256(value):
         if c not in _HEX:
             return False
     return True
-
-def valid_cached_sha256s(cached):
-    """Whether a value read back from the lockfile's facts is a usable sha256 map.
-
-    Facts can outlive the code that wrote them, so anything unexpected is
-    treated as a cache miss rather than trusted.
-
-    Args:
-        cached: A value from `module_ctx.facts`, or None.
-
-    Returns:
-        True if `cached` maps known platform keys to SHA256 digests.
-    """
-    if type(cached) != "dict" or not cached:
-        return False
-    for platform, digest in cached.items():
-        if platform not in DEFAULT_PLATFORMS or not is_sha256(digest):
-            return False
-    return True
-
-def _numeric_version(version):
-    """`version` as a list of integers, or None unless it is dot-separated digits."""
-    parts = []
-    for part in version.split("."):
-        if not part.isdigit():
-            return None
-        parts.append(int(part))
-    return parts
-
-def highest_version(source, requests):
-    """Select the provider version when dependencies tag it and the root module does not.
-
-    When every request names the same version, that string wins whatever its
-    format. Differing versions must be dot-separated digits and are compared
-    numerically component by component, so `5.70` equals `5.70.0`. The highest
-    version wins, breaking ties in favour of the first seen. Any prerelease
-    among differing versions is an error: choosing between `2.0.0-rc1` and
-    `1.9.0` is the root module's call.
-
-    Args:
-        source: The provider's `<namespace>/<name>`, for the error.
-        requests: A non-empty list of structs with `version` and `mod_name`,
-            in the order the tags were read.
-
-    Returns:
-        `struct(version, error)`: one of the two is None. The extension
-        doesn't fail on the error: the provider's repository does, when a
-        build needs it, so that `pin` can still run and lock the provider.
-    """
-    modules = {}
-    for request in requests:
-        names = modules.setdefault(request.version, [])
-        if request.mod_name not in names:
-            names.append(request.mod_name)
-    if len(modules) == 1:
-        return struct(version = requests[0].version, error = None)
-
-    best = None
-    best_parts = None
-    for version in modules:
-        parts = _numeric_version(version)
-        if parts == None:
-            return struct(version = None, error = (
-                "Provider `{}` is tagged with different versions by modules the root module " +
-                "depends on: {}. rules_tofu can only order plain numeric versions, and `{}` is " +
-                "not one. Choose a version in the root module: tag the provider in its " +
-                "MODULE.bazel, or, if it pins providers with `tf_providers.from_lock`, lock " +
-                "this one with `bazel run @tf_providers//:pin`."
-            ).format(
-                source,
-                ", ".join([
-                    "`{}` (from {})".format(v, ", ".join(["`{}`".format(name) for name in names]))
-                    for v, names in modules.items()
-                ]),
-                version,
-            ))
-        if best == None:
-            best, best_parts = version, parts
-            continue
-
-        # Pad the shorter with zeros, so that 5.70 and 5.70.0 compare equal.
-        width = max(len(parts), len(best_parts))
-        if parts + [0] * (width - len(parts)) > best_parts + [0] * (width - len(best_parts)):
-            best, best_parts = version, parts
-    return struct(version = best, error = None)
 
 def check_url_template(url_template):
     """Check that `url_template` only uses known placeholders.
@@ -335,16 +257,11 @@ def check_url_template(url_template):
         rest = rest[end + 1:]
     return None
 
-def registry_download_url(response, pinned_sha256, context):
+def registry_download_url(response, context):
     """Read the zip's URL from an OpenTofu registry download response.
-
-    The registry also reports the zip's SHA256. Checking it against the pin
-    up front turns a wrong or missing pin into an error naming the right
-    value, rather than a bare checksum mismatch after a long download.
 
     Args:
         response: The decoded JSON body of the registry's download endpoint.
-        pinned_sha256: Expected SHA256 digest for this platform's zip.
         context: A description of the provider and platform, for messages.
 
     Returns:
@@ -353,16 +270,4 @@ def registry_download_url(response, pinned_sha256, context):
     url = response.get("download_url")
     if not url:
         return struct(url = None, error = "the registry's response for {} has no download_url".format(context))
-    shasum = response.get("shasum")
-    if shasum and shasum != pinned_sha256:
-        return struct(
-            url = None,
-            error = ("sha256 for {} is pinned as {}, but the registry reports {} for {}. " +
-                     "If you're adding or updating this provider, pin the registry's value.").format(
-                context,
-                pinned_sha256,
-                shasum,
-                url,
-            ),
-        )
     return struct(url = url, error = None)

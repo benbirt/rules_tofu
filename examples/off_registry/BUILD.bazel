@@ -1,0 +1,15 @@
+load("@rules_tofu//tf:defs.bzl", "tf_library")
+
+# Off-registry providers (forks, in-house providers, vendor builds published
+# outside registry.opentofu.org) cannot be resolved by `tofu providers lock`.
+# MODULE.bazel pins this one with a tf_providers.provider tag giving source,
+# version, url_template and per-platform sha256 digests;
+# `bazel run @tf_providers//:pin` excludes it from the lock.
+#
+# example-corp/posthog is a stand-in backed by PostHog's GitHub release zips.
+# BUILD files reference it through @tf_providers like any locked provider.
+tf_library(
+    name = "dashboard_lib",
+    srcs = ["main.tf"],
+    providers = ["@tf_providers//example-corp/posthog"],
+)

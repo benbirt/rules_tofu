@@ -95,12 +95,18 @@ Then `bazel shutdown` so the new startup flags take effect.
     runner) and copy it into the work tree only after that check runs.
 - Don't pass `-lockfile=readonly` to `tofu init`: it fails when the lock has
   entries a work tree doesn't use.
+- Pin `registry.opentofu.org` providers with the root module's lock only, and
+  reserve `tf_providers.provider` for off-registry providers (issue #147;
+  `README.md`, "Providers"). Root tags require `source`, `version`,
+  `url_template` and `sha256` (`check_tag`). Don't reintroduce tags for
+  registry providers, cross-module provider version resolution, provider facts
+  in `MODULE.bazel.lock`, or registry requests in the extension:
+  `.terraform.lock.hcl` is OpenTofu's own lock mechanism and `pin` writes it.
 - Verify every provider download against a per-platform digest: the tag's
-  `sha256`, a registry digest recorded as a `<source>@<version>` fact in
-  `MODULE.bazel.lock`, or a registry digest vouched for by the lock's `zh:`
-  hashes (`lock_vouches`).
-- Resolve a locked provider's digests in its repository rules
-  (`_registry_download`), never in the extension and never as facts. The lock
+  `sha256` or a registry digest vouched for by the lock's `zh:` hashes
+  (`lock_vouches`).
+- Resolve a locked provider's digests in its repository rule
+  (`_locked_download`), never in the extension and never as facts. The lock
   alone pins it, so a bot updating `versions.tf` and `.terraform.lock.hcl`
   leaves `MODULE.bazel.lock` valid (`//tests/integration:lock_update_test`).
 - Set `reproducible = True` on all three extensions (`tofu`, `tf_providers`,
@@ -108,8 +114,8 @@ Then `bazel shutdown` so the new startup flags take effect.
   graph, watched lock file, `versions.bzl` table and recorded facts, so copying
   repo specs into `MODULE.bazel.lock` pins nothing extra, and returning only
   active facts lets stale entries drop out.
-- Validate extension facts on read (`valid_cached_sha256s`, `valid_fact`,
-  `_cached` and `_cached_registry`), treating any bad fact as a cache miss to
+- Validate extension facts on read (`valid_fact`, `_cached` and
+  `_cached_registry` in `tf_modules`), treating any bad fact as a cache miss to
   re-resolve and never calling `fail()` (issue #96). `MODULE.bazel.lock` is a
   checked-in file that can outlive the code that wrote it or be mis-merged.
   `valid_fact` rejects a well-formed fact stored under a key of the other kind.
@@ -124,10 +130,18 @@ Then `bazel shutdown` so the new startup flags take effect.
   carried by their attributes or the lock: the registry supplies URLs, never
   contents. Any rule that fetches anything unpinned must stop declaring it. The
   cheap hub repositories omit it.
-- Silently ignore a dependency's `from_lock` (`README.md`, "Providers"): a
-  dependency carries one from being developed as a root module of its own,
-  while in a consumer workspace the root owns provider versions and libraries
-  only constrain them.
+- Silently ignore `from_lock` and `provider` tags in dependencies (`README.md`,
+  "Providers"). A dependency carries them from its own development as a root
+  module; in a consumer workspace the root owns provider pins and libraries
+  only constrain versions. A provider tagged only by dependencies gets a
+  `@tf_providers//<ns>/<name>` package that fails to load (`ignored_tag_error`,
+  `dependency_tag_ignored`).
+- Don't set `mandatory = True` on `url_template` or `sha256` on `_provider_tag`.
+  Bazel enforces `mandatory` on every module's tags, so a dependency's 0.5 tag
+  without them would fail to load before the root module could ignore it.
+  Validate root tags in `check_tag` instead; a root tag without `url_template`
+  fails with instructions to move the provider to the lock (`lock_update_test`
+  step 6).
 - Keep `lock_file` on `tf_providers.from_lock` named `lock_file` and
   `mandatory = True` with no default, and tell users in docs and `tf_pin` to
   write it as a string literal (issue #131; `lock_update_test` step 5).
@@ -138,10 +152,9 @@ Then `bazel shutdown` so the new startup flags take effect.
 - Always create the `@tf_providers` hub so dependencies' `use_repo` calls
   resolve even when the root declares no providers.
 - Treat a missing lock file as empty so `pin` can write the first one.
-- Turn an unusable lock entry or a root `provider` tag conflicting with a lock
-  entry (`_lock_provider_repos`, issue #85) into an entry in the hub's `errors`,
-  whose `@tf_providers//<ns>/<name>` package then fails to load naming the
-  problem, never a `fail()` in the extension. Failing
+- Record an unusable lock entry or a lock/tag conflict (`_lock_provider_repos`,
+  issue #85) in the hub's `errors` so `@tf_providers//<ns>/<name>` fails to
+  load when used; never call `fail()` in the extension. Failing
   the extension would also break `@tf_providers//:pin`. When reading an
   existing lock file, only a malformed file fails `_read_lock`: bad HCL, an
   invalid provider address, a duplicate provider block, or an entry missing
@@ -186,32 +199,30 @@ Then `bazel shutdown` so the new startup flags take effect.
     to a root tag clears the conflict.
   - Don't verify the lock's `constraints` attribute: Renovate and Dependabot
     rewrite it in their own form.
-- Vendor the full unpacked provider zip as one list of files per platform
-  (`TfProviderInfo.files`) and symlink all of it in `materialize_plugin_tree`.
-  Lock `h1:` hashes cover the whole package directory, so a binary-only plugin
-  tree fails `tofu init`. Don't tell the binary apart from the other files
-  (issue #145): nothing in the rules runs it, and `tofu init -plugin-dir` finds
-  it in the directory. A package that unpacks to no files fails its fetch.
+- Vendor the full unpacked provider zip as `TfProviderInfo.files` and symlink
+  every file in `materialize_plugin_tree`. Lock `h1:` hashes cover the whole
+  package directory, so a binary-only plugin tree fails `tofu init`. Don't
+  single out the provider binary (issue #145): the rules never execute it
+  directly, and `tofu init -plugin-dir` locates it in the directory. An archive
+  that unpacks to no files fails its fetch; one with zero or multiple binaries
+  fails at `tofu init`.
 - Resolve provider zip URLs through the pure functions in
-  `tf/providers/source.bzl` (`//tf/providers/tests`): `url_template` with a
-  required `sha256`, otherwise the OpenTofu registry for every namespace
-  including `hashicorp/`. OpenTofu canonicalises bare `<ns>/<name>` addresses
-  to `registry.opentofu.org` and looks for plugins under that host, and
-  `releases.hashicorp.com` builds have different checksums, so don't
-  special-case it. Check the registry's `shasum` against a tag's pinned
-  `sha256` before downloading (`registry_download_url`,
-  `registry_sha256_mismatch`) so a wrong pin fails immediately naming the right
-  digest.
+  `tf/providers/source.bzl` (`//tf/providers/tests`): `url_template` for tagged
+  providers, or the OpenTofu registry for locked providers across every
+  namespace including `hashicorp/`. OpenTofu canonicalises bare `<ns>/<name>`
+  addresses to `registry.opentofu.org` and looks for plugins under that host,
+  and `releases.hashicorp.com` builds have different checksums, so don't
+  special-case it.
 - Lower-case all provider sources to match OpenTofu's canonical addresses.
 - Declare one `tf_providers_<ns>_<name>_<os>_<arch>` repository per provider
-  and platform (issue #146), and have the hub's `@tf_providers//<ns>/<name>`
-  alias choose with a `select()` over the hub's own `config_setting`s, so a
-  build fetches only its execution platform's package. A locked provider gets
-  every platform in `PLATFORMS` (`toolchain/versions.bzl`, the one list for
-  `tofu` and providers), because the lock's hashes carry no platform names; one
-  the registry doesn't publish fails its fetch. A tag gets the keys of its
-  `sha256`, and a build on another platform fails analysis with the alias's
-  `no_match_error` (`missing_platform_error`, `missing_platform`).
+  and platform (issue #146). `@tf_providers//<ns>/<name>` aliases them via a
+  `select()` over `config_setting`s in the hub so a build fetches only its
+  execution platform's repository. `PLATFORMS` in `toolchain/versions.bzl` is
+  the single platform list for `tofu` and providers. A locked provider declares
+  every platform in `PLATFORMS` because lock hashes carry no platform names; an
+  unpublished platform fails when fetched. A tagged provider declares the keys
+  of `sha256`; other platforms fail analysis via `no_match_error`
+  (`missing_platform_error`, `missing_platform`).
 - Keep those per-platform repositories private: omit them
   from direct deps, keep their files private, and expose `:provider` only to
   the hub. Only `@tf_providers//<ns>/<name>` is public; don't reintroduce
@@ -338,6 +349,13 @@ Then `bazel shutdown` so the new startup flags take effect.
     (`repo_name`, `check_name`).
   - Match calls against all modules with `tfconfig.BestMatch` before checking
     `callable`, so strict deps never changes which library a call resolves to.
+- Pin every registry provider used by the examples to an exact version in
+  `examples/lock/versions.tf`, and use `>=` floors in `examples/aws`,
+  `examples/gcp` and `examples/posthog`. Dependabot reads `/examples/lock`
+  alone, so a provider required only elsewhere (such as by
+  `examples/modules/stack`'s fetched module) would be dropped from the lock,
+  and an exact pin elsewhere would fail once Dependabot bumps `examples/lock`.
+  `examples/off_registry` is the sole `tf_providers.provider` example.
 - Keep `examples/modules/{label,stack,git}` on lightweight providers alongside
   `//tests/integration:tf_modules_test` so CI exercises real upstream registry
   and git modules without ~170 MB cloud-provider downloads.
@@ -359,22 +377,13 @@ Then `bazel shutdown` so the new startup flags take effect.
   leaves `MODULE.bazel` unchanged.
 - Arbitrate `tofu.version` from the root module: multiple root tags fail, one
   root tag wins, agreeing non-root tags win, disagreeing non-root tags fail
-  naming the modules, and zero tags select `DEFAULT_VERSION`. Unlike providers,
-  `tofu` is one global binary for the build rather than a per-library
-  dependency, so conflicting non-root requests cannot be resolved by picking
-  the highest.
+  naming the modules, and zero tags select `DEFAULT_VERSION`. `tofu` is one
+  global binary for the build, so conflicting non-root requests cannot be
+  resolved by picking the highest.
 - Keep that version-resolution helper pure in
   `toolchain/version_resolution.bzl` returning `struct(version, error)`
   (`//toolchain/tests`) with `fail()` in the extension; don't inline it or make
   it last-write-wins.
-- Resolve provider tags as "root wins, else `highest_version`"
-  (`tf/providers/source.bzl`). Don't parse agreeing tags; when non-root tags
-  differ, require plain numeric versions and return an error naming the modules
-  on prereleases such as `2.0.0-rc1` vs `1.9.0` (issue #98), because choosing
-  between a prerelease and a prior release is the root module's call.
-- Defer that version-ordering error to the hub's `errors` rather than calling
-  `fail()` in the extension, so a `from_lock` root can
-  settle it with `pin` (`unorderable_versions`).
 - Download prebuilt OpenTofu binaries rather than building from source
   (`versions.bzl`; `README.md`, "Non-goals"): the pinned download is already
   hermetic and cached, whereas a source build would pull OpenTofu's ~300 Go
@@ -391,7 +400,7 @@ Then `bazel shutdown` so the new startup flags take effect.
 - Supporting the `terraform` binary is a non-goal, not a feature to add on
   request without redesigning `tf/providers/source.bzl`.
 - Keep `bazel_compatibility = [">=8.5.0"]`: Bazel 8.5 added `module_ctx.facts`,
-  used unconditionally in `tf/providers/extensions.bzl` without a `hasattr`
+  used unconditionally in `tf/modules/extensions.bzl` without a `hasattr`
   fallback. Raise `bazel_compatibility`, the CI matrix and `README.md`
   together. CI tests pinned `.bazelversion` and `8.5.0`, checking clean git
   status only on pinned jobs because `8.5.0` rewrites `MODULE.bazel.lock`.
@@ -489,13 +498,13 @@ Then `bazel shutdown` so the new startup flags take effect.
   `requires-network` when `allow_network = True`. `command = apply` is also the
   default for offline runs using `mock_provider` or local providers, which
   should stay sandboxed and cached, while `external` keeps live tests uncached.
-- Take `providers` at `cfg = "exec"` in `tf_library`, `tf_deploy` and `tf_test`
-  so the hub's `select()` follows the platform `tofu` runs on, in validation and
-  the runner alike (`README.md`, "Known gaps"); don't design around
-  cross-compilation. Each `TfProviderInfo` carries its `platform`, and
-  `materialize_plugin_tree` fails when one address arrives for two: Bazel
-  resolves an execution platform per target, so a library and its dependant can
-  disagree (`conflicting_provider_platforms`). Don't put a platform key back on
+- Set `cfg = "exec"` on `providers` in `tf_library`, `tf_deploy` and `tf_test`
+  so `@tf_providers//<ns>/<name>` selects for the execution platform in both
+  validation and launchers (`README.md`, "Known gaps"); don't design around
+  cross-compilation. `TfProviderInfo` carries `platform`, and
+  `materialize_plugin_tree` fails if one provider arrives for two platforms,
+  which happens when a target and one of its `deps` resolve different execution
+  platforms (`conflicting_provider_platforms`). Don't re-add `platform_key` to
   `opentofu_toolchain` or `TofuInfo` (issue #146).
 - Constrain `tofu` toolchains with `exec_compatible_with` only (no
   `target_compatible_with`) so non-host `--platforms` flags still resolve one

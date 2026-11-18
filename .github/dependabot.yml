@@ -1,8 +1,8 @@
 # Weekly version updates.
 #
 # Not covered: .bazelversion (and its nested copies, which must stay
-# identical), the Go SDK and the example provider pins in MODULE.bazel, and
-# the OpenTofu versions in toolchain/; Dependabot updates none of them.
+# identical), the Go SDK and the off-registry provider tag in MODULE.bazel,
+# and the OpenTofu versions in toolchain/; Dependabot updates none of them.
 version: 2
 updates:
   # bazel_dep versions in MODULE.bazel; Dependabot runs `bazel mod tidy` to
@@ -39,8 +39,9 @@ updates:
       go:
         patterns: ["*"]
 
-  # examples/lock's provider: versions.tf and the .terraform.lock.hcl beside
-  # it, which MODULE.bazel's tf_providers.from_lock reads. This exercises the
+  # Registry providers for examples/: examples/lock/versions.tf pins each one
+  # exactly beside .terraform.lock.hcl, which MODULE.bazel loads via
+  # tf_providers.from_lock. This exercises the
   # update path the README documents. "opentofu", not "terraform", which
   # can't read an OpenTofu lock. The locks under tests/ are fixtures and stay
   # as they are.

@@ -1,9 +1,8 @@
 load("@rules_tofu//tf:defs.bzl", "tf_library")
 
-# The broken_workspace MODULE.bazel pins acme/windows-only for windows_amd64
-# alone, and the tests run on Linux and macOS. The hub chooses a provider's
-# package for the execution platform, finds none, and fails analysis naming
-# the platforms the provider is pinned for. Nothing is downloaded.
+# broken_workspace/MODULE.bazel tags acme/windows-only for windows_amd64 only,
+# while tests run on Linux and macOS. The hub `select()` finds no branch for
+# the execution platform and fails analysis without fetching.
 tf_library(
     name = "lib",
     srcs = ["main.tf"],
