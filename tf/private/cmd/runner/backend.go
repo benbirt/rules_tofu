@@ -10,35 +10,33 @@ import (
 	"strings"
 )
 
-// defaultStateFile is where tofu keeps the default workspace's state, relative
-// to the directory it runs in, when no backend or cloud block says otherwise.
+// defaultStateFile is OpenTofu's default local state filename in the working
+// directory, used when no backend or cloud block is declared and when a local
+// backend's path is unset.
 const defaultStateFile = "terraform.tfstate"
 
-// backendRecordPath returns the file in which `tofu init`, run in cwd, records
-// the backend it configured. The runner fixes TF_DATA_DIR to cwd/.terraform
-// (see tofuEnv).
+// backendRecordPath returns the file where tofu init records the backend it
+// configured for cwd. TF_DATA_DIR is pinned to cwd/.terraform.
 func backendRecordPath(cwd string) string {
 	return filepath.Join(cwd, ".terraform", "terraform.tfstate")
 }
 
-// backendRecord is the backend `tofu init` recorded: the type of a
-// `backend "<type>"` block, or "cloud" for a `cloud` block, and the block's
-// settings as tofu resolved them, with variables and locals evaluated.
+// backendRecord is the backend metadata written by tofu init. Type is the
+// label of a backend block or "cloud" for a cloud block; Config holds the
+// block's settings after OpenTofu merged override files and evaluated
+// expressions.
 type backendRecord struct {
 	Type   string          `json:"type"`
 	Config json.RawMessage `json:"config"`
 }
 
-// recordedBackend reads the backend `tofu init` recorded for cwd, or nil when
-// it recorded none: the configuration has no backend or cloud block, so tofu
-// keeps state in cwd.
+// recordedBackend reads the backend recorded by tofu init in cwd. It returns
+// (nil, nil) if the file is absent or names no backend, which means the root
+// module has no backend or cloud block and keeps state in cwd.
 //
-// The record is the answer tofu itself gives, after merging override files
-// and evaluating expressions, so the runner parses no configuration. Its
-// format is internal to tofu, like the module manifest's;
-// module_dependency_<version>_test covers it for every pinned release.
-// syncRunDir removes the previous run's record before init, so what is read
-// here is always this run's.
+// Because the previous run's record is removed before tofu init, any file
+// present was written by this run. The file format is internal to OpenTofu;
+// module_dependency_<version>_test exercises it on every pinned release.
 func recordedBackend(cwd string) (*backendRecord, error) {
 	path := backendRecordPath(cwd)
 	data, err := os.ReadFile(path)
@@ -60,20 +58,17 @@ func recordedBackend(cwd string) (*backendRecord, error) {
 	return record.Backend, nil
 }
 
-// checkStateDurable returns the refusal for an apply or destroy whose state
-// would not outlive `bazel clean`, or nil when it would. It runs after
-// `tofu init` in cwd, the root module's directory in the run directory, and
-// reads what init recorded:
-//   - no record: no backend or cloud block, so state is in cwd;
-//   - a `backend "local"`: durable only if it keeps state outside Bazel's
-//     output tree outputRoot (see localBackendEphemeral);
-//   - anything else, a remote backend or a cloud block: durable.
+// checkStateDurable checks the backend that tofu init recorded in cwd and
+// refuses command ("apply" or "destroy") unless state is durable:
+//   - no recorded backend: ephemeral, because tofu writes state in cwd;
+//   - type "local": durable only when localBackendEphemeral returns "";
+//   - any other type (remote backends and "cloud"): durable.
 //
-// A record that can't be read is a refusal too.
+// An unreadable or malformed record is also refused.
 func checkStateDurable(command, cwd, outputRoot string) error {
 	backend, err := recordedBackend(cwd)
 	if err != nil {
-		return fmt.Errorf("rules_tofu: refusing to run \"tofu %s\": can't tell where this deploy keeps its state: %w", command, err)
+		return fmt.Errorf("rules_tofu: refusing to run \"tofu %s\": can't tell where state is stored: %w", command, err)
 	}
 	if backend == nil {
 		return ephemeralStateError(command, cwd)
@@ -83,7 +78,7 @@ func checkStateDurable(command, cwd, outputRoot string) error {
 	}
 	reason, err := localBackendEphemeral(backend.Config, outputRoot)
 	if err != nil {
-		return fmt.Errorf("rules_tofu: refusing to run \"tofu %s\": can't tell where this deploy's backend \"local\" keeps its state: %w", command, err)
+		return fmt.Errorf("rules_tofu: refusing to run \"tofu %s\": can't tell where backend \"local\" stores state: %w", command, err)
 	}
 	if reason != "" {
 		return localBackendError(command, reason, cwd)
@@ -91,18 +86,15 @@ func checkStateDurable(command, cwd, outputRoot string) error {
 	return nil
 }
 
-// localBackendEphemeral decides whether a `backend "local"` keeps its state
-// outside Bazel's output tree outputRoot, given the settings tofu recorded
-// for it. It returns why not, or "" when it does. The runner never changes
-// what the block means: tofu resolves it from the run directory, which is
-// under bazel-bin, so anything relative lands there and goes with
-// `bazel clean`.
+// localBackendEphemeral checks the JSON config recorded for a local backend
+// against Bazel's output tree outputRoot. It returns "" when state is durable,
+// or a reason string explaining why it is not.
 //
-// State is outside only when both `path`, which holds the default
-// workspace's state, and `workspace_dir`, which holds the other workspaces',
-// are absolute paths that do not lead into outputRoot once symlinks are
-// followed, such as a checkout's bazel-bin convenience link. For one that is
-// null or empty tofu uses its relative default.
+// Both path (default workspace state) and workspace_dir (named workspace
+// state) must be absolute paths that resolve outside outputRoot after
+// following symlinks, such as a checkout's bazel-bin symlink. Null or empty
+// attributes use OpenTofu's relative defaults (terraform.tfstate and
+// terraform.tfstate.d), which resolve inside the run directory.
 func localBackendEphemeral(config json.RawMessage, outputRoot string) (string, error) {
 	var settings struct {
 		Path         *string `json:"path"`
@@ -140,9 +132,8 @@ func localBackendEphemeral(config json.RawMessage, outputRoot string) (string, e
 	return "", nil
 }
 
-// ephemeralExplanation says why state under bazel-bin is disposable; each
-// refusal supplies the sentence's subject, and optInAdvice explains how to opt
-// in.
+// ephemeralExplanation completes a sentence explaining why state in the output
+// tree is unsafe; optInAdvice explains allow_ephemeral_state.
 const (
 	ephemeralExplanation = `is machine-local and disposable. It sits under bazel-bin, so
 "bazel clean" deletes it; it embeds the build configuration, so building with
@@ -158,20 +149,18 @@ setting
     allow_ephemeral_state = True
 
 on the tf_deploy target. For the bootstrap case, add the remote backend block
-once the bucket exists and move the existing state into it by running, in the
-directory above:
+once the bucket exists and move the existing state into it by running this in
+the run directory above:
 
     tofu init -migrate-state
 
 The deploy's .plan target is never gated, so planning still works either way.`
 )
 
-// ephemeralStateError is the refusal returned when apply/destroy would write
-// local state for a deploy with no backend. It is the whole user-facing
-// surface of the gate, so it names the state path, the recommended fix and the
-// opt-in verbatim.
+// ephemeralStateError formats the refusal for apply or destroy when the deploy
+// declares no backend or cloud block.
 func ephemeralStateError(command, cwd string) error {
-	return fmt.Errorf(`rules_tofu: refusing to run "tofu %s": this deploy declares no state backend, so tofu would write its state to %s in this deploy's run directory,
+	return fmt.Errorf(`rules_tofu: refusing to run "tofu %s": this deploy declares no state backend, so tofu writes %s in the run directory:
 
     %s
 
@@ -190,16 +179,14 @@ deploy's srcs:
 (Any remote backend or a cloud {} block will do. A backend "local" block
 counts only when its path and workspace_dir are both absolute paths outside
 Bazel's output tree, and that state is still local to this machine.)
-With one present, this check no longer applies.
+With one present, the runner defers to it and this check no longer applies.
 
 %s`,
 		command, defaultStateFile, cwd, ephemeralExplanation, optInAdvice)
 }
 
-// localBackendError is the refusal returned when apply/destroy would run
-// against a `backend "local"` that doesn't keep its state outside Bazel's
-// output tree. It names the attribute that fails the test and the value tofu
-// resolved it to, where tofu runs, the fix and the opt-in.
+// localBackendError formats the refusal for apply or destroy when a local
+// backend's paths are relative or resolve inside Bazel's output tree.
 func localBackendError(command, reason, cwd string) error {
 	return fmt.Errorf(`rules_tofu: refusing to run "tofu %s": this deploy's backend "local" does not keep state outside Bazel's output tree: %s.
 

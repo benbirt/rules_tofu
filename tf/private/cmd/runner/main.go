@@ -23,26 +23,29 @@
 // Trailing arguments after flags are forwarded verbatim to tofu.
 //
 // For plan, apply and destroy, runner performs these steps in order:
-//   - Mirror --work-tree as symlinks into <state-dir>/work (see rundir.go). The
-//     deploy's .plan, .apply and .destroy share that directory so OpenTofu
-//     resolves every relative path itself and each launcher sees the same
-//     files.
-//   - Copy --modules-manifest to .terraform/modules/modules.json and any
-//     --lock-file to .terraform.lock.hcl in <state-dir>/work/<package-dir>, and
+//   - Mirror --work-tree as symlinks into <state-dir>/work, removing the
+//     previous run's lock, .terraform/providers and
+//     .terraform/terraform.tfstate (see rundir.go). The deploy's .plan, .apply
+//     and .destroy share that directory so OpenTofu resolves relative paths
+//     consistently across launchers.
+//   - Copy any --lock-file to .terraform.lock.hcl and --modules-manifest to
+//     .terraform/modules/modules.json in <state-dir>/work/<package-dir>, then
 //     run `tofu init -input=false -get=false -plugin-dir=<plugin-dir>` there
-//     with the -var-file flags and TF_DATA_DIR fixed to its .terraform.
+//     with the -var-file flags, TF_DATA_DIR set to its .terraform and
+//     TF_PLUGIN_CACHE_DIR unset.
 //   - For apply and destroy without --allow-ephemeral-state, read the backend
-//     init recorded in .terraform/terraform.tfstate (see backend.go) and
-//     refuse to go on when state would live under --output-root, which
-//     `bazel clean` deletes: no backend or cloud block, or a `backend "local"`
-//     whose path and workspace_dir are not both absolute paths outside it.
-//   - For plan, write <state-dir>/tfplan via -out and print
-//     rules_tofu: plan saved to <path> to stdout.
-//   - For apply and destroy, run `tofu apply` or `tofu destroy`.
+//     recorded in .terraform/terraform.tfstate (see backend.go) and refuse if
+//     the record cannot be read or state is ephemeral: no backend or cloud
+//     block, or a local backend unless path and workspace_dir are both
+//     absolute paths outside --output-root.
+//   - Run `tofu plan -input=false -out=<state-dir>/tfplan` (printing
+//     "rules_tofu: plan saved to <path>" to stdout), `tofu apply -input=false`
+//     or `tofu destroy -input=false`, with the -var-file flags and any
+//     trailing arguments.
 //
-// Runner passes no -state flags and never rewrites a backend block: OpenTofu
-// owns where state lives. Without a backend or cloud block that is
-// terraform.tfstate in <state-dir>/work/<package-dir>.
+// Runner passes no -state, -state-out or -backend-config flags and never
+// rewrites a backend block: OpenTofu owns where state lives. Without a backend
+// or cloud block, state is <state-dir>/work/<package-dir>/terraform.tfstate.
 //
 // For test, runner copies --work-tree into TEST_TMPDIR or a temporary
 // directory, initialises with -backend=false and runs `tofu test` there (see
@@ -84,7 +87,7 @@ var (
 	outputRoot = flag.String("output-root", "", "absolute path to Bazel's output tree (bazel-out); a local backend's state inside it is ephemeral")
 
 	allowEphemeralState = flag.Bool("allow-ephemeral-state", false,
-		"permit apply/destroy when the state is inside --output-root: no backend, or a local backend whose path and workspace_dir are not both absolute paths outside it; "+
+		"permit apply/destroy when state is ephemeral: no backend, or a local backend whose path and workspace_dir are not both absolute paths outside --output-root; "+
 			"set by tf_deploy(allow_ephemeral_state = True)")
 
 	tofu    = flag.String("tofu", "", "path to the tofu binary")
@@ -186,27 +189,25 @@ func run() error {
 		varFileArgs[i] = "-var-file=" + f
 	}
 
-	// syncRunDir removed the backend record of earlier runs, so init
-	// configures the backend afresh from the configuration, and an edited
-	// backend block needs no `bazel clean`. That is what -reconfigure does, but
-	// tofu rejects that flag for a cloud block. Init takes the var files
-	// because a backend block may refer to variables.
+	// Removing the previous backend record above makes tofu init read any
+	// backend or cloud block afresh without `bazel clean`. -reconfigure is not
+	// passed because tofu rejects it when a cloud block is present. -var-file
+	// flags are passed because backend and cloud blocks may reference
+	// variables.
 	initArgs := append([]string{"init", "-input=false", "-get=false", "-plugin-dir=" + *pluginDir}, varFileArgs...)
 	if err := runTofu(env, cwd, initArgs...); err != nil {
 		if *lockFile != "" {
 			log.Print("if the provider versions in required_providers changed, run `bazel run @tf_providers//:pin` to update the lock file.")
 		}
 		if localState := filepath.Join(cwd, defaultStateFile); hasContent(localState) {
-			log.Printf("%s holds local state. If tofu asked above to migrate state, as it does when a backend is added, "+
-				"run `tofu init -migrate-state` in that directory to move it to the backend, or delete the file to abandon it.", localState)
+			log.Printf("non-empty local state at %s: if you added a backend or cloud block, run `tofu init -migrate-state` in that directory or delete the state file.", localState)
 		}
 		return fmt.Errorf("tofu init: %w", err)
 	}
 
-	// Refuse to mutate real infrastructure against throwaway local state.
-	// The check follows init because init's record of the backend is what it
-	// reads; nothing has touched infrastructure yet. `plan` is ungated:
-	// planning against empty local state destroys nothing.
+	// Check the backend recorded by tofu init before mutating infrastructure.
+	// Running tofu init first touches no infrastructure, and plan is left
+	// ungated.
 	if (*command == "apply" || *command == "destroy") && !*allowEphemeralState {
 		if err := checkStateDurable(*command, cwd, *outputRoot); err != nil {
 			return err

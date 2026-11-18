@@ -412,12 +412,12 @@ Then `bazel shutdown` so the new startup flags take effect.
 - Reject an empty root in `tf_deploy` at analysis (`check_has_configuration`;
   `deploy_deps_only`, `deploy_subdirectory_only`), because `tofu` validates an
   empty directory and then refuses to plan it.
-- Keep `HAS_CONFIG` (validate script), `tfconfig.HasConfig`, the runner's
-  `hasConfig` (a copy, so the runner links no HCL parser) and
-  `check_has_configuration` aligned on what counts as configuration: regular
-  non-dot files with the four config extensions. `tfconfig.Effective` and
-  `EffectiveTests` drop dotfiles for all callers; `pin` reads through
-  `Effective`.
+- Keep `HAS_CONFIG` (validate script), `tfconfig.HasConfig`, `hasConfig` in
+  `runner/test.go` and `check_has_configuration` aligned on what counts as
+  configuration: regular non-dot files with the four config extensions.
+  `hasConfig` duplicates `tfconfig.HasConfig` so `runner` links no HCL parser.
+  `tfconfig.Effective` and `EffectiveTests` drop dotfiles for all callers; `pin`
+  reads through `Effective`.
 - Reject `TEST_SRC_EXTS` in `tf_library` and `tf_deploy` `srcs`
   (`check_no_test_files`; `test_file_in_srcs`). `ALLOWED_SRC_EXTS` admits
   `.hcl`, and `tofu` would otherwise load library test files in dependants.
@@ -490,21 +490,21 @@ Then `bazel shutdown` so the new startup flags take effect.
   wiped by `bazel clean` and forks across build configurations and checkouts,
   so applying against it orphans live infrastructure:
   - Count state as durable only with a remote backend, a `cloud` block, or a
-    `backend "local"` whose `path` and `workspace_dir` are absolute paths
+    `backend "local"` whose `path` and `workspace_dir` are both absolute paths
     outside `--output-root` (`bazel-out`), resolving symlinks and allowing a
-    missing tail (`localBackendEphemeral`). No backend block, or any other
-    local one, is ephemeral.
-  - Read the backend from what `tofu init` recorded in the run directory's
-    `.terraform/terraform.tfstate` (`recordedBackend`; issue #149), never by
-    parsing configuration in the runner: no record means no `backend` or
-    `cloud` block, a `cloud` block is recorded with type `cloud`, and a null
-    or empty local path means `tofu`'s relative default. The record is `tofu`'s
-    own answer after `_override` files and variables. Its format is internal
-    to `tofu`, so `module_dependency_<version>_test` covers it for every entry
-    in `KNOWN_VERSIONS`.
-  - Run the check in the Go runner after `tofu init` and before `tofu apply`
-    or `tofu destroy`, refuse when the record can't be read, leave `plan`
-    ungated, and don't weaken it to a warning.
+    missing tail (`localBackendEphemeral`). Null or empty local attributes use
+    OpenTofu's relative defaults and are ephemeral, as is having no `backend`
+    or `cloud` block.
+  - Read the backend from the `.terraform/terraform.tfstate` record written by
+    `tofu init` in the run directory (`recordedBackend`; issue #149), never by
+    parsing configuration in the runner. Missing or empty `backend` metadata
+    means no `backend` or `cloud` block; a `cloud` block has type `"cloud"`.
+    Reading the record uses OpenTofu's own result after merging `_override`
+    files and evaluating variables. Because the format is internal to OpenTofu,
+    `module_dependency_<version>_test` covers it across `KNOWN_VERSIONS`.
+  - Run the check in the Go runner (`checkStateDurable`) after `tofu init` and
+    before `tofu apply` or `tofu destroy`, refuse when the record cannot be
+    parsed, leave `plan` ungated, and don't weaken the refusal to a warning.
 - Run `tofu` for deploys in `<state-dir>/work/<package-dir>` (`rundir.go`), a
   symlink mirror shared by `.plan`, `.apply` and `.destroy` (issues #86, #91):
   - Never run `tofu` in per-target runfiles or the `<name>.work` build output.
@@ -518,14 +518,14 @@ Then `bazel shutdown` so the new startup flags take effect.
     regular file blocking a config link, which would shadow a configuration
     file.
   - Never rewrite a `backend` block or pass `-backend-config`, `-state` or
-    `-state-out`. `tofu` owns path and expression resolution, which keeps one
-    behaviour for every backend: with no backend block state is `tofu`'s
-    default `terraform.tfstate` in the run directory, where `tofu workspace`
-    works too. There is no run-directory lock (`README.md`, "Restrictions").
-  - Pass the `-var-file` flags to `tofu init` as well as to the command: a
-    backend block may use variables. `vars` reach init through the generated
-    `rules_tofu.auto.tfvars.json`; if that file goes (issue #150), init needs
-    them as `-var`.
+    `-state-out`. OpenTofu owns path and expression resolution across all
+    backends; without a `backend` or `cloud` block it writes
+    `terraform.tfstate` in the run directory, so `tofu workspace` works there
+    too. There is no run-directory lock (`README.md`, "Restrictions").
+  - Pass `-var-file` flags to `tofu init` as well as to the command because
+    `backend` and `cloud` blocks may reference variables. `vars` reach
+    `tofu init` via `rules_tofu.auto.tfvars.json`; if issue #150 removes that
+    file, pass `vars` to `tofu init` as `-var`.
 - Keep deploy launchers (`tf/private/runner.bzl`) standalone like a
   `go_binary`, with each `tf_runner` in its deploy's package:
   - Resolve runfiles and state from `$0` with absolute paths so `bazel run` and
@@ -537,12 +537,12 @@ Then `bazel shutdown` so the new startup flags take effect.
     `TF_DATA_DIR` cannot make `tofu init -get=false` miss the module manifest
     at run time.
   - Strip `TF_PLUGIN_CACHE_DIR` so `tofu` uses only the vendored plugin tree.
-  - Remove the backend record before `tofu init` (`syncRunDir`, issue #92) so
-    saved backend settings in `.terraform/` cannot block an edited `backend`
-    block until `bazel clean`. Don't pass `-reconfigure` instead: it does the
-    same for a backend but `tofu` rejects it outright when the configuration
-    has a `cloud` block, and it leaves the stale record of a removed block in
-    place for the ephemeral-state check to read.
+  - Remove `.terraform/terraform.tfstate` before `tofu init` (`syncRunDir`,
+    `backendRecordPath`; issue #92) so saved backend settings cannot block an
+    edited `backend` block until `bazel clean`. Don't pass `-reconfigure`:
+    `tofu init` rejects `-reconfigure` when a `cloud` block is present, and
+    removing a `backend` block under `-reconfigure` leaves the stale record in
+    place for `recordedBackend` to read.
 - Route all work-tree and plugin-tree materialisation through
   `tf/private/work_tree.bzl` (`materialize`, `materialize_plugin_tree`,
   `work_tree_root`, `plugin_tree_root`) across `library.bzl`, `deploy.bzl` and

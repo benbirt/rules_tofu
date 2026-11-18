@@ -18,9 +18,9 @@ import (
 // path to a different file, in a tree Bazel prunes; and the declared one under
 // bazel-bin is an input to build actions, which must not find tofu's files in
 // it. The run directory is the runner's own, one per deploy, and holds
-// whatever tofu writes beside the configuration: .terraform/, the lock, the
-// state of a deploy with no backend block and that of a `backend "local"`
-// with relative paths.
+// whatever tofu writes beside the configuration: .terraform/, the lock, and
+// local state when there is no backend or cloud block or when a local backend
+// uses relative paths.
 //
 // The links are what the runner put there, and the only links in the run
 // directory outside tofu's .terraform/, so bringing it up to date needs no
@@ -49,13 +49,14 @@ func syncRunDir(workTree, runRoot, cwd string) error {
 		return fmt.Errorf("clear the run directory %s: %w", runRoot, err)
 	}
 
-	// Left by an earlier run, and wrong for this one: the lock tofu wrote
-	// records the provider versions of that build, .terraform/providers
-	// links into that launcher's plugin tree, which init relinks, and the
-	// backend record describes that run's backend block. Without the record
-	// init configures the backend afresh, and a configuration whose backend
-	// block has gone leaves none for the ephemeral-state check to read (see
-	// backend.go). installLockFile writes any managed lock after this.
+	// Remove three artefacts from the previous run before re-initialising:
+	//   - .terraform.lock.hcl records that build's provider versions (any
+	//     managed lock is copied in afterwards);
+	//   - .terraform/providers links into that launcher's plugin tree;
+	//   - .terraform/terraform.tfstate caches that run's backend settings, so
+	//     removing it makes tofu init read the current configuration afresh
+	//     and leaves no stale record when a backend block is deleted (see
+	//     backend.go).
 	if err := os.Remove(filepath.Join(cwd, ".terraform.lock.hcl")); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("remove the previous run's lock file: %w", err)
 	}

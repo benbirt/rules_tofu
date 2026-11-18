@@ -98,11 +98,10 @@ func parseInvocations(data []byte) []invocation {
 	return invs
 }
 
-// fakeTofuScript is the stand-in for tofu: it logs its working directory,
-// arguments and the environment variables the runner is meant to control. On
-// init it writes $TOFU_BACKEND_RECORD, when set, to the file where tofu
-// records the backend it configured. It then runs extra as shell commands and
-// exits 0.
+// fakeTofuScript returns a stand-in tofu script that logs its working
+// directory, arguments and controlled environment variables, runs extra as
+// shell commands, writes $TOFU_BACKEND_RECORD (when set on init) to
+// $TF_DATA_DIR/terraform.tfstate, and exits 0.
 func fakeTofuScript(extra string) string {
 	return "#!/bin/sh\n" +
 		"{ printf 'cwd=%s\\n' \"$(pwd)\"; for a in \"$@\"; do printf 'arg=%s\\n' \"$a\"; done; " +
@@ -361,18 +360,8 @@ func TestRunner_ExtraArgsPassedToDestroy(t *testing.T) {
 	}
 }
 
-// writePkgFile writes a file with the given basename and content into the
-// package directory of the work tree.
-func writePkgFile(t *testing.T, cmd *exec.Cmd, name, content string) {
-	t.Helper()
-	path := filepath.Join(argValue(t, cmd, "--work-tree"), argValue(t, cmd, "--package-dir"), name)
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// backendRecord returns what `tofu init` writes to .terraform/terraform.tfstate
-// for a backend of the given type and settings, as OpenTofu 1.12 does.
+// backendRecord marshals a .terraform/terraform.tfstate backend record in
+// OpenTofu 1.12's format.
 func backendRecord(t *testing.T, typ string, config map[string]any) string {
 	t.Helper()
 	data, err := json.Marshal(map[string]any{
@@ -385,25 +374,21 @@ func backendRecord(t *testing.T, typ string, config map[string]any) string {
 	return string(data)
 }
 
-// setBackendRecord makes the fake tofu's init write record to
-// .terraform/terraform.tfstate, as tofu does for a configuration with a
-// backend or cloud block. Without it the fake writes none, as tofu does for a
-// configuration with neither. The runner reads no configuration, so the tests
-// need no backend block in the work tree.
+// setBackendRecord configures the fake tofu's init to write record to
+// .terraform/terraform.tfstate. When unset, init writes no record, matching a
+// deploy with no backend or cloud block.
 func setBackendRecord(cmd *exec.Cmd, record string) {
 	cmd.Env = append(cmd.Env, "TOFU_BACKEND_RECORD="+record)
 }
 
-// recordPath is where init records the backend for the deploy at mypkg.
+// recordPath returns the backend record path in the run directory for mypkg.
 func recordPath(t *testing.T, cmd *exec.Cmd) string {
 	t.Helper()
 	return filepath.Join(runDir(t, cmd), "mypkg", ".terraform", "terraform.tfstate")
 }
 
-// The runner never tells tofu where state lives: no -state or -state-out for
-// any command, with a backend recorded or without, and no -backend-config for
-// init. Without a backend block tofu's default is terraform.tfstate in the run
-// directory.
+// Neither init nor plan, apply or destroy receives -state, -state-out or
+// -backend-config flags, whether or not a backend is recorded.
 func TestRunner_NoStateFlags(t *testing.T) {
 	for _, withBackend := range []bool{false, true} {
 		for _, command := range []string{"plan", "apply", "destroy"} {
@@ -429,8 +414,8 @@ func TestRunner_NoStateFlags(t *testing.T) {
 	}
 }
 
-// init takes the -var-file flags too, in order: a backend block may refer to
-// variables, and init is where tofu resolves it.
+// tofu init receives -var-file flags in declaration order alongside the
+// command so OpenTofu can evaluate variables in backend and cloud blocks.
 func TestRunner_Init_VarFiles(t *testing.T) {
 	cmd, addVarFile, invocations := setup(t, map[string]any{"region": "us-east-1"})
 	first := addVarFile(map[string]any{"env": "prod"})
@@ -551,9 +536,8 @@ func envValue(t *testing.T, cmd *exec.Cmd, name string) string {
 	return ""
 }
 
-// assertRefused asserts that the runner refused a mutating command once init
-// had run: it exited non-zero with every string of wants in its output, and
-// tofu ran init and nothing after it.
+// assertRefused runs cmd and checks that it exits non-zero containing every
+// substring in wants after running tofu init and no further tofu command.
 func assertRefused(t *testing.T, cmd *exec.Cmd, wants ...string) {
 	t.Helper()
 	logPath := envValue(t, cmd, "TOFU_LOG")
@@ -578,9 +562,9 @@ func assertRefused(t *testing.T, cmd *exec.Cmd, wants ...string) {
 	}
 }
 
-// assertRefusedEphemeralState asserts that the runner refused a mutating
-// command for a deploy with no backend: the refusal names the opt-in
-// attribute and where tofu would write the state.
+// assertRefusedEphemeralState checks the refusal for a deploy with no backend
+// or cloud block, verifying that it names the run-directory state path and
+// allow_ephemeral_state = True.
 func assertRefusedEphemeralState(t *testing.T, cmd *exec.Cmd) {
 	t.Helper()
 	assertRefused(t, cmd,
@@ -591,10 +575,8 @@ func assertRefusedEphemeralState(t *testing.T, cmd *exec.Cmd) {
 	)
 }
 
-// With no backend recorded by init, which is what tofu does for a
-// configuration with no backend or cloud block, apply and destroy are refused
-// without the opt-in and run with it. plan is deliberately not gated:
-// planning against empty local state destroys nothing.
+// When tofu init writes no backend record, apply and destroy are refused
+// unless --allow-ephemeral-state is set, while plan runs ungated.
 func TestRunner_EphemeralState_NoBackend(t *testing.T) {
 	cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
 	for _, command := range []string{"apply", "destroy"} {
@@ -614,8 +596,8 @@ func TestRunner_EphemeralState_NoBackend(t *testing.T) {
 	}
 }
 
-// A record without a backend is no backend: tofu writes one when a backend
-// block is removed under -migrate-state.
+// A backend record with a null, missing or empty backend is treated as having
+// no backend; OpenTofu writes such a record when migrating off a backend.
 func TestRunner_EphemeralState_EmptyRecord(t *testing.T) {
 	for name, record := range map[string]string{
 		"null":    `{"version": 3, "backend": null}`,
@@ -630,9 +612,8 @@ func TestRunner_EphemeralState_EmptyRecord(t *testing.T) {
 	}
 }
 
-// Any recorded backend other than "local" keeps state elsewhere, so apply and
-// destroy run without the opt-in. A cloud block is recorded with the type
-// "cloud".
+// Any recorded backend type other than "local", including "cloud" for a cloud
+// block, allows apply and destroy without --allow-ephemeral-state.
 func TestRunner_EphemeralState_RemoteBackendAllowed(t *testing.T) {
 	for typ, config := range map[string]map[string]any{
 		"s3":    {"bucket": "my-tofu-state", "key": "prod"},
@@ -654,9 +635,9 @@ func TestRunner_EphemeralState_RemoteBackendAllowed(t *testing.T) {
 	}
 }
 
-// The record an earlier run left is removed before init, so a deploy whose
-// backend block has since gone is judged on this run's init, which records
-// nothing, and not on the old block.
+// Removing the previous run's backend record before tofu init ensures a
+// deploy whose backend block was deleted is checked against the new init run
+// rather than the stale record.
 func TestRunner_EphemeralState_StaleRecordRemoved(t *testing.T) {
 	cmd, _, _ := setup(t, map[string]any{"region": "us-east-1"})
 	record := recordPath(t, cmd)
@@ -675,8 +656,8 @@ func TestRunner_EphemeralState_StaleRecordRemoved(t *testing.T) {
 	}
 }
 
-// A record the runner can't read is a refusal, not a pass: it says nothing
-// about where state lives. The opt-in, which doesn't read it, still works.
+// A malformed backend record refuses apply unless --allow-ephemeral-state
+// bypasses the check.
 func TestRunner_EphemeralState_UnreadableRecord(t *testing.T) {
 	for name, record := range map[string]string{
 		"not json":           `{"version": 3, "backend": {`,
@@ -693,9 +674,9 @@ func TestRunner_EphemeralState_UnreadableRecord(t *testing.T) {
 	}
 }
 
-// When init fails and the run directory holds local state, the runner says
-// how to migrate it: tofu refuses to init a new backend over existing local
-// state without asking, and it can't ask with -input=false.
+// When tofu init fails and non-empty terraform.tfstate exists in the run
+// directory, the runner logs the state path and `tofu init -migrate-state`
+// because -input=false blocks OpenTofu's migration prompt.
 func TestRunner_InitFailure_NamesLocalState(t *testing.T) {
 	const hint = "tofu init -migrate-state"
 	cmd, _, _ := setup(t, map[string]any{"region": "us-east-1"})
@@ -1039,11 +1020,9 @@ func TestRunner_Test_StateDirNotRequired(t *testing.T) {
 	}
 }
 
-// init configures the backend afresh on every run, in plan, apply and destroy:
-// the runner removes the record of the last init, so an edited backend block
-// isn't refused on the strength of the `.terraform/` an earlier run left in
-// the run directory. It does not pass -reconfigure, which tofu rejects when
-// the configuration has a cloud block.
+// Each run removes the previous .terraform/terraform.tfstate before tofu init
+// so edited backend blocks take effect without passing -reconfigure, which
+// OpenTofu rejects when a cloud block is present.
 func TestRunner_Init_FreshBackend(t *testing.T) {
 	cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
 	setBackendRecord(cmd, backendRecord(t, "s3", map[string]any{"bucket": "old"}))
@@ -1085,8 +1064,8 @@ func TestRunner_Env_DataDirAndNoPluginCache(t *testing.T) {
 	}
 }
 
-// The same holds in test mode, where init keeps -backend=false and takes no
-// -reconfigure, and TF_DATA_DIR is the copy's `.terraform`.
+// The same holds in test mode, where init passes -backend=false without
+// -reconfigure and sets TF_DATA_DIR to the copy's .terraform.
 func TestRunner_Test_EnvAndInitFlags(t *testing.T) {
 	cmd, _, scratch, _, invocations := setupTest(t)
 	cmd.Env = append(cmd.Env, "TF_DATA_DIR=/bogus/data", "TF_PLUGIN_CACHE_DIR=/bogus/cache")
@@ -1286,14 +1265,12 @@ func TestRunner_RunDir_RelativeFlags(t *testing.T) {
 
 // The run directory follows the work tree from one run to the next: a file
 // that left the work tree loses its link, a new one gains a link, and what
-// tofu wrote there is kept so the command after sees it. Here that is the
-// state tofu keeps in its working directory when there is no backend block.
-// The state of a `backend "local"` with a relative path is kept the same way
-// (issue #86).
+// tofu wrote there is kept so the command after sees it. Here that is
+// terraform.tfstate from a deploy with no backend block; relative local
+// backend paths are preserved the same way (issue #86).
 func TestRunner_RunDir_FollowsWorkTreeAndKeepsState(t *testing.T) {
 	cmd, _, _ := setup(t, map[string]any{"region": "us-east-1"})
-	// apply writes the state where tofu would with no backend block; destroy
-	// fails unless it finds it.
+	// apply writes terraform.tfstate in cwd; destroy fails unless it stays.
 	setFakeTofu(t, cmd, `case "$1" in
   apply) echo applied > terraform.tfstate ;;
   destroy) [ "$(cat terraform.tfstate)" = applied ] || { echo "no state" >&2; exit 1; } ;;
@@ -1390,10 +1367,9 @@ func TestRunner_RunDir_DataDirAcrossRuns(t *testing.T) {
 	}
 }
 
-// assertRefusedLocalBackend asserts that the runner refused a mutating
-// command because the `backend "local"` init recorded doesn't keep state
-// outside Bazel's output tree: the refusal names the reason, the run directory
-// and the opt-in, and tofu ran init and nothing after it.
+// assertRefusedLocalBackend checks the refusal for a local backend that does
+// not keep state outside Bazel's output tree, verifying that it names reason,
+// the run directory and allow_ephemeral_state = True.
 func assertRefusedLocalBackend(t *testing.T, cmd *exec.Cmd, reason string) {
 	t.Helper()
 	assertRefused(t, cmd,
@@ -1404,19 +1380,17 @@ func assertRefusedLocalBackend(t *testing.T, cmd *exec.Cmd, reason string) {
 	)
 }
 
-// One rule decides whether a `backend "local"` needs allow_ephemeral_state for
-// apply and destroy: its state is durable only when the path and workspace_dir
-// tofu resolved are both absolute paths that do not lead into Bazel's output
-// tree. A null or empty one, for which tofu uses its relative default, a
-// relative path or a path into the output tree, directly or through a symlink
-// and whether it exists yet or not, is ephemeral. Ephemeral state is refused
-// without the opt-in, naming the attribute and its value, and allowed with it.
-// plan always runs.
+// A local backend's state is durable for apply and destroy only when both
+// path and workspace_dir resolve to absolute paths outside Bazel's output
+// tree after following symlinks, even when the target path does not exist yet.
+// Null or empty attributes (which use OpenTofu's relative defaults), relative
+// paths and paths inside the output tree are refused unless
+// --allow-ephemeral-state is set. plan is never gated.
 func TestRunner_LocalBackend_Gate(t *testing.T) {
 	cases := []struct {
 		name string
-		// config builds the settings tofu recorded from a directory outside
-		// the output tree, the output tree and a symlink that leads into it.
+		// config builds the recorded local backend config given a directory
+		// outside outputRoot, outputRoot itself and a symlink into outputRoot.
 		config func(outside, outputRoot, link string) map[string]any
 		// reason is why the state is ephemeral; empty when it is durable.
 		reason string

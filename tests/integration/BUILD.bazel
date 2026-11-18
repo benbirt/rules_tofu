@@ -195,14 +195,13 @@ bazel_integration_test(
     workspace_path = "lock_update",
 )
 
-# Cross-module module_source dependencies: a root module calls a tf_library
-# from another Bazel module by its module_source, which calls one from a third,
-# then builds, plans, and runs tf_test offline, and applies deploys with no
-# backend block and with a backend "local". Runs on every tofu version
-# rules_tofu pins because the module manifest and the backend record that the
-# ephemeral-state gate reads are tofu's internal formats, and tf_test passes
-# flags that older OpenTofu releases lack. See
-# module_dependency_test.sh.
+# Cross-module module_source dependencies: //app calls a tf_library in another
+# Bazel module by module_source, which calls one in a third. The driver builds,
+# plans and runs tf_test offline, then exercises apply with no backend block
+# and with a backend "local". Runs for every version in KNOWN_VERSIONS because
+# the module manifest and the .terraform/terraform.tfstate backend record are
+# internal OpenTofu formats, and tf_test uses flags added in OpenTofu 1.12.
+# See module_dependency_test.sh.
 sh_binary(
     name = "module_dependency_driver",
     srcs = ["module_dependency_test.sh"],

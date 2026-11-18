@@ -2,7 +2,7 @@ variable "state_root" {
   type = string
 }
 
-# Overridden by backend_override.tf, so this relative path is never used.
+# Overridden by backend_override.tf; kept relative so an unmerged read fails.
 terraform {
   backend "local" {
     path = "unused/app.tfstate"

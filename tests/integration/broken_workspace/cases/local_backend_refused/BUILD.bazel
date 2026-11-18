@@ -1,11 +1,11 @@
 load("@rules_tofu//tf:defs.bzl", "tf_deploy", "tf_library")
 
-# Like ephemeral_state_refused, this builds cleanly and fails at runtime. The
-# deploy declares a backend, but a `backend "local"` whose `path` is relative:
-# tofu resolves it against the run directory under bazel-bin, so the state
-# would go with `bazel clean`. `bazel run :deploy.apply` must be refused by
-# the runner once `tofu init` has recorded the backend, naming the path. Do
-# not make the path absolute, and do not set `allow_ephemeral_state`.
+# Like ephemeral_state_refused, this builds cleanly and fails at runtime.
+# `main.tf` declares a `backend "local"` with a relative `path`, which resolves
+# inside the run directory under bazel-bin and is wiped by `bazel clean`. After
+# `tofu init` records that backend, the runner refuses `bazel run :deploy.apply`
+# and names the relative `path`. Do not make the path absolute, and do not set
+# `allow_ephemeral_state`.
 tf_library(
     name = "lib",
     srcs = ["main.tf"],

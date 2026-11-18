@@ -177,10 +177,9 @@ func copyFile(src, dst string) error {
 	return os.WriteFile(dst, data, mode)
 }
 
-// hasConfig reports whether dir holds a configuration file tofu reads: a
-// `.tf`, `.tf.json`, `.tofu` or `.tofu.json` file whose name doesn't start
-// with a dot. It is tfconfig.HasConfig, written out here so the runner does
-// not link an HCL parser; keep the two in step.
+// hasConfig reports whether dir contains a non-dot .tf, .tf.json, .tofu or
+// .tofu.json entry. It duplicates tfconfig.HasConfig so the runner binary does
+// not link the HCL parser; keep the two aligned.
 func hasConfig(dir string) bool {
 	entries, err := os.ReadDir(dir)
 	if err != nil {

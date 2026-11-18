@@ -17,17 +17,18 @@
 #      written to its test outputs. The runner passes `tofu test` a flag
 #      (-json-into) that OpenTofu before 1.12 lacks, and tf_test once ran on no
 #      version except the default (issue #125).
-#   6. `bazel run //app:app.apply`, a deploy with no backend block and the
-#      opt-in, leaves tofu's default terraform.tfstate in the run directory and
-#      no backend record.
-#   7. `bazel run //app:durable.apply`, a deploy with a `backend "local"` and no
-#      opt-in, is refused while the variable in its paths makes them relative,
-#      and runs once the variable is an absolute path outside Bazel's output
-#      tree, writing state there. The paths come from an override file.
+#   6. `bazel run //app:app.apply` applies a deploy with no backend block and
+#      allow_ephemeral_state = True, writing terraform.tfstate in the run
+#      directory and leaving no .terraform/terraform.tfstate backend record.
+#   7. `bazel run //app:durable.apply` checks a deploy whose backend "local"
+#      paths come from backend_override.tf and var.state_root without
+#      allow_ephemeral_state: apply is refused while state_root is relative and
+#      succeeds once state_root is rewritten to an absolute path outside
+#      bazel-out.
 #
-# Runs once per tofu version rules_tofu pins because the module manifest and
-# the backend record `tofu init` writes, which the runner reads to decide
-# whether state is ephemeral, are tofu's internal formats.
+# Runs once per tofu version in KNOWN_VERSIONS because both the module manifest
+# and the .terraform/terraform.tfstate backend record read by the
+# ephemeral-state check are internal OpenTofu formats.
 
 set -euo pipefail
 

@@ -7,13 +7,11 @@ tf_deploy(
     deps = ["@network_module//vpc"],
 )
 
-# The same root module with a `backend "local"` and no opt-in, for the
-# driver's check of the ephemeral-state gate on every pinned tofu. The gate
-# reads the backend from what `tofu init` records, which is tofu's internal
-# format. Here tofu has to merge backend_override.tf over backend.tf and
-# evaluate `var.state_root` to get the paths. A relative `state_root` keeps
-# state in the run directory under bazel-bin, so apply is refused; the driver
-# then rewrites it to an absolute path outside Bazel's output tree.
+# Same configuration as :app, with a backend "local" and allow_ephemeral_state
+# left False. OpenTofu merges backend_override.tf over backend.tf and evaluates
+# var.state_root during `tofu init`; the runner checks the recorded paths. The
+# driver verifies that apply is refused while state_root is relative, then
+# rewrites state_root to an absolute path outside bazel-out and applies.
 tf_deploy(
     name = "durable",
     srcs = [

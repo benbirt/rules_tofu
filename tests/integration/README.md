@@ -82,13 +82,14 @@ See the header of `lock_update_test.sh` for the steps.
 `module_dependency_test.sh`) has `//app` call a `tf_library` in
 `network_module` by `module_source`, which calls one in `dns_module`, and
 exercises standalone library builds, offline planning and `tf_test`. It also
-applies `//app:app`, which has no backend block, and `//app:durable`, whose
-`backend "local"` the ephemeral-state gate refuses or allows by the paths
-`tofu init` recorded. Because the module manifest
-(`.terraform/modules/modules.json`) and that record
+applies `//app:app` with no backend block and `allow_ephemeral_state = True`,
+and checks `//app:durable`, whose `backend "local"` uses `_override` and
+variable paths: `apply` is refused while `state_root` is relative and succeeds
+once `state_root` points outside `bazel-out`. Because the module manifest
+(`.terraform/modules/modules.json`) and backend record
 (`.terraform/terraform.tfstate`) are internal OpenTofu formats, `BUILD.bazel`
-generates one test per version in `KNOWN_VERSIONS` (`toolchain/versions.bzl`). See the header of `module_dependency_test.sh` for
-the steps.
+generates one test per version in `KNOWN_VERSIONS` (`toolchain/versions.bzl`).
+See the header of `module_dependency_test.sh` for the steps.
 
 `tf_modules/` (`tf_modules_test`, driven by `tf_modules_test.sh`) turns
 `fixtures/network` into a tagged git repository and `fixtures/dns` into an
@@ -182,11 +183,11 @@ OpenTofu or rule wording changes do not break the assertion.
 
 ## Follow-ups
 
-`_RUN_CASES` covers both forms of the runtime ephemeral-state refusal on
-`deploy.apply` (no backend, and a `backend "local"` keeping state under
-`bazel-bin`), `run_directory_test` covers the `allow_ephemeral_state` opt-in
-and direct launcher execution, and `module_dependency_<version>_test` covers a
-`backend "local"` outside Bazel's output tree, which needs no opt-in.
+`_RUN_CASES` covers both runtime ephemeral-state refusals on `deploy.apply` (no
+backend, and a relative `backend "local"`). `run_directory_test` covers
+`allow_ephemeral_state = True` and direct launcher execution, and
+`module_dependency_<version>_test` covers both no-backend local state and a
+`backend "local"` outside `bazel-out` without `allow_ephemeral_state`.
 
 Still untested in Bazel-in-Bazel: a remote backend or `cloud` block reaching
 `tofu`, and hard `fail()` paths during `tf_providers` tag resolution (duplicate
