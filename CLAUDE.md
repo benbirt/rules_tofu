@@ -185,9 +185,12 @@ Then `bazel shutdown` so the new startup flags take effect.
     to a root tag clears the conflict.
   - Don't verify the lock's `constraints` attribute: Renovate and Dependabot
     rewrite it in their own form.
-- Vendor the full unpacked provider zip (`package_files`) and symlink all of it
-  in `materialize_plugin_tree`. Lock `h1:` hashes cover the whole package
-  directory, so a binary-only plugin tree fails `tofu init`.
+- Vendor the full unpacked provider zip as one list of files per platform
+  (`TfProviderInfo.files`) and symlink all of it in `materialize_plugin_tree`.
+  Lock `h1:` hashes cover the whole package directory, so a binary-only plugin
+  tree fails `tofu init`. Don't tell the binary apart from the other files
+  (issue #145): nothing in the rules runs it, and `tofu init -plugin-dir` finds
+  it in the directory. A package that unpacks to no files fails its fetch.
 - Resolve provider zip URLs through the pure functions in
   `tf/providers/source.bzl` (`//tf/providers/tests`): `url_template` with a
   required `sha256`, otherwise the OpenTofu registry for every namespace

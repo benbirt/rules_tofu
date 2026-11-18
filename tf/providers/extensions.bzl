@@ -58,7 +58,6 @@ load(
     "check_url_template",
     "download_location",
     "highest_version",
-    "is_provider_binary",
     "parse_source",
     "published_platforms",
     "registry_download_endpoint",
@@ -73,16 +72,17 @@ load(
 # resolved provider, and `@tf_providers//:pin` for the root module's lock.
 _HUB = "tf_providers"
 
-# (os/arch -> exe suffix). Keys must match the `sha256` map's platform keys.
-_EXE_SUFFIX = {
-    "linux_amd64": "",
-    "linux_arm64": "",
-    "linux_386": "",
-    "darwin_amd64": "",
-    "darwin_arm64": "",
-    "windows_amd64": ".exe",
-    "windows_386": ".exe",
-}
+# The `<os>_<arch>` platforms a provider can be vendored for: the keys a tag's
+# `sha256` map may use.
+_PLATFORMS = [
+    "linux_amd64",
+    "linux_arm64",
+    "linux_386",
+    "darwin_amd64",
+    "darwin_arm64",
+    "windows_amd64",
+    "windows_386",
+]
 
 def _parse_source_or_fail(source):
     parsed = parse_source(source)
@@ -96,16 +96,16 @@ def _split_platform_key(platform_key):
         fail("provider platform key must be \"<os>_<arch>\", got {}".format(repr(platform_key)))
     return parts[0], parts[1]
 
-def _format_dict(attr_name, entries):
-    """Format `entries` as a Starlark dict attribute for the generated BUILD.
+def _format_files(entries):
+    """Format `entries` as the `files` attribute of the generated `tf_provider`.
 
     `entries` is a list of `(path, platform_key)` tuples. The dict maps each
     file label to its platform key string so `label_keyed_string_dict` resolves
     the keys to `File`s.
     """
-    lines = ["    {} = {{".format(attr_name)]
-    for binary_path, platform_key in entries:
-        lines.append("        \"{}\": \"{}\",".format(binary_path, platform_key))
+    lines = ["    files = {"]
+    for path, platform_key in entries:
+        lines.append("        \"{}\": \"{}\",".format(path, platform_key))
     lines.append("    },")
     return "\n".join(lines)
 
@@ -269,13 +269,12 @@ def _tf_provider_download_impl(repository_ctx):
 
     address = "{}/{}/{}".format(DEFAULT_HOST, namespace, name)
     entries = []
-    package_entries = []
     for platform_key in sorted(sha256.keys()):
-        if platform_key not in _EXE_SUFFIX:
+        if platform_key not in _PLATFORMS:
             fail("tf_providers.provider `{}` declares unknown platform `{}`. Known: {}".format(
                 repository_ctx.attr.name,
                 platform_key,
-                sorted(_EXE_SUFFIX.keys()),
+                sorted(_PLATFORMS),
             ))
         os_name, arch = _split_platform_key(platform_key)
         extract_dir = "plugins/{host}/{ns}/{name}/{version}/{platform}".format(
@@ -313,50 +312,27 @@ def _tf_provider_download_impl(repository_ctx):
             output = extract_dir,
         )
 
-        # The zip holds the provider binary alongside files such as LICENSE
-        # and CHANGELOG.md; see `is_provider_binary` for the names accepted.
-        exe_suffix = _EXE_SUFFIX[platform_key]
-        binary_filename = None
-        for child in repository_ctx.path(extract_dir).readdir():
-            basename = child.basename
-            if is_provider_binary(basename, name, version, exe_suffix):
-                if binary_filename != None:
-                    fail(("Ambiguous provider binary for {}@{} on {}: both `{}` and " +
-                          "`{}` look like it. Refusing to guess.").format(
-                        source,
-                        version,
-                        platform_key,
-                        binary_filename,
-                        basename,
-                    ))
-                binary_filename = basename
-        if binary_filename == None:
-            fail("No provider binary (`terraform-provider-{}{}` or `terraform-provider-{}_v{}*{}`) found in {} after extracting {}".format(
-                name,
-                exe_suffix,
-                name,
+        # The whole zip is vendored, files such as LICENSE and README.md
+        # beside the binary: tofu checks a lock's `h1:` hashes against the
+        # unpacked package, and finds the binary in it by itself.
+        paths = _files_under(repository_ctx.path(extract_dir), extract_dir)
+        if not paths:
+            # With no file listed for it, the platform would be absent from
+            # `tf_provider` and reported as one the provider wasn't pinned for.
+            fail("The package of {}@{} for {} is empty: {} unpacked to no files.".format(
+                source,
                 version,
-                exe_suffix,
-                extract_dir,
+                platform_key,
                 url,
             ))
-
-        binary_path = "{}/{}".format(extract_dir, binary_filename)
-        entries.append((binary_path, platform_key))
-
-        # The rest of the zip, such as LICENSE and README, is vendored too:
-        # tofu checks a lock's `h1:` hashes against the whole unpacked
-        # package, not just the binary.
-        for path in _files_under(repository_ctx.path(extract_dir), extract_dir):
-            if path != binary_path:
-                package_entries.append((path, platform_key))
+        entries.extend([(path, platform_key) for path in paths])
 
     # Extracted files live in nested directories; Bazel doesn't auto-expose
-    # them as source labels, so the `label_keyed_string_dict`s on
+    # them as source labels, so the `label_keyed_string_dict` on
     # `tf_provider` couldn't resolve them without an explicit
     # `exports_files()`.
     exports_lines = ["exports_files(["]
-    for path, _ in entries + package_entries:
+    for path, _ in entries:
         exports_lines.append("    \"{}\",".format(path))
     exports_lines.append("], visibility = [\"//visibility:private\"])")
 
@@ -375,16 +351,14 @@ tf_provider(
     name = "provider",
     address = "{address}",
     version = "{version}",
-{binaries}
-{package_files}{lock}
+{files}{lock}
     visibility = ["@{hub}//:__subpackages__"],
 )
 """.format(
             exports = "\n".join(exports_lines),
             address = address,
             version = version,
-            binaries = _format_dict("binaries", entries),
-            package_files = _format_dict("package_files", package_entries),
+            files = _format_files(entries),
             lock = "\n    lock = \"{}\",".format(repository_ctx.attr.lock) if repository_ctx.attr.lock else "",
             hub = _HUB,
         ),

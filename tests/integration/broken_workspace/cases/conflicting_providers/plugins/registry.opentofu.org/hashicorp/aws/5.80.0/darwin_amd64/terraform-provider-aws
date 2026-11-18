@@ -1,0 +1,3 @@
+# Placeholder stand-in for a provider plugin binary (darwin_amd64).
+# Content is irrelevant: this case fails at the version-conflict check
+# during analysis, before any action runs.

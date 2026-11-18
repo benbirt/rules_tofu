@@ -269,9 +269,9 @@ def materialize_plugin_tree(ctx, providers_depset):
 
     Declares outputs under `<name>.plugins/` beside the work tree for each
     unique `(address, version)`, using OpenTofu's canonical plugin-dir layout
-    `<host>/<namespace>/<name>/<version>/<os>_<arch>/`: a symlink to the
-    binary and to each other file from the provider's zip, so the directory
-    hashes to the lock's `h1:` value.
+    `<host>/<namespace>/<name>/<version>/<os>_<arch>/`: a symlink to each
+    file of the provider's zip, so the directory hashes to the lock's `h1:`
+    value and `tofu init` finds the binary in it.
 
     Fails if two providers share an address with different versions, or if a
     declared provider has no package for the exec platform.
@@ -306,8 +306,8 @@ def materialize_plugin_tree(ctx, providers_depset):
             continue
         seen_versions[prov.address] = prov.version
 
-        binary = prov.binaries.get(platform_key)
-        if binary == None:
+        files = prov.files.get(platform_key)
+        if not files:
             fail(missing_platform_error(ctx.label, prov.address, prov.version, platform_key, locked = prov.lock != None))
 
         parts = prov.address.split("/")
@@ -321,7 +321,6 @@ def materialize_plugin_tree(ctx, providers_depset):
             version = prov.version,
             plat = platform_key,
         )
-        files = [struct(path = binary.basename, file = binary)] + prov.package_files.get(platform_key, [])
         for entry in files:
             out = ctx.actions.declare_file(platform_dir + "/" + entry.path)
             ctx.actions.symlink(output = out, target_file = entry.file)

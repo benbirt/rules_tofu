@@ -11,7 +11,6 @@ load(
     "check_url_template",
     "download_location",
     "highest_version",
-    "is_provider_binary",
     "parse_source",
     "published_platforms",
     "registry_download_url",
@@ -206,32 +205,6 @@ def _cached_facts_validated_test_impl(ctx):
 
 _cached_facts_validated_test = unittest.make(_cached_facts_validated_test_impl)
 
-def _provider_binary_names_test_impl(ctx):
-    env = unittest.begin(ctx)
-
-    # OpenTofu's builds, HashiCorp-style builds, with and without `_x5`.
-    for filename, exe in [
-        ("terraform-provider-aws", ""),
-        ("terraform-provider-aws.exe", ".exe"),
-        ("terraform-provider-aws_v6.45.0", ""),
-        ("terraform-provider-aws_v6.45.0_x5", ""),
-        ("terraform-provider-aws_v6.45.0_x5.exe", ".exe"),
-    ]:
-        asserts.true(env, is_provider_binary(filename, "aws", "6.45.0", exe), "rejected {}".format(filename))
-
-    for filename, exe in [
-        ("LICENSE", ""),
-        ("CHANGELOG.md", ""),
-        ("terraform-provider-aws", ".exe"),
-        ("terraform-provider-aws_v6.44.0", ""),
-        ("terraform-provider-awscc", ""),
-        ("terraform-provider-aws.sig", ""),
-    ]:
-        asserts.false(env, is_provider_binary(filename, "aws", "6.45.0", exe), "accepted {}".format(filename))
-    return unittest.end(env)
-
-_provider_binary_names_test = unittest.make(_provider_binary_names_test_impl)
-
 def _request(version, mod_name):
     return struct(version = version, mod_name = mod_name)
 
@@ -323,7 +296,6 @@ def source_test_suite(name):
         _published_platforms_test,
         _registry_shasum_test,
         _cached_facts_validated_test,
-        _provider_binary_names_test,
         _highest_version_test,
         _highest_version_unorderable_test,
     )

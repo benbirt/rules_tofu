@@ -16,36 +16,24 @@ load(":providers.bzl", "TfProviderInfo")
 visibility(["public"])
 
 def _tf_provider_impl(ctx):
-    binaries = {}
-    for tgt, platform_key in ctx.attr.binaries.items():
-        files = tgt.files.to_list()
-        if len(files) != 1:
-            fail("tf_provider `{}` binary for {} must be a single file, got {}".format(
-                ctx.label,
-                platform_key,
-                [f.path for f in files],
-            ))
-        binaries[platform_key] = files[0]
-
     # Each file sits at `plugins/<address>/<version>/<os>_<arch>/<path>` in
     # the provider's repo; the plugin tree wants `<path>`.
-    package_files = {}
-    for tgt, platform_key in ctx.attr.package_files.items():
+    files = {}
+    for tgt, platform_key in ctx.attr.files.items():
         prefix = "plugins/{}/{}/{}/".format(ctx.attr.address, ctx.attr.version, platform_key)
         for f in tgt.files.to_list():
             if not f.owner.name.startswith(prefix):
                 fail("tf_provider `{}`: {} is not under {}".format(ctx.label, f.path, prefix))
-            package_files.setdefault(platform_key, []).append(
+            files.setdefault(platform_key, []).append(
                 struct(path = f.owner.name[len(prefix):], file = f),
             )
 
     return [
-        DefaultInfo(files = depset(direct = binaries.values())),
+        DefaultInfo(files = depset([entry.file for entries in files.values() for entry in entries])),
         TfProviderInfo(
             address = ctx.attr.address,
             version = ctx.attr.version,
-            binaries = binaries,
-            package_files = package_files,
+            files = files,
             lock = ctx.file.lock,
         ),
     ]
@@ -61,20 +49,14 @@ tf_provider = rule(
             mandatory = True,
             doc = "Provider version, e.g. \"5.70.0\".",
         ),
-        "binaries": attr.label_keyed_string_dict(
+        "files": attr.label_keyed_string_dict(
             mandatory = True,
             allow_files = True,
-            doc = "Map of single-file provider binary label to `<os>_<arch>` platform key. " +
-                  "Extracted at `plugins/<address>/<version>/<os>_<arch>/<filename>` in the " +
-                  "provider repository; `materialize_plugin_tree` symlinks each binary under " +
-                  "`<os>_<arch>/` by its `basename`.",
-        ),
-        "package_files": attr.label_keyed_string_dict(
-            allow_files = True,
-            doc = "Map of the remaining files from each platform's unpacked zip, such as " +
-                  "`LICENSE` and `README.md`, to `<os>_<arch>` platform key. Each file's " +
-                  "target name must start with `plugins/<address>/<version>/<os>_<arch>/`, " +
-                  "which is stripped to give its path inside `<os>_<arch>/`.",
+            doc = "Map of every file from each platform's unpacked zip, the provider binary and " +
+                  "files such as `LICENSE` and `README.md` alike, to `<os>_<arch>` platform key. " +
+                  "Each file's target name must start with " +
+                  "`plugins/<address>/<version>/<os>_<arch>/`, which is stripped to give its path " +
+                  "inside `<os>_<arch>/` in the plugin tree.",
         ),
         "lock": attr.label(
             allow_single_file = True,

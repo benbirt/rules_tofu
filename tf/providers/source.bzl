@@ -314,28 +314,3 @@ def registry_download_url(response, pinned_sha256, context):
             ),
         )
     return struct(url = url, error = None)
-
-def is_provider_binary(filename, name, version, exe_suffix):
-    """Whether `filename`, from a provider zip, is the provider binary.
-
-    HashiCorp-style builds and most publishers name it
-    `terraform-provider-<name>_v<version>` with an optional `_x5` protocol
-    suffix; OpenTofu's own builds of the `hashicorp/` providers name it plain
-    `terraform-provider-<name>`. OpenTofu accepts either in a plugin
-    directory. Other files in the zip, such as `LICENSE`, `README.md` and
-    `CHANGELOG.md`, are not the binary.
-
-    Args:
-        filename: A file name from the extracted zip.
-        name: Normalised provider type name.
-        version: Provider version.
-        exe_suffix: `.exe` on Windows, else empty.
-
-    Returns:
-        True if `filename` is the binary.
-    """
-    if not filename.endswith(exe_suffix):
-        return False
-    stem = filename[:len(filename) - len(exe_suffix)] if exe_suffix else filename
-    plain = "terraform-provider-" + name
-    return stem == plain or stem.startswith("{}_v{}".format(plain, version))
