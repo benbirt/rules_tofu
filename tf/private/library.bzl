@@ -113,6 +113,9 @@ _tf_library = rule(
         ),
         "providers": attr.label_list(
             providers = [TfProviderInfo],
+            # `tofu` loads the plugins on the execution platform, so the hub's
+            # `select()` must choose that platform's package.
+            cfg = "exec",
             doc = "`@tf_providers//<namespace>/<name>` targets required by `srcs`. Also " +
                   "installed in dependants' plugin trees for this library's files.",
         ),

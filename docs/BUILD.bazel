@@ -35,6 +35,7 @@ starlark_doc_extract(
     deps = [
         "//tf/private:all_files",
         "//tf/providers:all_files",
+        "//toolchain:all_files",
     ],
 )
 

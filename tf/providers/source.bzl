@@ -8,6 +8,8 @@ returned struct rather than raised with `fail()`, for the same reason as
 rule are entitled to abort the build.
 """
 
+load("//toolchain:versions.bzl", "PLATFORMS")
+
 visibility(["//tf/providers/..."])
 
 # OpenTofu canonicalises `source = "<ns>/<name>"` in `required_providers` to
@@ -17,9 +19,11 @@ visibility(["//tf/providers/..."])
 # vendors the same binaries a plain `tofu init` would fetch.
 DEFAULT_HOST = "registry.opentofu.org"
 
-# The platforms resolved for a provider tag that pins no `sha256`, where the
-# registry publishes them: the hosts Bazel and OpenTofu commonly run on.
-DEFAULT_PLATFORMS = ["linux_amd64", "linux_arm64", "darwin_amd64", "darwin_arm64", "windows_amd64"]
+# The `<os>_<arch>` platforms a provider can be vendored for: the ones
+# rules_tofu downloads `tofu` for, which are the hosts Bazel and OpenTofu
+# commonly run on. A tag's `sha256` map may use these keys, and a tag without
+# one or a lock gets whichever of them the registry publishes.
+DEFAULT_PLATFORMS = [platform[0] for platform in PLATFORMS]
 
 # The placeholders a `url_template` may use.
 _TEMPLATE_FIELDS = ["namespace", "name", "version", "os", "arch"]
@@ -49,12 +53,60 @@ def parse_source(source):
         )
     return struct(namespace = parts[0].lower(), name = parts[1].lower(), error = None)
 
-def repo_name(namespace, name):
-    """The repository a provider is vendored into.
+def repo_name(namespace, name, platform):
+    """The repository one platform's package of a provider is vendored into.
 
-    For example, `hashicorp` and `aws` give `tf_providers_hashicorp_aws`.
+    For example, `hashicorp`, `aws` and `linux_amd64` give
+    `tf_providers_hashicorp_aws_linux_amd64`.
     """
-    return "tf_providers_{}_{}".format(namespace, name)
+    return "tf_providers_{}_{}_{}".format(namespace, name, platform)
+
+def check_platforms(platforms):
+    """Check the platform keys of a tag's `sha256` map.
+
+    Args:
+        platforms: The keys, as `<os>_<arch>` strings.
+
+    Returns:
+        An error string, or None if every key is one of `DEFAULT_PLATFORMS`.
+    """
+    unknown = sorted([p for p in platforms if p not in DEFAULT_PLATFORMS])
+    if not unknown:
+        return None
+    return "`sha256` names {} {}, but providers are vendored only for {}".format(
+        "platform" if len(unknown) == 1 else "platforms",
+        ", ".join(["`{}`".format(p) for p in unknown]),
+        ", ".join(["`{}`".format(p) for p in DEFAULT_PLATFORMS]),
+    )
+
+def missing_platform_error(source, version, platforms):
+    """The error for a build on a platform the provider is not vendored for.
+
+    It is the `no_match_error` of the `select()` behind
+    `@tf_providers//<namespace>/<name>`, which chooses the execution
+    platform's package.
+
+    Args:
+        source: The provider's `<namespace>/<name>`.
+        version: Its version.
+        platforms: The `<os>_<arch>` platforms it is vendored for.
+
+    Returns:
+        The message.
+    """
+    message = ("Provider `{}@{}` is vendored for {}, and this build runs OpenTofu on a different " +
+               "execution platform.").format(
+        source,
+        version,
+        ", ".join(["`{}`".format(p) for p in platforms]),
+    )
+    if len(platforms) < len(DEFAULT_PLATFORMS):
+        message += (" If its tf_providers.provider tag in MODULE.bazel pins `sha256`, add the " +
+                    "platform's digest to the map. Otherwise the registry listed no package for " +
+                    "the platform when this version was resolved: check that it publishes one, " +
+                    "and if it has since, delete the `{}@{}` entry under `tf_providers` in " +
+                    "MODULE.bazel.lock so that the registry is asked again.").format(source, version)
+    return message
 
 def registry_download_endpoint(namespace, name, version, os, arch):
     """The OpenTofu registry endpoint giving one platform's zip URL and SHA256."""

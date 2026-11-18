@@ -1,11 +1,12 @@
 load("@rules_tofu//tf:defs.bzl", "tf_library")
 
-# Names a provider by its own repo rather than through the hub. That repo is
-# an implementation detail: its `:provider` target is visible only to the
-# `@tf_providers//<namespace>/<name>` aliases, so analysis fails.
+# Names a provider by one of its own repos rather than through the hub. Those
+# repos, one per platform, are an implementation detail: each `:provider`
+# target is visible only to the `@tf_providers//<namespace>/<name>` aliases,
+# so analysis fails.
 tf_library(
     name = "lib",
     srcs = ["main.tf"],
     fmt_test = False,
-    providers = ["@tf_providers_hashicorp_random//:provider"],
+    providers = ["@tf_providers_hashicorp_random_linux_amd64//:provider"],
 )

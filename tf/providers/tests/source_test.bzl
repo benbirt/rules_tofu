@@ -8,9 +8,12 @@ downstream modules load.
 load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")
 load(
     "//tf/providers:source.bzl",
+    "DEFAULT_PLATFORMS",
+    "check_platforms",
     "check_url_template",
     "download_location",
     "highest_version",
+    "missing_platform_error",
     "parse_source",
     "published_platforms",
     "registry_download_url",
@@ -27,7 +30,11 @@ def _parse_source_lowercases_test_impl(ctx):
     asserts.equals(env, None, parsed.error)
     asserts.equals(env, "posthog", parsed.namespace)
     asserts.equals(env, "posthog", parsed.name)
-    asserts.equals(env, "tf_providers_posthog_posthog", repo_name(parsed.namespace, parsed.name))
+    asserts.equals(
+        env,
+        "tf_providers_posthog_posthog_linux_amd64",
+        repo_name(parsed.namespace, parsed.name, "linux_amd64"),
+    )
     return unittest.end(env)
 
 _parse_source_lowercases_test = unittest.make(_parse_source_lowercases_test_impl)
@@ -205,6 +212,44 @@ def _cached_facts_validated_test_impl(ctx):
 
 _cached_facts_validated_test = unittest.make(_cached_facts_validated_test_impl)
 
+def _platforms_test_impl(ctx):
+    env = unittest.begin(ctx)
+
+    # One list serves the `tofu` downloads and the providers.
+    asserts.equals(
+        env,
+        ["linux_amd64", "linux_arm64", "darwin_amd64", "darwin_arm64", "windows_amd64"],
+        DEFAULT_PLATFORMS,
+    )
+    asserts.equals(env, None, check_platforms([]))
+    asserts.equals(env, None, check_platforms(DEFAULT_PLATFORMS))
+
+    # The 32-bit platforms were accepted once, and are named like any other
+    # unknown key.
+    error = check_platforms(["linux_amd64", "windows_386", "linux_386"])
+    asserts.true(env, "names platforms `linux_386`, `windows_386`," in error, error)
+    asserts.true(env, "only for `linux_amd64`, `linux_arm64`, `darwin_amd64`, `darwin_arm64`, `windows_amd64`" in error, error)
+    asserts.true(env, "names platform `plan9_amd64`," in check_platforms(["plan9_amd64"]))
+    return unittest.end(env)
+
+_platforms_test = unittest.make(_platforms_test_impl)
+
+def _missing_platform_test_impl(ctx):
+    env = unittest.begin(ctx)
+
+    # A provider vendored for some platforms only: the pin is what to fix.
+    partial = missing_platform_error("hashicorp/aws", "6.45.0", ["linux_amd64", "darwin_arm64"])
+    asserts.true(env, partial.startswith("Provider `hashicorp/aws@6.45.0` is vendored for `linux_amd64`, `darwin_arm64`, and"), partial)
+    asserts.true(env, "add the platform's digest to the map" in partial, partial)
+    asserts.true(env, "delete the `hashicorp/aws@6.45.0` entry under `tf_providers` in MODULE.bazel.lock" in partial, partial)
+
+    # Vendored for every platform there is: no pin could add another.
+    full = missing_platform_error("hashicorp/null", "3.2.4", DEFAULT_PLATFORMS)
+    asserts.true(env, full.endswith("on a different execution platform."), full)
+    return unittest.end(env)
+
+_missing_platform_test = unittest.make(_missing_platform_test_impl)
+
 def _request(version, mod_name):
     return struct(version = version, mod_name = mod_name)
 
@@ -285,6 +330,8 @@ def source_test_suite(name):
     """
     unittest.suite(
         name,
+        _platforms_test,
+        _missing_platform_test,
         _parse_source_lowercases_test,
         _parse_source_rejects_malformed_test,
         _registry_by_default_test,

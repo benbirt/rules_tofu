@@ -13,7 +13,6 @@ provider packages into the work tree.
 sibling plugin tree and `modules_manifest` writes `<name>.modules.json`.
 """
 
-load("//toolchain:toolchain.bzl", "TOOLCHAIN_TYPE")
 load(":providers.bzl", "TfLibraryInfo")
 
 # Only structural OpenTofu inputs are allowed in a rule's srcs. Variable values
@@ -230,40 +229,6 @@ def materialize(ctx, entries, tfvars_content = None, tfvars_dir = None):
 
     return outputs
 
-def missing_platform_error(label, address, version, platform, locked):
-    """The error for a provider that has no package for the exec platform.
-
-    The remedy depends on how the provider is pinned, and for a tag on
-    whether the digests are its own or the registry's, which a rule can't
-    tell apart; so that message gives both.
-
-    Args:
-        label: The target that needs the provider.
-        address: The provider's full address, `<host>/<namespace>/<name>`.
-        version: Its version.
-        platform: The exec platform's `<os>_<arch>`.
-        locked: Whether `tf_providers.from_lock` pins the provider.
-
-    Returns:
-        The message.
-    """
-    start = ("`{}` requires provider `{}@{}` for exec platform `{}`, but it was vendored " +
-             "without a package for it. ").format(label, address, version, platform)
-    if locked:
-        return start + ("Check that the registry publishes `{}` for this version. If it does, the " +
-                        "lock was written before it did: run `bazel run @tf_providers//:pin` to " +
-                        "lock the provider again.").format(platform)
-
-    # The key of the fact, as tf_providers records it: `<namespace>/<name>@<version>`.
-    fact = "{}@{}".format(address.partition("/")[2], version)
-    return start + ("If MODULE.bazel pins its `sha256`, add `{plat}` to the map. Otherwise the " +
-                    "registry listed no package for `{plat}` when this version was resolved: " +
-                    "check that it publishes one, and if it has since, delete the `{fact}` entry " +
-                    "under `tf_providers` in MODULE.bazel.lock so that the registry is asked again.").format(
-        plat = platform,
-        fact = fact,
-    )
-
 def materialize_plugin_tree(ctx, providers_depset):
     """Symlink provider packages into this rule's sibling plugin tree.
 
@@ -273,42 +238,52 @@ def materialize_plugin_tree(ctx, providers_depset):
     file of the provider's zip, so the directory hashes to the lock's `h1:`
     value and `tofu init` finds the binary in it.
 
-    Fails if two providers share an address with different versions, or if a
-    declared provider has no package for the exec platform.
+    Each provider carries the package of one platform, the execution platform
+    of the target that lists it (see `TfProviderInfo`). Fails if two providers
+    share an address with different versions or different platforms.
 
     Args:
-      ctx: rule ctx. Must list `TOOLCHAIN_TYPE` in `toolchains` so
-          `tofu.platform_key` is available.
+      ctx: rule ctx.
       providers_depset: depset[TfProviderInfo].
 
     Returns:
       list[File]: declared symlink outputs, empty when no providers are in scope.
     """
-    tofu = ctx.toolchains[TOOLCHAIN_TYPE].tofu
-    platform_key = tofu.platform_key
     plugin_prefix = ctx.label.name + ".plugins"
 
-    seen_versions = {}
+    seen = {}
     outputs = []
     for prov in providers_depset.to_list():
-        prior = seen_versions.get(prov.address)
+        prior = seen.get(prov.address)
         if prior != None:
-            if prior != prov.version:
+            if prior.version != prov.version:
                 fail(
                     ("`{label}` has conflicting versions for provider `{addr}`: " +
                      "`{a}` vs `{b}`. Pick one in MODULE.bazel.").format(
                         label = ctx.label,
                         addr = prov.address,
-                        a = prior,
+                        a = prior.version,
                         b = prov.version,
                     ),
                 )
-            continue
-        seen_versions[prov.address] = prov.version
 
-        files = prov.files.get(platform_key)
-        if not files:
-            fail(missing_platform_error(ctx.label, prov.address, prov.version, platform_key, locked = prov.lock != None))
+            # Bazel resolves an execution platform for each target, and each
+            # target's providers are selected for its own. One plugin tree
+            # serves one `tofu`, so they have to agree.
+            if prior.platform != prov.platform:
+                fail(
+                    ("`{label}` has provider `{addr}` for different platforms: `{a}` and `{b}`. " +
+                     "The targets that list it in `providers` were given different execution " +
+                     "platforms. Make `{label}` and its `deps` resolve the same one, for example " +
+                     "with the same `exec_compatible_with`.").format(
+                        label = ctx.label,
+                        addr = prov.address,
+                        a = prior.platform,
+                        b = prov.platform,
+                    ),
+                )
+            continue
+        seen[prov.address] = prov
 
         parts = prov.address.split("/")
         if len(parts) != 3:
@@ -319,9 +294,9 @@ def materialize_plugin_tree(ctx, providers_depset):
             ns = parts[1],
             name = parts[2],
             version = prov.version,
-            plat = platform_key,
+            plat = prov.platform,
         )
-        for entry in files:
+        for entry in prov.files:
             out = ctx.actions.declare_file(platform_dir + "/" + entry.path)
             ctx.actions.symlink(output = out, target_file = entry.file)
             outputs.append(out)

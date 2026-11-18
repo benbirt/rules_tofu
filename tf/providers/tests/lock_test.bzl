@@ -4,7 +4,7 @@ Parsing the file itself is tested with //tf/private/cmd/lockjson.
 """
 
 load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")
-load("//tf/providers:lock.bzl", "lock_entries", "lock_sha256s")
+load("//tf/providers:lock.bzl", "lock_entries", "lock_vouches")
 
 _ZH_A = "3d106c7e32a929e2843f732625a582e562ff09120021e510a51a6f5d01175b8d"
 _ZH_B = "1769783386610bed8bb1e861a119fe25058be41895e3996d9216dd6bb8a7aee3"
@@ -101,19 +101,16 @@ def _unusable_entries_test_impl(ctx):
 
 _unusable_entries_test = unittest.make(_unusable_entries_test_impl)
 
-def _lock_sha256s_test_impl(ctx):
+def _lock_vouches_test_impl(ctx):
     env = unittest.begin(ctx)
 
-    vouched = lock_sha256s({"linux_amd64": _ZH_A, "darwin_arm64": _ZH_B}, [_ZH_B, _ZH_A], "hashicorp/null@3.2.4")
-    asserts.equals(env, None, vouched.error)
-    asserts.equals(env, {"linux_amd64": _ZH_A, "darwin_arm64": _ZH_B}, vouched.sha256s)
+    asserts.equals(env, None, lock_vouches(_ZH_B, [_ZH_A, _ZH_B], "hashicorp/null@3.2.4 on darwin_arm64"))
 
-    mismatch = lock_sha256s({"linux_amd64": _ZH_A, "darwin_arm64": _ZH_B}, [_ZH_A], "hashicorp/null@3.2.4")
-    asserts.equals(env, None, mismatch.sha256s)
-    asserts.true(env, "hashicorp/null@3.2.4 on darwin_arm64 matches none" in mismatch.error)
+    mismatch = lock_vouches(_ZH_B, [_ZH_A], "hashicorp/null@3.2.4 on darwin_arm64")
+    asserts.true(env, "hashicorp/null@3.2.4 on darwin_arm64 matches none" in mismatch)
     return unittest.end(env)
 
-_lock_sha256s_test = unittest.make(_lock_sha256s_test_impl)
+_lock_vouches_test = unittest.make(_lock_vouches_test_impl)
 
 def lock_test_suite(name):
     """Declares the `lock.bzl` unit tests.
@@ -127,5 +124,5 @@ def lock_test_suite(name):
         _empty_lock_test,
         _unusable_lock_test,
         _unusable_entries_test,
-        _lock_sha256s_test,
+        _lock_vouches_test,
     )

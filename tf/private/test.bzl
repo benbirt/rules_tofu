@@ -244,6 +244,9 @@ _tf_test = rule(
         ),
         "providers": attr.label_list(
             providers = [TfProviderInfo],
+            # `tofu` loads the plugins on the execution platform, so the hub's
+            # `select()` must choose that platform's package.
+            cfg = "exec",
             doc = "Providers needed beyond those of `module` and `deps`, as " +
                   "`@tf_providers//<namespace>/<name>`. `mock_provider` still requires the " +
                   "provider package for its schema.",

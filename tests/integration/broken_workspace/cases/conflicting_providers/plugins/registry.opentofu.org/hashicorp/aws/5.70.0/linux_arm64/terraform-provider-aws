@@ -1,3 +1,0 @@
-# Placeholder stand-in for a provider plugin binary (linux_arm64).
-# Content is irrelevant: this case fails at the version-conflict check
-# during analysis, before any action runs.

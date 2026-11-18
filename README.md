@@ -208,7 +208,9 @@ Calling `<source>//<subdir>` matches the parent `@tf_modules//...` target in
 BUILD files name providers as `@tf_providers//<namespace>/<name>` in lower case
 and without a version; for example, `PostHog/posthog` becomes
 `@tf_providers//posthog/posthog`. Only providers required by built targets are
-downloaded. `tofu init` runs offline against them, while providers still call
+downloaded, and only the package for the platform the build runs `tofu` on:
+`linux_amd64`, `linux_arm64`, `darwin_amd64`, `darwin_arm64` or
+`windows_amd64`. `tofu init` runs offline against them, while providers still call
 their own APIs during `plan`, `apply`, `destroy` and networked tests.
 
 Archives come from `registry.opentofu.org` unless `url_template` is set. That
@@ -325,9 +327,8 @@ use_repo(tf_providers, "tf_providers")
 - Without `sha256`, digests for whichever of the five default platforms the
   provider is published for are recorded in `MODULE.bazel.lock`; commit it and
   run CI with `--lockfile_mode=error`.
-- With `sha256`, every listed platform is downloaded when the provider is
-  fetched, so list each `<os>_<arch>` you build on; accepted keys are in the
-  [API docs](https://registry.bazel.build/modules/rules_tofu/latest/docs).
+- With `sha256`, list each `<os>_<arch>` you build on; a build on any other
+  platform fails naming the ones listed.
   Without `url_template`, a digest that differs from `registry.opentofu.org`
   fails the fetch and reports the registry's value, which you can also query
   with
@@ -676,7 +677,6 @@ opentofu_toolchain(
     name = "tofu_impl",
     binary = ":tofu",
     version = "1.12.0",
-    platform_key = "linux_amd64",  # <os>_<arch> matching provider packages
 )
 
 toolchain(
@@ -770,8 +770,11 @@ subdirectory of `module`'s package.
 
 ## Known gaps
 
-- Validation and runtime launchers both use exec-platform provider binaries, so
-  the build host must match the run host.
+- Validation and runtime launchers both use the execution platform's provider
+  packages, so the build host must match the run host.
+- `bazel build @tf_providers//<namespace>/<name>` on the command line selects
+  the package for the target platform (`--platforms`), whereas `tf_library`,
+  `tf_deploy` and `tf_test` select the execution platform's.
 - Provider and toolchain downloads support Windows, but generated launcher
   scripts require `bash`.
 - `tf_modules` does not fetch git submodules, including for git-backed registry

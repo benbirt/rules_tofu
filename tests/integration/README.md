@@ -61,7 +61,7 @@ two separate `_CASES` targets. The root module has no lock, while its
   dependency's `from_lock` is ignored, failing only because `@tf_providers` has
   no `hashicorp/null` package.
 - `unorderable_versions_test` builds `@lib_module//:unorderable` and checks
-  that the unorderable non-root tags fail when that provider is fetched rather
+  that the unorderable non-root tags fail when a build needs that provider rather
   than during extension evaluation, leaving `@lib_module//:lib` to fail for its
   own reason.
 

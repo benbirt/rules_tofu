@@ -6,8 +6,6 @@ load("@rules_tofu//toolchain:toolchain.bzl", "opentofu_toolchain")
 opentofu_toolchain(
     name = "custom_toolchain_impl",
     binary = "tofu.sh",
-    # Unused here: the key only selects provider binaries, and there are none.
-    platform_key = "linux_amd64",
     version = "0.0.0",
 )
 

@@ -73,9 +73,8 @@ use_repo(tf_providers_hub, "tf_providers")
 # example pins out of the published module, where they would affect downstream
 # tf_providers version resolution.
 #
-# Every platform in sha256 is downloaded on every host. aws and google are
-# ~170 MB per platform, so they pin only the platforms CI and maintainers build
-# on; README.md shows the full map.
+# A build downloads only its own platform's package (aws and google are
+# ~170 MB each), from among the platforms that sha256 lists.
 tf_providers = use_extension("//tf/providers:extensions.bzl", "tf_providers", dev_dependency = True)
 tf_providers.provider(
     sha256 = {

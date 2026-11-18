@@ -74,33 +74,25 @@ def lock_entries(providers):
         ))
     return struct(entries = entries, error = None)
 
-def lock_sha256s(registry_sha256s, zh, context):
-    """Keep the registry's digests that the lock vouches for.
+def lock_vouches(sha256, zh, context):
+    """Check the registry's digest of a provider zip against the lock.
 
-    The registry says where each zip is and what its SHA256 is; the lock's
-    `zh:` hashes are what the user or a bot recorded when they last locked.
-    Each platform is accepted only if both agree. Lock files list the `zh:`
+    The registry says where a platform's zip is and what its SHA256 is; the
+    lock's `zh:` hashes are what the user or a bot recorded when they last
+    locked. The zip is accepted only if both agree. Lock files list the `zh:`
     hash of every platform the provider publishes, whichever platforms they
-    were locked for, so any disagreement means the lock and the registry
+    were locked for, so a disagreement means the lock and the registry
     describe different builds.
 
     Args:
-        registry_sha256s: `{platform: sha256}` from the registry.
+        sha256: The registry's SHA256 of the zip.
         zh: The lock entry's `zh:` hashes.
-        context: `<source>@<version>`, for messages.
+        context: `<source>@<version> on <platform>`, for the message.
 
     Returns:
-        `struct(sha256s, error)`; `error` is None on success.
+        An error string, or None if the lock vouches for the zip.
     """
-    locked = {h: True for h in zh}
-    mismatched = sorted([p for p, digest in registry_sha256s.items() if digest not in locked])
-    if mismatched:
-        return struct(
-            sha256s = None,
-            error = ("the registry's zip for {} on {} matches none of the lock's `zh:` hashes. " +
-                     "The lock describes different builds; regenerate it.").format(
-                context,
-                ", ".join(mismatched),
-            ),
-        )
-    return struct(sha256s = dict(registry_sha256s), error = None)
+    if sha256 in zh:
+        return None
+    return ("the registry's zip for {} matches none of the lock's `zh:` hashes. The lock " +
+            "describes different builds; regenerate it.").format(context)
