@@ -405,15 +405,14 @@ def strict_deps(providers, infos):
         dirs = [d for info in infos for d in info.dirs],
     )
 
-def modules_manifest(ctx, work_tree_outputs, infos, providers_depset, strict, srcs, data, root = None, test_dir = None, own = None):
+def modules_manifest(ctx, work_tree_outputs, infos, strict, srcs, data, root = None, test_dir = None, own = None):
     """Emit the action writing this rule's `.terraform/modules/modules.json`.
 
     See //tf/private/cmd/modules: every module call from the root module down
     is recorded, local ones by their directory in the work tree and others by
     the dep whose `module_source` they name, so `tofu init -get=false` finds
     them all installed. The validate action and the runner copy the manifest
-    into place. The action also fails when a module requires a provider that
-    `providers_depset` lacks, naming the label to add. It also fails when
+    into place. The action also fails when
     `srcs` use a provider or module absent from `strict`, other than `own`, or
     call a directory that holds no files from `srcs`, `data` or `strict`.
 
@@ -425,8 +424,6 @@ def modules_manifest(ctx, work_tree_outputs, infos, providers_depset, strict, sr
           module under test of a `tf_test` comes first. Each entry's
           `modules_manifest` is an unused input of this action so upstream
           manifest checks run first (issue #143).
-      providers_depset: depset[TfProviderInfo], the providers in the rule's
-          plugin tree.
       strict: direct dependencies allowed by strict-deps checks (`strict_deps`).
       srcs: list[File], the rule's `srcs`.
       data: list[File], the rule's `data`, which holds no configuration.
@@ -476,10 +473,6 @@ def modules_manifest(ctx, work_tree_outputs, infos, providers_depset, strict, sr
     args.add("--root", root if root != None else package_dir(ctx.label))
     args.add("--modules", listing)
     args.add("--label", display_label(ctx))
-    args.add_all(
-        sorted({p.address: None for p in providers_depset.to_list()}.keys()),
-        before_each = "--provider",
-    )
     args.add_all(sorted({p: None for p in strict.providers}.keys()), before_each = "--direct-provider")
     if test_dir != None:
         args.add("--test-dir", test_dir or ".")

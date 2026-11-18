@@ -17,10 +17,8 @@
 //     files can call its address with //<subdir>. own_srcs and own_data are
 //     work-tree paths of the target's srcs and data. dep_dirs lists the
 //     work-tree directories of direct deps' srcs and data.
-//   - --provider=<address>: canonical <host>/<namespace>/<name> address of a
-//     provider in the rule's plugin tree, repeatable.
-//   - --direct-provider=<address>: canonical address of a provider in the
-//     target's providers attribute, repeatable. Also counts as --provider.
+//   - --direct-provider=<address>: canonical <host>/<namespace>/<name> address
+//     of a provider in the target's providers attribute, repeatable.
 //   - --test-dir=<dir>: for tf_test, the test directory relative to --root, or
 //     "." for --root itself. Each `run` block's module in test files in --root
 //     and in --test-dir is recorded under tfconfig.TestRunKey and walked like
@@ -42,19 +40,18 @@
 //   - two deps claim the same normalised module_source;
 //   - module calls form a cycle;
 //   - a direct dep outside --root is not used by any call in checked files;
-//   - a walked module's required_providers names a provider that no
-//     --provider supplies, since `tofu init -plugin-dir` would fail to find
-//     it;
-//   - the target's files use a provider, module or directory not declared
-//     directly on the target.
+//   - checked files require a non-built-in provider or call a module or
+//     directory not declared directly on the target.
 //
 // Missing-provider errors name the @tf_providers//<namespace>/<name> label to
-// add to the rule's providers. Built-in providers under terraform.io/builtin/
-// and opentofu.org/builtin/ need no plugin and are skipped. A tf_library
-// carries the providers listed on it and its deps, checked from its own root
-// module; for a fetched module, modscan populates that list from its served
-// directories, which include each //<subdir> its tf_modules.module tag names
-// in subdirs (issues #76 and #140).
+// add to providers, or report that a provider outside registry.opentofu.org
+// cannot be vendored. Built-in providers under terraform.io/builtin/ and
+// opentofu.org/builtin/ need no plugin and are skipped. Modules reached by
+// calls are not checked for required_providers here (issue #144). Each
+// module's configuration belongs to one target's srcs and is checked before
+// dependants build (issues #140 and #143). Any provider still missing, such as
+// one implied without required_providers, is reported by `tofu init` during
+// validation.
 //
 // Strict deps (issue #135) checks the target's own_srcs against its direct
 // declarations. Files from deps are not re-checked here, even when
@@ -102,7 +99,6 @@ var (
 	modules  = flag.String("modules", "", "JSON file with modules, own_srcs, own_data and dep_dirs (see the package doc)")
 	label    = flag.String("label", "", "the target being built, for error messages")
 	out      = flag.String("out", "", "path of the modules.json to write")
-	provided = flags.StringList("provider", "canonical address of a provider in the plugin tree (repeatable)")
 	listed   = flags.StringList("direct-provider", "canonical address of a provider in the target's providers attribute (repeatable)")
 	testDir  = flag.String("test-dir", "", "directory of the rule's test files, relative to the root module (\".\" for its own directory); when set, the module each run block of the test files there and in the root module's directory loads is recorded too")
 )
@@ -139,7 +135,7 @@ func run() error {
 	if err := json.Unmarshal(data, &listing); err != nil {
 		return fmt.Errorf("parse %s: %w", *modules, err)
 	}
-	manifest, err := buildManifest(*workTree, *root, *label, listing.Modules, *provided, *testDir,
+	manifest, err := buildManifest(*workTree, *root, *label, listing.Modules, *testDir,
 		own{srcs: listing.OwnSrcs, data: listing.OwnData, providers: *listed, depDirs: listing.DepDirs})
 	if err != nil {
 		return err
@@ -192,16 +188,13 @@ type Record struct {
 	Dir     string `json:"Dir"`
 }
 
-// requirement is a required provider missing from --provider or, for the
-// target's checked files, missing from --direct-provider.
+// requirement is a non-built-in provider required by the target's srcs and
+// absent from own.providers.
 type requirement struct {
-	// module names the caller. Walked modules use moduleName(key) with any dep
-	// label and //<subdir>. Strict-deps checks use file:line.
-	module   string
+	// where is the work-tree-relative file:line of the required_providers
+	// entry.
+	where    string
 	provider string
-	// indirect is true when --provider supplies provider and
-	// --direct-provider does not.
-	indirect bool
 }
 
 // buildManifest constructs the manifest for the root module at root in
@@ -211,7 +204,7 @@ type requirement struct {
 // is recorded as `tofu init` records it and walked like a call from root.
 // own supplies the target's files and direct declarations for strict-deps
 // checks.
-func buildManifest(workTree, root, label string, deps []dep, provided []string, testDir string, own own) (*Manifest, error) {
+func buildManifest(workTree, root, label string, deps []dep, testDir string, own own) (*Manifest, error) {
 	bySource := map[string]*dep{}
 	var all []*dep
 	for i := range deps {
@@ -232,14 +225,9 @@ func buildManifest(workTree, root, label string, deps []dep, provided []string, 
 		}
 	}
 	manifest := &Manifest{Modules: []Record{{Key: "", Source: "", Dir: "."}}}
-	supplied := map[string]bool{}
-	for _, p := range provided {
-		supplied[p] = true
-	}
 	listed := map[string]bool{}
 	for _, p := range own.providers {
 		listed[p] = true
-		supplied[p] = true
 	}
 	// directDir holds work-tree directories that checked files may call by
 	// relative path. It combines the target's srcs and data directories with
@@ -254,54 +242,34 @@ func buildManifest(workTree, root, label string, deps []dep, provided []string, 
 		directDir[dirOf(f)] = true
 		mine[filepath.Join(workTree, filepath.FromSlash(f))] = true
 	}
-	var missing []requirement
-	// reported deduplicates missing-provider entries across calls and between
-	// the module walk and strict-deps checks.
-	reported := map[string]bool{}
-	// require records the providers that dir's configuration requires and no
-	// --provider supplies; module names the module (see requirement).
-	require := func(dir, module string) error {
-		providers, err := tfconfig.RequiredProviders(filepath.Join(workTree, filepath.FromSlash(dir)))
-		if err != nil {
-			return err
-		}
-		for _, p := range providers {
-			if supplied[p] || isBuiltin(p) || reported[dir+" "+p] {
-				continue
-			}
-			reported[dir+" "+p] = true
-			missing = append(missing, requirement{module: module, provider: p})
-		}
-		return nil
-	}
-	// resolve returns the work-tree directory that c loads from dir. For
-	// non-local calls it also returns the matching dep and subdir within d.Dir.
-	// where formats the call site for errors.
-	resolve := func(c tfconfig.Call, where, dir string) (string, *dep, string, error) {
+	// resolve checks the call c from dir and returns the work-tree directory it
+	// loads. For non-local calls it also returns the matching dep. where names
+	// the call in errors.
+	resolve := func(c tfconfig.Call, where, dir string) (string, *dep, error) {
 		if tfconfig.IsLocal(c.Source) {
 			childDir := tfconfig.ResolveLocal(dir, c.Source)
 			if err := checkLocal(workTree, dir, childDir); err != nil {
-				return "", nil, "", fmt.Errorf("%s: %s: source %q %w", label, where, c.Source, err)
+				return "", nil, fmt.Errorf("%s: %s: source %q %w", label, where, c.Source, err)
 			}
-			return childDir, nil, "", nil
+			return childDir, nil, nil
 		}
 		d, subdir := lookup(all, c.Source)
 		if d == nil {
-			return "", nil, "", fmt.Errorf("%s: %s: no dep provides source %q. %s", label, where, c.Source, missingHint(c.Source))
+			return "", nil, fmt.Errorf("%s: %s: no dep provides source %q. %s", label, where, c.Source, missingHint(c.Source))
 		}
 		childDir := path.Join(d.Dir, subdir)
 		if err := checkProvided(workTree, childDir, subdir, isGenerated(d)); err != nil {
-			return "", nil, "", fmt.Errorf("%s: %s: %s (module_source %q) %w", label, where, hubLabel(d), d.Source, err)
+			return "", nil, fmt.Errorf("%s: %s: %s (module_source %q) %w", label, where, hubLabel(d), d.Source, err)
 		}
 		if tfconfig.IsRegistry(c.Source) && d.Version == "" {
-			return "", nil, "", fmt.Errorf("%s: %s: %s provides the registry module %q, so it must set module_version", label, where, d.Label, d.Source)
+			return "", nil, fmt.Errorf("%s: %s: %s provides the registry module %q, so it must set module_version", label, where, d.Label, d.Source)
 		}
-		return childDir, d, subdir, nil
+		return childDir, d, nil
 	}
 	// direct checks a call from one of the target's files against strict deps
 	// and marks any direct dep it reaches as used.
 	direct := func(c tfconfig.Call, where, dir string) error {
-		childDir, d, _, err := resolve(c, where, dir)
+		childDir, d, err := resolve(c, where, dir)
 		if err != nil {
 			return err
 		}
@@ -329,29 +297,17 @@ func buildManifest(workTree, root, label string, deps []dep, provided []string, 
 	// reported at once: tofu rejects it too, and short of one a module tree
 	// is finite, so no depth limit is needed.
 	active := map[string]string{}
-	// module names the module at dir, for a missing provider.
-	var walk func(key, dir, module string) error
+	var walk func(key, dir string) error
 	// visit records the call c, made from dir under the key childKey, and
 	// walks into the module it loads. where names the call in errors.
 	visit := func(c tfconfig.Call, childKey, where, dir string) error {
 		record := Record{Key: childKey, Source: c.Source}
-		childDir, d, subdir, err := resolve(c, where, dir)
+		childDir, d, err := resolve(c, where, dir)
 		if err != nil {
 			return err
 		}
-		childModule := moduleName(childKey)
-		if d != nil {
-			if subdir == "" {
-				childModule += fmt.Sprintf(" (%s)", d.Label)
-			} else {
-				// The call's own `//<subdir>`, as written, not the part
-				// below the dep's module_source.
-				_, called := tfconfig.SplitSubdir(c.Source)
-				childModule += fmt.Sprintf(" (%s, //%s)", d.Label, called)
-			}
-			if tfconfig.IsRegistry(c.Source) {
-				record.Version = d.Version
-			}
+		if d != nil && tfconfig.IsRegistry(c.Source) {
+			record.Version = d.Version
 		}
 		if above, ok := active[childDir]; ok {
 			return fmt.Errorf("%s: %s: source %q is the directory of %s, an ancestor of this call, so the module calls form a cycle",
@@ -363,14 +319,11 @@ func buildManifest(workTree, root, label string, deps []dep, provided []string, 
 		}
 		record.Dir = filepath.ToSlash(rel)
 		manifest.Modules = append(manifest.Modules, record)
-		return walk(childKey, childDir, childModule)
+		return walk(childKey, childDir)
 	}
-	walk = func(key, dir, module string) error {
+	walk = func(key, dir string) error {
 		active[dir] = key
 		defer delete(active, dir)
-		if err := require(dir, module); err != nil {
-			return err
-		}
 		calls, err := tfconfig.ReadCalls(filepath.Join(workTree, filepath.FromSlash(dir)))
 		if err != nil {
 			return err
@@ -396,7 +349,7 @@ func buildManifest(workTree, root, label string, deps []dep, provided []string, 
 	case err != nil:
 		return nil, err
 	default:
-		if err := walk("", root, moduleName("")); err != nil {
+		if err := walk("", root); err != nil {
 			return nil, err
 		}
 	}
@@ -439,22 +392,26 @@ func buildManifest(workTree, root, label string, deps []dep, provided []string, 
 		dirs = append(dirs, dir)
 	}
 	sort.Strings(dirs)
+	var missing []requirement
 	for _, dir := range dirs {
 		declared, err := tfconfig.ReadRequirements(byDir[dir])
 		if err != nil {
 			return nil, err
 		}
+		// Report each missing provider once per directory, even when several
+		// files or an _override file repeat it.
+		reported := map[string]bool{}
 		for _, r := range declared {
 			p := r.Source
-			if listed[p] || isBuiltin(p) || reported[dir+" "+p] {
+			if listed[p] || isBuiltin(p) || reported[p] {
 				continue
 			}
-			reported[dir+" "+p] = true
+			reported[p] = true
 			file, _, _ := strings.Cut(r.Range, ",")
 			if rel, err := filepath.Rel(workTree, file); err == nil {
 				file = filepath.ToSlash(rel)
 			}
-			missing = append(missing, requirement{module: file, provider: p, indirect: supplied[p]})
+			missing = append(missing, requirement{where: file, provider: p})
 		}
 		calls, err := tfconfig.ReadCalls(filepath.Join(workTree, filepath.FromSlash(dir)))
 		if err != nil {
@@ -535,21 +492,15 @@ func testRuns(workTree, root, testDir string) ([]testRun, error) {
 	return runs, nil
 }
 
-// missingProviders formats an error for missing provider plugins, naming each
-// @tf_providers//<namespace>/<name> label to add. Providers absent from the
-// plugin tree come before providers missing only from --direct-provider.
-// Providers outside registry.opentofu.org have no @tf_providers label because
-// rules_tofu vendors from registry.opentofu.org only.
+// missingProviders formats the error for providers that label's srcs require
+// and its providers attribute lacks. It names each
+// @tf_providers//<namespace>/<name> label to add, or reports that rules_tofu
+// cannot vendor providers outside registry.opentofu.org.
 func missingProviders(label string, missing []requirement) error {
-	var absent, indirect, labels, foreign []string
+	var lines, labels, foreign []string
 	seen := map[string]bool{}
 	for _, m := range missing {
-		line := fmt.Sprintf("    %s requires %s", m.module, displayProvider(m.provider))
-		if m.indirect {
-			indirect = append(indirect, line)
-		} else {
-			absent = append(absent, line)
-		}
+		lines = append(lines, fmt.Sprintf("    %s requires %s", m.where, displayProvider(m.provider)))
 		if seen[m.provider] {
 			continue
 		}
@@ -560,15 +511,6 @@ func missingProviders(label string, missing []requirement) error {
 			foreign = append(foreign, m.provider)
 		}
 	}
-	var parts []string
-	if len(absent) > 0 {
-		parts = append(parts, fmt.Sprintf("%s: nothing in its providers or deps supplies these providers, so `tofu init` would not find them:\n%s",
-			label, strings.Join(absent, "\n")))
-	}
-	if len(indirect) > 0 {
-		parts = append(parts, fmt.Sprintf("%s: its files require these providers, which are not in its providers:\n%s",
-			label, strings.Join(indirect, "\n")))
-	}
 	var advice []string
 	if len(labels) > 0 {
 		advice = append(advice, fmt.Sprintf("Add %s to the providers of %s.", strings.Join(labels, ", "), label))
@@ -577,7 +519,8 @@ func missingProviders(label string, missing []requirement) error {
 		advice = append(advice, fmt.Sprintf("rules_tofu can't vendor %s: it only vendors providers from %s.",
 			strings.Join(foreign, ", "), defaultProviderHost))
 	}
-	return fmt.Errorf("%s\n%s", strings.Join(parts, "\n"), strings.Join(advice, " "))
+	return fmt.Errorf("%s: its files require these providers, which are not in its providers:\n%s\n%s",
+		label, strings.Join(lines, "\n"), strings.Join(advice, " "))
 }
 
 // defaultProviderHost is the registry rules_tofu vendors providers from,

@@ -223,11 +223,22 @@ func scan(repo, moduleDir string, modules []Module, self string, extra, submodul
 		calls = map[string]Call{}
 		for _, dir := range dirs {
 			abs := filepath.Join(repo, filepath.FromSlash(dir))
-			required, err := tfconfig.RequiredProviders(abs)
+			files, err := tfconfig.ConfigFiles(abs)
 			if err != nil {
 				return nil, err
 			}
-			for _, p := range required {
+			declared, err := tfconfig.ReadRequirements(files)
+			if err != nil {
+				return nil, err
+			}
+			// ReadRequirements returns primary entries before _override
+			// entries, so an override replaces the primary entry of the
+			// same local name. Duplicate primary names are left to tofu.
+			byName := map[string]string{}
+			for _, d := range declared {
+				byName[d.Name] = d.Source
+			}
+			for _, p := range byName {
 				providers[p] = true
 			}
 			found, err := tfconfig.ReadCalls(abs)

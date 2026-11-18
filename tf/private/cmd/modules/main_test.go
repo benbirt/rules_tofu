@@ -443,12 +443,12 @@ func TestBuild_TransitiveCallDoesNotUseDirectDep(t *testing.T) {
 				deps = append(deps, dep{Label: "//mod_a", Source: tc.source, Dir: dir, Dirs: []string{dir}, Direct: true, Callable: true})
 			}
 			mine := own{srcs: []string{"app/main.tf"}, depDirs: []string{dir}}
-			_, err := buildManifest(tree, "app", "//app", deps, nil, "", mine)
+			_, err := buildManifest(tree, "app", "//app", deps, "", mine)
 			if err == nil || !strings.Contains(err.Error(), "no module call uses @tf_modules//mod_b") {
 				t.Fatalf("expected @tf_modules//mod_b to go unused, got %v", err)
 			}
 			deps[0].Direct = false
-			if _, err := buildManifest(tree, "app", "//app", deps, nil, "", mine); err != nil {
+			if _, err := buildManifest(tree, "app", "//app", deps, "", mine); err != nil {
 				t.Fatal(err)
 			}
 		})
@@ -535,11 +535,10 @@ func TestBuild_RootPackageCycle(t *testing.T) {
 	}
 }
 
-// Every module walked must have its required providers in the plugin tree,
-// which --provider lists: the root, a local module, a dep called by
-// module_source, and a submodule reached by `//<subdir>` (#76).
-// The error names the module, the provider and the label to add; a built-in
-// provider needs no plugin.
+// Only the target's own files are checked against its providers. What the
+// modules it calls require is left to their own targets and to tofu: a local
+// module, a dep called by module_source, and a submodule reached by
+// `//<subdir>` (issues #76 and #144). A built-in provider needs no plugin.
 func TestBuild_RequiredProviders(t *testing.T) {
 	files := map[string]string{
 		"app/main.tf": `
@@ -551,7 +550,6 @@ terraform {
 }
 module "net" { source = "git::https://example.com/network.git//vpc?ref=v1.0.0" }
 module "peering" { source = "git::https://example.com/network.git//vpc/peering?ref=v1.0.0" }
-module "again" { source = "git::https://example.com/network.git//vpc/peering?ref=v1.0.0" }
 module "local" { source = "../shared" }
 `,
 		"shared/main.tf":            "terraform {\n  required_providers {\n    local = \"~> 2.0\"\n  }\n}",
@@ -564,35 +562,20 @@ terraform {
 }
 `,
 	}
-	deps := []dep{{Label: "@tf_modules//network", Source: "git::https://example.com/network.git//vpc?ref=v1.0.0", Dir: "external/net+/vpc", Direct: true}}
-	all := []string{
-		"registry.opentofu.org/hashicorp/random",
-		"registry.opentofu.org/hashicorp/local",
-		"registry.opentofu.org/hashicorp/null",
-		"registry.opentofu.org/hashicorp/time",
-	}
+	deps := []dep{{Label: "@tf_modules//network", Source: "git::https://example.com/network.git//vpc?ref=v1.0.0", Dir: "external/net+/vpc", Direct: true, Callable: true}}
+	mine := own{srcs: []string{"app/main.tf"}, depDirs: []string{"shared"}, providers: []string{"registry.opentofu.org/hashicorp/random"}}
 	tree := writeTree(t, files)
-	if _, err := build(tree, "app", "//app:app", deps, all); err != nil {
-		t.Fatalf("every provider supplied: %v", err)
+	if _, err := buildManifest(tree, "app", "//app:app", deps, "", mine); err != nil {
+		t.Fatalf("the target's own providers listed: %v", err)
 	}
 
-	_, err := build(tree, "app", "//app:app", deps, all[:1])
-	if err == nil {
-		t.Fatal("expected the missing providers to be reported")
-	}
-	want := `//app:app: nothing in its providers or deps supplies these providers, so ` + "`tofu init`" + ` would not find them:
-    module "net" (@tf_modules//network) requires hashicorp/null
-    module "peering" (@tf_modules//network, //vpc/peering) requires hashicorp/time
-    module "local" requires hashicorp/local
-Add "@tf_providers//hashicorp/null", "@tf_providers//hashicorp/time", "@tf_providers//hashicorp/local" to the providers of //app:app.`
-	if err.Error() != want {
-		t.Errorf("got\n%s\nwant\n%s", err, want)
-	}
-
-	_, err = build(tree, "app", "//app:app", deps, all[1:])
-	if err == nil || !strings.Contains(err.Error(), "    the root module requires hashicorp/random\n") ||
-		!strings.Contains(err.Error(), `Add "@tf_providers//hashicorp/random" to the providers of //app:app.`) {
-		t.Errorf("the root module's own requirement is not reported: %v", err)
+	mine.providers = nil
+	_, err := buildManifest(tree, "app", "//app:app", deps, "", mine)
+	want := `//app:app: its files require these providers, which are not in its providers:
+    app/main.tf:4 requires hashicorp/random
+Add "@tf_providers//hashicorp/random" to the providers of //app:app.`
+	if err == nil || err.Error() != want {
+		t.Errorf("got\n%v\nwant\n%s", err, want)
 	}
 }
 
@@ -603,7 +586,7 @@ func TestBuild_RequiredProviderFromAnotherRegistry(t *testing.T) {
 		"app/main.tf": "terraform {\n  required_providers {\n    aws = { source = \"registry.terraform.io/hashicorp/aws\" }\n  }\n}",
 	})
 	_, err := build(tree, "app", "//app", nil, nil)
-	want := "    the root module requires registry.terraform.io/hashicorp/aws\nrules_tofu can't vendor registry.terraform.io/hashicorp/aws: it only vendors providers from registry.opentofu.org."
+	want := "    app/main.tf:3 requires registry.terraform.io/hashicorp/aws\nrules_tofu can't vendor registry.terraform.io/hashicorp/aws: it only vendors providers from registry.opentofu.org."
 	if err == nil || !strings.Contains(err.Error(), want) {
 		t.Errorf("got %v, want an error containing %q", err, want)
 	}
@@ -762,14 +745,6 @@ func TestBuildManifest_TestRunErrors(t *testing.T) {
 			},
 			want: `no dep provides source "acme/net/aws"`,
 		},
-		"helper_requires_provider": {
-			files: map[string]string{
-				"app/main.tf":            ``,
-				"app/helper/main.tf":     "terraform {\n  required_providers {\n    time = { source = \"hashicorp/time\" }\n  }\n}\n",
-				"app/tests/t.tftest.hcl": "run \"setup\" {\n  module {\n    source = \"./helper\"\n  }\n}\n",
-			},
-			want: `module "test.tests.t.setup" requires hashicorp/time`,
-		},
 		"cycle_back_to_root": {
 			files: map[string]string{
 				"app/main.tf":            ``,
@@ -790,15 +765,15 @@ func TestBuildManifest_TestRunErrors(t *testing.T) {
 }
 
 // build is buildLenient for a rule with no test files.
-func build(workTree, root, label string, deps []dep, provided []string) (*Manifest, error) {
-	return buildLenient(workTree, root, label, deps, provided, "")
+func build(workTree, root, label string, deps []dep, providers []string) (*Manifest, error) {
+	return buildLenient(workTree, root, label, deps, providers, "")
 }
 
 // buildLenient calls buildManifest with inputs that satisfy strict deps. It
 // puts every file at or below root in srcs, marks every dep callable, adds
 // every work-tree directory to depDirs, and lists every provider in
 // own.providers.
-func buildLenient(workTree, root, label string, deps []dep, provided []string, testDir string) (*Manifest, error) {
+func buildLenient(workTree, root, label string, deps []dep, providers []string, testDir string) (*Manifest, error) {
 	callable := make([]dep, len(deps))
 	for i, d := range deps {
 		d.Callable = true
@@ -807,7 +782,7 @@ func buildLenient(workTree, root, label string, deps []dep, provided []string, t
 		}
 		callable[i] = d
 	}
-	mine := own{providers: provided}
+	mine := own{providers: providers}
 	err := filepath.WalkDir(workTree, func(p string, e os.DirEntry, err error) error {
 		// A rule with no files at all has no work tree.
 		if errors.Is(err, fs.ErrNotExist) {
@@ -834,7 +809,7 @@ func buildLenient(workTree, root, label string, deps []dep, provided []string, t
 	if err != nil {
 		return nil, err
 	}
-	return buildManifest(workTree, root, label, callable, provided, testDir, mine)
+	return buildManifest(workTree, root, label, callable, testDir, mine)
 }
 
 // Strict deps (#135) checks own.srcs and run blocks in a test's own.srcs
@@ -851,52 +826,45 @@ func TestBuildManifest_StrictDeps(t *testing.T) {
 	net := dep{Label: "@net", Source: "acme/net/aws", Version: "1.0.0", Dir: "external/net+", Direct: true, Callable: true}
 	dns := dep{Label: "@dns", Source: "acme/dns/aws", Version: "1.0.0", Dir: "external/dns+"}
 	for _, tc := range []struct {
-		name     string
-		files    map[string]string
-		deps     []dep
-		provided []string
-		own      own
-		testDir  string
-		root     string
-		want     string
+		name    string
+		files   map[string]string
+		deps    []dep
+		own     own
+		testDir string
+		root    string
+		want    string
 	}{
 		{
-			name:     "a provider only deps list",
-			files:    map[string]string{"app/main.tf": requires("random") + `module "lib" { source = "../lib" }`, "lib/main.tf": requires("random") + requires("null")},
-			provided: []string{random, null},
-			own:      own{srcs: []string{"app/main.tf"}, depDirs: []string{"lib"}},
+			name:  "a provider only deps list",
+			files: map[string]string{"app/main.tf": requires("random") + `module "lib" { source = "../lib" }`, "lib/main.tf": requires("random") + requires("null")},
+			own:   own{srcs: []string{"app/main.tf"}, depDirs: []string{"lib"}},
 			want: `//app: its files require these providers, which are not in its providers:
     app/main.tf:3 requires hashicorp/random
 Add "@tf_providers//hashicorp/random" to the providers of //app.`,
 		},
 		{
-			name:     "a provider listed directly",
-			files:    map[string]string{"app/main.tf": requires("random") + `module "lib" { source = "../lib" }`, "lib/main.tf": requires("null")},
-			provided: []string{null},
-			own:      own{srcs: []string{"app/main.tf"}, depDirs: []string{"lib"}, providers: []string{random}},
+			name:  "a provider listed directly",
+			files: map[string]string{"app/main.tf": requires("random") + `module "lib" { source = "../lib" }`, "lib/main.tf": requires("null")},
+			own:   own{srcs: []string{"app/main.tf"}, depDirs: []string{"lib"}, providers: []string{random}},
 		},
 		{
-			name:     "a dep's file in the root module's directory is the dep's",
-			files:    map[string]string{"app/backend.tf": ``, "app/main.tf": requires("null") + `module "dns" { source = "acme/dns/aws" }`, "external/dns+/main.tf": ``},
-			deps:     []dep{dns},
-			provided: []string{null},
-			own:      own{srcs: []string{"app/backend.tf"}, depDirs: []string{"app"}},
+			name:  "a dep's file in the root module's directory is the dep's",
+			files: map[string]string{"app/backend.tf": ``, "app/main.tf": requires("null") + `module "dns" { source = "acme/dns/aws" }`, "external/dns+/main.tf": ``},
+			deps:  []dep{dns},
+			own:   own{srcs: []string{"app/backend.tf"}, depDirs: []string{"app"}},
 		},
 		{
-			name:     "a file in srcs is checked wherever it is",
-			files:    map[string]string{"app/main.tf": ``, "app/modules/unused/main.tf": requires("null")},
-			provided: []string{null},
-			own:      own{srcs: []string{"app/main.tf", "app/modules/unused/main.tf"}},
-			want:     "    app/modules/unused/main.tf:3 requires hashicorp/null\n",
+			name:  "a file in srcs is checked wherever it is",
+			files: map[string]string{"app/main.tf": ``, "app/modules/unused/main.tf": requires("null")},
+			own:   own{srcs: []string{"app/main.tf", "app/modules/unused/main.tf"}},
+			want:  "    app/modules/unused/main.tf:3 requires hashicorp/null\n",
 		},
 		{
-			name:     "absent and indirect providers are told apart",
-			files:    map[string]string{"app/main.tf": requires("random") + requires("null")},
-			provided: []string{null},
-			own:      own{srcs: []string{"app/main.tf"}},
-			want: "//app: nothing in its providers or deps supplies these providers, so `tofu init` would not find them:\n" +
-				"    the root module requires hashicorp/random\n" +
-				"//app: its files require these providers, which are not in its providers:\n" +
+			name:  "every missing provider is named",
+			files: map[string]string{"app/main.tf": requires("random") + requires("null")},
+			own:   own{srcs: []string{"app/main.tf"}},
+			want: "//app: its files require these providers, which are not in its providers:\n" +
+				"    app/main.tf:3 requires hashicorp/random\n" +
 				"    app/main.tf:8 requires hashicorp/null\n" +
 				`Add "@tf_providers//hashicorp/random", "@tf_providers//hashicorp/null" to the providers of //app.`,
 		},
@@ -998,7 +966,7 @@ Add "@tf_providers//hashicorp/random" to the providers of //app.`,
 			if root == "" {
 				root = "app"
 			}
-			_, err := buildManifest(writeTree(t, tc.files), root, "//app", tc.deps, tc.provided, tc.testDir, tc.own)
+			_, err := buildManifest(writeTree(t, tc.files), root, "//app", tc.deps, tc.testDir, tc.own)
 			switch {
 			case tc.want == "" && err != nil:
 				t.Fatal(err)
