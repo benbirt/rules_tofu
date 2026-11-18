@@ -168,7 +168,7 @@ Each target is checked only after its dependencies pass their checks. If
 in `//net` without validating `//app`:
 
 ```
-ERROR: net/BUILD.bazel:3:11: TofuValidate //net:net failed: (Exit 1): bash failed: error executing TofuValidate command ...
+ERROR: net/BUILD.bazel:3:11: TofuValidate //net:net failed: (Exit 1): runner failed: error executing TofuValidate command ...
 ```
 
 Launchers and tests wait for build checks too:

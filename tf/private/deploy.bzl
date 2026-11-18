@@ -2,7 +2,7 @@
 
 load("//toolchain:toolchain.bzl", "TOOLCHAIN_TYPE")
 load(":fmt.bzl", _tf_fmt = "tf_fmt", _tf_fmt_check = "tf_fmt_check_test")
-load(":init_action.bzl", _tf_init_validate = "tf_init_validate")
+load(":init_action.bzl", "RUNNER_BIN", _tf_init_validate = "tf_init_validate")
 load(":providers.bzl", "TfDeployInfo", "TfLibraryInfo", "TfProviderInfo")
 load(":runner.bzl", _tf_runner = "tf_runner")
 load(":var_files_check.bzl", "DUPCHECK_BIN", _tf_check_var_files = "tf_check_var_files")
@@ -161,6 +161,11 @@ tf_deploy_rule = rule(
         ),
         "_modules_bin": attr.label(
             default = MODULES_BIN,
+            executable = True,
+            cfg = "exec",
+        ),
+        "_runner_bin": attr.label(
+            default = RUNNER_BIN,
             executable = True,
             cfg = "exec",
         ),

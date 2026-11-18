@@ -1,7 +1,9 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"os"
@@ -31,58 +33,14 @@ func runTest(extraArgs []string) error {
 		defer os.RemoveAll(dir)
 		scratch = dir
 	}
-	copyRoot := filepath.Join(scratch, "rules_tofu.work")
-	if err := os.RemoveAll(copyRoot); err != nil {
+	s, err := stage(scratch)
+	if err != nil {
 		return err
 	}
-	if err := copyTree(*workTree, copyRoot); err != nil {
-		return fmt.Errorf("copy work tree: %w", err)
-	}
-	// The root module's directory, which the work tree lacks when no file
-	// is at or below it: an empty module, as in the run directory of a
-	// deploy (see rundir.go).
-	cwd := filepath.Join(copyRoot, filepath.FromSlash(*packageDir))
-	if err := os.MkdirAll(cwd, 0o755); err != nil {
-		return fmt.Errorf("work-tree cwd %s: %w", cwd, err)
-	}
-
-	// With no providers in scope the plugin tree has no files, so the
-	// runfiles tree lacks the directory: give tofu an empty one, and never
-	// write into the runfiles tree.
-	plugins := *pluginDir
-	if _, err := os.Stat(plugins); err != nil {
-		plugins = filepath.Join(scratch, "rules_tofu.plugins")
-		if err := os.MkdirAll(plugins, 0o755); err != nil {
-			return fmt.Errorf("create plugin dir %s: %w", plugins, err)
-		}
-	}
-	// Not for a root module without configuration, as in the validate
-	// action: `tofu init` does nothing there, so it installs no provider and
-	// leaves the lock as it is, which tofu then holds against the empty
-	// plugin cache.
-	if *lockFile != "" && tfconfig.HasConfig(cwd) {
-		if err := installLockFile(*lockFile, cwd); err != nil {
-			return err
-		}
-	}
-	if err := installModulesManifest(*modulesManifest, cwd); err != nil {
+	if err := s.init(os.Stdout, "-no-color"); err != nil {
 		return err
 	}
-
-	env := tofuEnv(cwd)
-	// The test files' directory, which tofu reads alongside the root module's
-	// own. Absent, tofu reads its default, `tests`.
-	var dirArgs []string
-	if *testDir != "" {
-		dirArgs = []string{"-test-directory=" + *testDir}
-	}
-	initArgs := append([]string{"init", "-no-color", "-backend=false", "-input=false", "-get=false", "-plugin-dir=" + plugins}, dirArgs...)
-	if err := runTofu(env, cwd, initArgs...); err != nil {
-		if *lockFile != "" {
-			log.Print("if the provider versions in required_providers changed, run `bazel run @tf_providers//:pin` to update the lock file.")
-		}
-		return fmt.Errorf("tofu init: %w", err)
-	}
+	copyRoot, cwd, env, dirArgs := s.root, s.cwd, s.env, s.dirArgs
 
 	// Test logs are files, so no colour.
 	args := append([]string{"test", "-no-color"}, dirArgs...)
@@ -113,6 +71,93 @@ func runTest(extraArgs []string) error {
 	}
 	if testErr != nil {
 		return fmt.Errorf("tofu test: %w", testErr)
+	}
+	return nil
+}
+
+// staged is a scratch copy of the work tree, set up for `tofu init`.
+type staged struct {
+	// root is the copy of the work tree and cwd the root module's directory
+	// in it.
+	root, cwd string
+	// plugins is the directory passed to tofu as -plugin-dir.
+	plugins string
+	// hasConfig is whether the root module's directory holds configuration.
+	hasConfig bool
+	// env is the environment tofu runs in (see tofuEnv).
+	env []string
+	// dirArgs is the -test-directory flag, when --test-dir names a
+	// directory below the root module's.
+	dirArgs []string
+}
+
+// stage copies --work-tree into scratch and installs the lock and the module
+// manifest in the root module's directory, for --command=test and
+// --command=validate.
+func stage(scratch string) (*staged, error) {
+	s := &staged{root: filepath.Join(scratch, "rules_tofu.work")}
+	if err := os.RemoveAll(s.root); err != nil {
+		return nil, err
+	}
+	// A rule with no files at all declares nothing under its work tree, so
+	// the directory is absent: an empty module.
+	if _, err := os.Stat(*workTree); err == nil {
+		if err := copyTree(*workTree, s.root); err != nil {
+			return nil, fmt.Errorf("copy work tree: %w", err)
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return nil, err
+	}
+	// The root module's directory, which the work tree lacks when no file
+	// is at or below it: an empty module, as in the run directory of a
+	// deploy (see rundir.go).
+	s.cwd = filepath.Join(s.root, filepath.FromSlash(*packageDir))
+	if err := os.MkdirAll(s.cwd, 0o755); err != nil {
+		return nil, fmt.Errorf("work-tree cwd %s: %w", s.cwd, err)
+	}
+
+	// With no providers in scope the plugin tree has no files, so Bazel
+	// makes no directory for it: give tofu an empty one, and never write
+	// into Bazel's tree.
+	s.plugins = *pluginDir
+	if _, err := os.Stat(s.plugins); err != nil {
+		s.plugins = filepath.Join(scratch, "rules_tofu.plugins")
+		if err := os.MkdirAll(s.plugins, 0o755); err != nil {
+			return nil, fmt.Errorf("create plugin dir %s: %w", s.plugins, err)
+		}
+	}
+	// Not for a root module without configuration: `tofu init` does nothing
+	// there, so it installs no provider and leaves the lock as it is, which
+	// tofu then holds against the empty plugin cache.
+	s.hasConfig = tfconfig.HasConfig(s.cwd)
+	if *lockFile != "" && s.hasConfig {
+		if err := installLockFile(*lockFile, s.cwd); err != nil {
+			return nil, err
+		}
+	}
+	if err := installModulesManifest(*modulesManifest, s.cwd); err != nil {
+		return nil, err
+	}
+	s.env = tofuEnv(s.cwd)
+	// The test files' directory, which tofu reads alongside the root module's
+	// own. Absent, tofu reads its default, `tests`.
+	if *testDir != "" && *testDir != "." {
+		s.dirArgs = []string{"-test-directory=" + *testDir}
+	}
+	return s, nil
+}
+
+// init runs `tofu init` offline in the staged root module, with stdout sent
+// to stdout and flags added to the command line.
+func (s *staged) init(stdout io.Writer, flags ...string) error {
+	args := append([]string{"init"}, flags...)
+	args = append(args, "-backend=false", "-input=false", "-get=false", "-plugin-dir="+s.plugins)
+	args = append(args, s.dirArgs...)
+	if err := runTofuTo(stdout, s.env, s.cwd, args...); err != nil {
+		if *lockFile != "" {
+			log.Print("if the provider versions in required_providers changed, run `bazel run @tf_providers//:pin` to update the lock file.")
+		}
+		return fmt.Errorf("tofu init: %w", err)
 	}
 	return nil
 }

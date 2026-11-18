@@ -197,6 +197,10 @@ def materialize(ctx, entries, tfvars_content = None, tfvars_dir = None):
     seen = {}
     for entry in entries:
         path = entry.path
+        if path.rpartition("/")[2] == ".terraform.lock.hcl":
+            fail(("`{}`: `{}` is a lock file, which `srcs` and `data` cannot list. rules_tofu supplies the " +
+                  "lock that `tf_providers.from_lock` names; remove this one (README, " +
+                  "\"Restrictions\").").format(ctx.label, entry.file.short_path))
         if path in seen:
             other = seen[path]
             if other != entry.file:
