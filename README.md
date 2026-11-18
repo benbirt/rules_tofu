@@ -208,10 +208,8 @@ Calling `<source>//<subdir>` matches the parent `@tf_modules//...` target in
 BUILD files name providers as `@tf_providers//<namespace>/<name>` in lower case
 and without a version; for example, `PostHog/posthog` becomes
 `@tf_providers//posthog/posthog`. Only providers required by built targets are
-downloaded, and only for the execution platform `tofu` runs on: `linux_amd64`,
-`linux_arm64`, `darwin_amd64`, `darwin_arm64` or `windows_amd64`. `tofu init`
-runs offline against them, while providers still call their own APIs during
-`plan`, `apply`, `destroy` and networked tests.
+downloaded. `tofu init` runs offline against them, while providers still call
+their own APIs during `plan`, `apply`, `destroy` and networked tests.
 
 Only the root module pins providers:
 
@@ -226,11 +224,9 @@ Only the root module pins providers:
   tags; see
   [Providers that are not on the registry](#providers-that-are-not-on-the-registry).
 
-`from_lock` and `provider` tags in `bazel_dep` modules are ignored; the root
-module locks or tags every provider its dependencies use. A provider tagged only
-by dependencies fails to load when used, naming the modules that tag it. Nothing
-about providers is recorded in `MODULE.bazel.lock`. The full reference is in the
-[API docs](https://registry.bazel.build/modules/rules_tofu/latest/docs).
+`from_lock` and `provider` tags in `bazel_dep` modules are ignored, so the root
+module locks or tags every provider its dependencies use. The full reference is
+in the [API docs](https://registry.bazel.build/modules/rules_tofu/latest/docs).
 
 ### Pinning with a lock file
 
@@ -256,11 +252,10 @@ bazel run @tf_providers//:pin
 ```
 
 `pin` collects `required_providers` across the workspace's `tf_library`,
-`tf_deploy` and `tf_test` targets and their external `deps`, including libraries
-in `bazel_dep` modules and modules fetched by `tf_modules`. A fetched module's
-examples are in no target, so they are left out. `pin` resolves the newest
-version satisfying every constraint and writes `.terraform.lock.hcl`;
-conflicting constraints fail without changing the lock.
+`tf_deploy` and `tf_test` targets and their external `deps`. A fetched module's
+examples are in no target, so they are left out. It resolves the newest version
+satisfying every constraint and writes `.terraform.lock.hcl`; conflicting
+constraints fail without changing the lock.
 
 By default, `pin` locks the five platforms that `from_lock` resolves:
 `linux_amd64`, `linux_arm64`, `darwin_amd64`, `darwin_arm64` and
@@ -290,12 +285,10 @@ terraform {
 ```
 
 Lock files written by `terraform` against `registry.terraform.io` are rejected
-until regenerated with `pin`. Each platform's zip URL and SHA-256 are resolved
-from `registry.opentofu.org` on fetch and accepted only if the digest matches
-one of the lock's `zh:` hashes. When `required_providers` drifts from the lock,
-`bazel build` fails and points to `pin`. A provider that nothing pins has no
-package in `@tf_providers`, so a target listing it fails with Bazel's "no such
-package" error; `pin` still runs and locks it.
+until regenerated with `pin`. When `required_providers` drifts from the lock,
+`bazel build` fails and points to `pin`. An unpinned provider has no package in
+`@tf_providers`, so a target listing it fails with Bazel's "no such package"
+error; `pin` still runs and locks it.
 
 #### Keeping the lock up to date
 
@@ -319,9 +312,8 @@ a variable.
 
 ### Providers that are not on the registry
 
-`tofu providers lock` cannot resolve a provider outside `registry.opentofu.org`,
-and lock `zh:` hashes cannot vouch for it. Pin it with a `tf_providers.provider`
-tag in the root module's `MODULE.bazel` instead; see
+Pin a provider outside `registry.opentofu.org` with a `tf_providers.provider`
+tag in the root module's `MODULE.bazel`; see
 [`examples/off_registry`](examples/off_registry):
 
 ```python
@@ -338,24 +330,18 @@ tf_providers.provider(
 use_repo(tf_providers, "tf_providers")
 ```
 
-All four attributes are required:
+`source`, `version`, `url_template` and `sha256` are all required:
 
-- `source` is `<namespace>/<name>` as written in `required_providers`. OpenTofu
-  still addresses the provider as `registry.opentofu.org/<namespace>/<name>`.
-- `version` is the exact version string.
-- `url_template` gives the download URL for each platform's zip, using
-  `{namespace}`, `{name}`, `{version}`, `{os}` and `{arch}` placeholders.
-- `sha256` maps `<os>_<arch>` (`linux_amd64`, `linux_arm64`, `darwin_amd64`,
-  `darwin_arm64` or `windows_amd64`) to each zip's SHA-256 digest. List every
-  execution platform you build on; building on another platform fails analysis
-  naming the listed platforms.
+- `source` is `<namespace>/<name>` as in `required_providers`, with no hostname;
+  see [Restrictions](#restrictions).
+- `url_template` expands `{namespace}`, `{name}`, `{version}`, `{os}` and
+  `{arch}`.
+- `sha256` is keyed by `linux_amd64`, `linux_arm64`, `darwin_amd64`,
+  `darwin_arm64` or `windows_amd64`; builds on an unlisted platform fail.
 
-`pin` excludes tagged providers from the lock, writing an empty lock if every
-required provider is tagged. A provider present in both the lock and a tag fails
-the build when used; remove the tag or run `bazel run @tf_providers//:pin` to
-drop it from the lock. Tags for providers on `registry.opentofu.org` are not
-rejected because checking would require a registry request per tag, but lock
-files are the supported way to pin registry providers.
+`pin` leaves tagged providers out of the lock. A provider in both the lock and a
+tag fails when used; remove the tag or run `bazel run @tf_providers//:pin` to
+drop it from the lock.
 
 ## Modules
 
@@ -759,9 +745,8 @@ subdirectory of `module`'s package.
 - `.plan`, `.apply` and `.destroy` take no lock on their shared run directory;
   run one command at a time per deploy.
 - Providers must belong to `registry.opentofu.org` or built-in
-  `terraform.io/builtin/*`. Off-registry providers pinned with
-  `tf_providers.provider` still use `registry.opentofu.org/<namespace>/<name>`
-  in OpenTofu and download their zips from `url_template`.
+  `terraform.io/builtin/*`, even for off-registry providers pinned with
+  `tf_providers.provider`.
 - `tf_modules.module` does not support S3, GCS, Bitbucket, Mercurial or
   `X-Terraform-Get` module sources.
 - `tf_providers.from_lock` and `tf_modules.module` compile Go helpers with
@@ -787,9 +772,6 @@ subdirectory of `module`'s package.
 
 - Validation and runtime launchers both use the execution platform's provider
   packages, so the build host must match the run host.
-- `bazel build @tf_providers//<namespace>/<name>` on the command line selects
-  for the target platform (`--platforms`), whereas `tf_library`, `tf_deploy` and
-  `tf_test` select for the execution platform.
 - Provider and toolchain downloads support Windows, but generated launcher
   scripts require `bash`.
 - `tf_modules` does not fetch git submodules, including for git-backed registry
@@ -813,18 +795,17 @@ subdirectory of `module`'s package.
      [`examples/lock`](examples/lock)); otherwise `pin` selects the newest
      version allowed by `required_providers`.
   4. Run `bazel run @tf_providers//:pin` and commit `.terraform.lock.hcl`.
-  5. Run `bazel mod deps --lockfile_mode=update` and commit
-     `MODULE.bazel.lock`, which no longer records provider digests.
+  5. Run `bazel mod deps --lockfile_mode=update` and commit any changes to
+     `MODULE.bazel.lock`.
 
-  `from_lock` compiles a Go helper with the host Go SDK; see
-  [Restrictions](#restrictions).
+  See [Restrictions](#restrictions) for `from_lock`'s Go SDK floor and `GOPROXY`
+  requirements.
 - In the root module, `tf_providers.provider` tags with `url_template` remain
   for off-registry providers and require `source`, `version`, `url_template` and
   `sha256`.
-- `tf_providers.provider` tags in `bazel_dep` modules are ignored, like
-  `from_lock`, and provider versions are no longer resolved across modules. The
-  root module locks or tags every provider its dependencies use; `pin` discovers
-  dependencies' registry providers through external `deps`.
+- `tf_providers.provider` tags in `bazel_dep` modules are now ignored. Lock or
+  tag every provider your dependencies use in the root module; `pin` finds
+  registry ones through external `deps`.
 - `sha256` no longer accepts `linux_386` or `windows_386`; remove those keys.
 - Remove `platform_key` from any custom `opentofu_toolchain`;
   `TofuInfo.platform_key` has been removed.
