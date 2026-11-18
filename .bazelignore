@@ -23,10 +23,6 @@ tests/integration/custom_toolchain/bazel-bin
 tests/integration/custom_toolchain/bazel-out
 tests/integration/custom_toolchain/bazel-custom_toolchain
 tests/integration/custom_toolchain/bazel-testlogs
-tests/integration/fmt/bazel-bin
-tests/integration/fmt/bazel-out
-tests/integration/fmt/bazel-fmt
-tests/integration/fmt/bazel-testlogs
 tests/integration/lock_dependency/bazel-bin
 tests/integration/lock_dependency/bazel-out
 tests/integration/lock_dependency/bazel-lock_dependency

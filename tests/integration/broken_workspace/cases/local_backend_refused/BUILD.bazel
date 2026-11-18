@@ -9,11 +9,9 @@ load("@rules_tofu//tf:defs.bzl", "tf_deploy", "tf_library")
 tf_library(
     name = "lib",
     srcs = ["main.tf"],
-    fmt_test = False,
 )
 
 tf_deploy(
     name = "deploy",
-    fmt_test = False,
     deps = [":lib"],
 )

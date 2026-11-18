@@ -5,5 +5,4 @@ load("@rules_tofu//tf:defs.bzl", "tf_library")
 tf_library(
     name = "lib",
     srcs = ["main.tf"],
-    fmt_test = False,
 )

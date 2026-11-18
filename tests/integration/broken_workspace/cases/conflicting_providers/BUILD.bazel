@@ -33,7 +33,6 @@ tf_provider(
 tf_library(
     name = "lib",
     srcs = ["main.tf"],
-    fmt_test = False,
     providers = [
         ":prov1",
         ":prov2",

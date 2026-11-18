@@ -4,7 +4,6 @@ load("@rules_tofu//tf:defs.bzl", "tf_library")
 tf_library(
     name = "lib",
     srcs = ["main.tf"],
-    fmt_test = False,
     providers = ["@tf_providers//hashicorp/random"],
     visibility = ["//cases/empty_root_test:__pkg__"],
 )

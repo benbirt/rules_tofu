@@ -202,6 +202,14 @@ jobs:
       - name: Run buildifier (lint warnings)
         run: bazel run @buildifier_prebuilt//:buildifier -- -lint=warn -r .
 
+      # The rules generate no format targets, so this step is the only check
+      # of configuration formatting. It runs the pinned tofu binary as
+      # documented in README.md. Passing examples and e2e/smoke excludes
+      # tests/integration, where negative-case fixtures may be malformed on
+      # purpose.
+      - name: Check OpenTofu formatting
+        run: bazel run //tofu -- fmt -check -diff -recursive examples e2e/smoke
+
       # `bazel mod tidy` manages use_repo lines (rules_tofu's extensions report
       # their direct deps for it) and normalises MODULE.bazel; it must have nothing
       # to change. Only MODULE.bazel is checked: the command may also refresh

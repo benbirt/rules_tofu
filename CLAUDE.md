@@ -54,7 +54,7 @@ with open(".bazelrc.local", "w") as f:
 Then `bazel shutdown` so the new startup flags take effect.
 
 - Starlark unit tests (`//toolchain/tests/...`, `//tf/providers/tests/...`,
-  `//tf/modules/tests/...`) and `.fmt_check` targets need no Go toolchain.
+  `//tf/modules/tests/...`) and `//tofu` need no Go toolchain.
 - Everything else (`bazel build //...`, `tf_library`, `tf_deploy`, `tf_test`,
   Bazel Go tests, and workspaces using `from_lock` or `tf_modules`) needs
   `rules_go` to download the Go SDK for `//tf/private/cmd/modules`, `dupcheck`,
@@ -394,11 +394,19 @@ Then `bazel shutdown` so the new startup flags take effect.
 
 - Validate `tf_library` inline via `DefaultInfo.files` so
   `bazel build :foo_lib` is the validation contract. Don't add `:foo.validate`
-  or `validate_test`; the only generated test sub-target is `:foo.fmt_check`.
+  or `validate_test`.
+- Generate no format targets (issue #155; `README.md`, "Formatting"). Don't
+  bring back `.fmt`, `.fmt_check` or `fmt_test`: `tofu fmt -recursive` through
+  `@rules_tofu//tofu` formats a tree by itself, and the rules added only
+  scoping to `srcs`. `tf_library` and `tf_test` generate `:name` alone;
+  `tf_deploy` adds only `.plan`, `.apply` and `.destroy`. CI's `lint` job runs
+  `tofu fmt -check` on `examples` and `e2e/smoke`.
+  `module_dependency_<version>_test` runs the README's formatting commands, and
+  `fmt_test_removed` checks that a leftover `fmt_test` fails.
 - Keep `tofu test` in the separate `tf_test` rule (`tf/private/test.bzl`;
   `README.md`, "Tests") with its own `deps` and `providers`.
-- Allow empty root modules in `tf_library` and `tf_test` (issue #119; the
-  `empty` packages in the fmt and lock_update fixtures):
+- Allow empty root modules in `tf_library` and `tf_test` (issue #119; `empty`
+  packages in `module_dependency` and `lock_update`):
   - Ignore `fs.ErrNotExist` on the root walk in the manifest tool, create
     `$CWD` before copying in the validate action, and call `MkdirAll` in the
     test runner.
@@ -423,7 +431,7 @@ Then `bazel shutdown` so the new startup flags take effect.
   Fetched modules' tests in `data` stay unchecked and inert unless loaded.
 - Reject configuration files in every rule's `data` (`check_no_config_in_data`;
   `config_in_data`; issue #140). `data` is not code: only `srcs` are checked
-  against `providers` and `deps`, and formatted. Don't go back to
+  against `providers` and `deps`. Don't go back to
   checking `data` only when a directory is loaded.
 - Reject auto-loaded variable files (`terraform.tfvars[.json]`,
   `*.auto.tfvars[.json]`) in every rule's `data` (`check_no_auto_tfvars`;
@@ -517,7 +525,7 @@ Then `bazel shutdown` so the new startup flags take effect.
   - Resolve runfiles and state from `$0` with absolute paths so `bazel run` and
     direct invocation match.
   - Never read `BUILD_WORKSPACE_DIRECTORY` in launchers or the runner; only
-    `.fmt` and `pin` may read it.
+    `pin` may read it.
 - Keep `@rules_tofu//tofu` (`tf/private/tofu_binary.bzl`; issue #152) plain
   `tofu`: no staging, no `tofu init`, no added flags and the environment
   untouched:

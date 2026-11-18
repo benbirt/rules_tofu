@@ -1,7 +1,6 @@
 """The tf_library macro and its underlying rule."""
 
 load("//toolchain:toolchain.bzl", "TOOLCHAIN_TYPE")
-load(":fmt.bzl", _tf_fmt = "tf_fmt", _tf_fmt_check = "tf_fmt_check_test")
 load(":init_action.bzl", _tf_init_validate = "tf_init_validate")
 load(":providers.bzl", "TfLibraryInfo", "TfProviderInfo")
 load(
@@ -137,7 +136,7 @@ _tf_library = rule(
     doc = "Underlying rule for `tf_library`. Use the macro.",
 )
 
-def tf_library(name, srcs = None, deps = None, data = None, providers = None, module_source = None, module_version = None, fmt_test = True, **kwargs):
+def tf_library(name, srcs = None, deps = None, data = None, providers = None, module_source = None, module_version = None, **kwargs):
     """A reusable bundle of OpenTofu and Terraform-compatible configuration files.
 
     A `tf_library` carries no variable values and has no `.plan`, `.apply` or
@@ -205,15 +204,8 @@ def tf_library(name, srcs = None, deps = None, data = None, providers = None, mo
     See [Modules](https://github.com/benbirt/rules_tofu#modules) and
     [Strict dependencies](https://github.com/benbirt/rules_tofu#strict-dependencies).
 
-    Generated targets:
-      - `:<name>`: materialises the work tree and runs
-        `tofu init -backend=false && tofu validate`.
-      - `:<name>.fmt`: `bazel run` target, emitted when `srcs` is non-empty,
-        that reformats main-repository `.tf` and `.tofu` source files in `srcs`
-        in place.
-      - `:<name>.fmt_check`: `bazel test` target, emitted when `srcs` is
-        non-empty and `fmt_test = True`, that checks formatting of `.tf` and
-        `.tofu` files in `srcs`, including generated and external files.
+    `:<name>` is the only generated target. `bazel build` materialises the work
+    tree and runs `tofu init -backend=false && tofu validate`.
 
     Args:
       name: Target name.
@@ -243,17 +235,8 @@ def tf_library(name, srcs = None, deps = None, data = None, providers = None, mo
           addresses. Defaults to the version of the Bazel module that holds the
           library when `module_source` is set, or `""` otherwise; setting it
           without `module_source` is an error.
-      fmt_test: Emit `:<name>.fmt_check` when `True` and `srcs` is non-empty;
-          defaults to `True`.
-      **kwargs: Forwarded to the underlying rules. `visibility`, `tags` and
-          `testonly` apply to all generated targets; other rule attributes
-          apply to `:<name>`.
+      **kwargs: Attributes forwarded to the underlying rule.
     """
-    common_kwargs = {}
-    for forwarded in ("visibility", "tags", "testonly"):
-        if forwarded in kwargs:
-            common_kwargs[forwarded] = kwargs.pop(forwarded)
-
     # A registry module's version is normally its Bazel module's version, which
     # its publisher already bumps on every release.
     if module_version == None:
@@ -267,14 +250,5 @@ def tf_library(name, srcs = None, deps = None, data = None, providers = None, mo
         providers = providers or [],
         module_source = module_source or "",
         module_version = module_version,
-        **dict(common_kwargs, **kwargs)
+        **kwargs
     )
-
-    if srcs:
-        _tf_fmt(name = name + ".fmt", srcs = srcs, **common_kwargs)
-        if fmt_test:
-            _tf_fmt_check(
-                name = name + ".fmt_check",
-                srcs = srcs,
-                **common_kwargs
-            )

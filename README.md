@@ -9,7 +9,7 @@
 
 Bazel rules for [OpenTofu](https://opentofu.org/) and Terraform-compatible
 configuration. `bazel build` runs `tofu init` and `tofu validate` offline as a
-cached action; `bazel test` checks formatting and runs `tofu test`; `bazel run`
+cached action; `bazel test` runs `tofu test`; `bazel run`
 plans, applies and destroys. Bazel downloads and pins the `tofu` binary,
 provider plugins and external modules by digest or commit, so `tofu init` never
 contacts the network.
@@ -102,7 +102,6 @@ A reusable bundle of configuration files with no variable values and no `.plan`,
 | `providers` | Providers required by `srcs`, as `@tf_providers//<namespace>/<name>`. See [Strict dependencies](#strict-dependencies). |
 | `module_source` | Address by which HCL `module` blocks call this library when it lives in another Bazel repository. See [Modules](#modules). |
 | `module_version` | Version checked against callers' `version` constraints on a registry `module_source`. Defaults to the version of the Bazel module that holds the library when `module_source` is set; setting it without `module_source` is an error. |
-| `fmt_test` | Emit `:name.fmt_check` when `srcs` is non-empty. Defaults to `True`. |
 
 ### `tf_deploy`
 
@@ -121,7 +120,6 @@ configuration file in the deploy's package, `bazel build` fails.
 | `data` | Files placed in the work tree for `file()` and `templatefile()`. |
 | `providers` | Providers required by `srcs`, as `@tf_providers//<namespace>/<name>`. Providers from `deps` are also installed. See [Strict dependencies](#strict-dependencies). |
 | `allow_ephemeral_state` | Permit `apply` and `destroy` when state lives under `bazel-bin`. Defaults to `False`; see [State and backends](#state-and-backends). |
-| `fmt_test` | Emit `:name.fmt_check` when `srcs` is non-empty. Defaults to `True`. |
 
 ### `tf_test`
 
@@ -137,7 +135,6 @@ Runs `tofu test` over a module's test files as a Bazel test. See
 | `var_files` | `.tfvars` or `.tfvars.json` files passed via `-var-file`. |
 | `data` | Files placed in the work tree. |
 | `allow_network` | Allow network access during tests instead of blocking it in the sandbox. Defaults to `False`. |
-| `fmt_test` | Emit `:name.fmt_check`. Defaults to `True`. |
 
 ### Generated targets
 
@@ -145,8 +142,6 @@ Runs `tofu test` over a module's test files as a Bazel test. See
 |--------|------|---------|-----------|
 | `:name` | `tf_library`, `tf_deploy` | `bazel build` | Materialises the work tree and runs `tofu init -backend=false && tofu validate`. |
 | `:name` | `tf_test` | `bazel test` | Runs `tofu test` offline; `bazel build` validates the module and test files. |
-| `:name.fmt_check` | all | `bazel test` | Checks `tofu fmt` formatting of `.tf`, `.tofu`, `.tftest.hcl` and `.tofutest.hcl` files in `srcs`, including generated and external files. |
-| `:name.fmt` | all | `bazel run` | Reformats main-repository `.tf`, `.tofu`, `.tftest.hcl` and `.tofutest.hcl` source files in `srcs` in place. |
 | `:name.plan` | `tf_deploy` | `bazel run` | Runs `tofu plan`, saving the plan file to `<state-dir>/tfplan`. |
 | `:name.apply` | `tf_deploy` | `bazel run` | Runs a fresh `tofu apply` without reading `tfplan`. Prompts unless `-- -auto-approve` is passed. |
 | `:name.destroy` | `tf_deploy` | `bazel run` | Runs `tofu destroy`. Prompts unless `-- -auto-approve` is passed. |
@@ -157,9 +152,7 @@ relative to its own path, so do not copy or symlink the script elsewhere. Extra
 arguments after `--`, or passed directly to the `.sh` script, are forwarded to
 `tofu` in the deploy's shared run directory. See [How it works](#how-it-works).
 
-`:name.fmt` and `:name.fmt_check` are emitted when `srcs` is non-empty. They act
-only on the files in `srcs`, including those in subdirectories; other files in
-the package are left alone.
+For formatting, see [Formatting](#formatting).
 
 ### Strict dependencies
 
@@ -629,6 +622,90 @@ run "plans_a_subnet_per_name" {
   `tf_test` fails the test and copies that file into undeclared outputs. Pass
   extra flags with `--test_arg=-verbose`.
 
+## Formatting
+
+`rules_tofu` generates no format targets because `tofu fmt` formats a source
+tree by itself.
+
+### `tofu fmt`
+
+Run the pinned [`@rules_tofu//tofu`](#running-tofu-yourself) binary at the
+workspace root:
+
+```sh
+bazel run @rules_tofu//tofu -- fmt -recursive .
+bazel run @rules_tofu//tofu -- fmt -check -diff -recursive .
+```
+
+The first command rewrites files. For CI, the second prints a diff per
+unformatted file and exits non-zero.
+
+- `tofu fmt` formats `.tf`, `.tofu`, `.tfvars`, `.tftest.hcl` and
+  `.tofutest.hcl` files in the directories given and, with `-recursive`, in all
+  directories below.
+- It formats every such file there, whether or not any target lists it.
+- `-recursive` does not follow directory symlinks, so Bazel's `bazel-*` links
+  are skipped.
+- It skips directories and files whose names start with a dot.
+- To exclude paths such as deliberately unformatted test fixtures, pass the
+  directories to format instead of `.`.
+
+### `rules_lint`
+
+In a workspace that formats several languages with one target, pass
+`@rules_tofu//tofu` to
+[`rules_lint`](https://github.com/bazel-contrib/rules_lint) as the `terraform`
+tool of `format_multirun`:
+
+```python
+# BUILD.bazel
+load("@aspect_rules_lint//format:defs.bzl", "format_multirun")
+
+format_multirun(
+    name = "format",
+    terraform = "@rules_tofu//tofu",
+)
+```
+
+`bazel run //:format` rewrites files. For CI, `bazel run //:format.check` fails
+on an unformatted file.
+
+- `rules_lint` 2.9.1 passes only `.tf` and `.tfvars` files to the tool. `.tofu`,
+  `.tftest.hcl` and `.tofutest.hcl` files are neither formatted nor checked.
+  [`tofu fmt`](#tofu-fmt) covers them.
+- `rules_lint`'s documentation says `format_test` is "not recommended". For a
+  check under `bazel test` anyway, use only the form that reads the workspace:
+
+  ```python
+  load("@aspect_rules_lint//format:defs.bzl", "format_test")
+
+  format_test(
+      name = "format_test",
+      no_sandbox = True,
+      terraform = "@rules_tofu//tofu",
+      workspace = "//:MODULE.bazel",
+  )
+  ```
+
+  Do not use the sandboxed `format_test(srcs = ...)` form: with `rules_lint`
+  2.9.1 it passed with an unformatted file in `srcs`.
+
+### Upgrading from 0.5.0
+
+Up to `rules_tofu` 0.5.0, every `tf_library`, `tf_deploy` and `tf_test` with
+`srcs` took a `fmt_test` attribute and generated two format targets:
+`:name.fmt` rewrote its `srcs` under `bazel run`, and `:name.fmt_check` ran as
+a test. All three are removed:
+
+- Delete `fmt_test` from every target. A target that still sets it fails to
+  load with `no such attribute 'fmt_test'`.
+- Instead of running `bazel run //pkg:name.fmt` per target, run
+  `bazel run @rules_tofu//tofu -- fmt -recursive .` once at the workspace root.
+- `bazel test //...` no longer checks formatting. Add one of the two checks
+  above to CI, and remove `.fmt_check` labels from scripts and `test_suite`s.
+- Generated files and files from other repositories in `srcs` are no longer
+  checked.
+
 ## The `tofu` binary
 
 Bazel downloads the OpenTofu release for the execution platform, verifies its
@@ -737,8 +814,8 @@ subdirectory of `module`'s package.
   `tf_providers.from_lock`.
 - `rules_tofu.auto.tfvars.json` is reserved in a `tf_deploy` package for `vars`.
 - `data` rejects configuration files (`.tf`, `.tf.json`, `.tofu` and
-  `.tofu.json`), except dot-prefixed ones; list them in `srcs`, which are
-  checked and formatted.
+  `.tofu.json`), except dot-prefixed ones; list them in `srcs`, the only files
+  checked against `providers` and `deps`.
 - `data` rejects `terraform.tfvars`, `terraform.tfvars.json`, `*.auto.tfvars`
   and `*.auto.tfvars.json` in any directory because OpenTofu auto-loads them
   outside the duplicate-key check; pass variable files via `var_files`.

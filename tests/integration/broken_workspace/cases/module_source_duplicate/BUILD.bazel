@@ -5,7 +5,6 @@ load("@rules_tofu//tf:defs.bzl", "tf_library")
 tf_library(
     name = "lib",
     srcs = ["main.tf"],
-    fmt_test = False,
     deps = [
         "//cases/module_source_duplicate/a",
         "//cases/module_source_duplicate/b",

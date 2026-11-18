@@ -26,8 +26,7 @@ tests/integration/
 ├── lock_update/             positive: `pin`, bot lock bump, root tag conflict
 ├── module_dependency/       positive: `tf_library` calls across Bazel modules
 ├── tf_modules/              positive: `tf_modules` git, archive and registry
-├── run_directory/           positive: `tf_deploy` launchers and local state
-└── fmt/                     positive: `.fmt` and `.fmt_check`
+└── run_directory/           positive: `tf_deploy` launchers and local state
 ```
 
 Every sub-workspace has its own `MODULE.bazel` and a `.bazelversion`
@@ -83,12 +82,20 @@ See the header of `lock_update_test.sh` for the steps.
 `module_dependency/` (`module_dependency_<version>_test`, driven by
 `module_dependency_test.sh`) has `//app` call a `tf_library` in
 `network_module` by `module_source`, which calls one in `dns_module`. It
-exercises standalone library builds, offline planning, `tf_test` and
-`bazel run @rules_tofu//tofu` from `app/`. Because the module manifest
-(`.terraform/modules/modules.json`) is an internal OpenTofu format,
-`BUILD.bazel` generates one test per version in `KNOWN_VERSIONS`
-(`toolchain/versions.bzl`). See the header of `module_dependency_test.sh` for
-the steps.
+exercises standalone library builds, offline planning, `tf_test`,
+`bazel run @rules_tofu//tofu` from `app/` and the README's
+`tofu fmt -recursive` commands at the workspace root. It also holds three
+packages for module-layout edge cases:
+
+- `empty`: libraries and a `tf_test` whose root module is empty (issue #119).
+- `nested`: a library whose `srcs` reach into subdirectories, its `tf_test`,
+  and a `tf_deploy` with no `srcs` of its own.
+- `sub_only`: a library whose `srcs` are all in a subdirectory.
+
+Because the module manifest (`.terraform/modules/modules.json`) is an internal
+OpenTofu format, `BUILD.bazel` generates one test per version in
+`KNOWN_VERSIONS` (`toolchain/versions.bzl`). See the header of
+`module_dependency_test.sh` for the steps.
 
 `tf_modules/` (`tf_modules_test`, driven by `tf_modules_test.sh`) turns
 `fixtures/network` into a tagged git repository and `fixtures/dns` into an
@@ -101,13 +108,6 @@ registry. It covers offline planning, tree tidying, commit and registry facts,
 exercises `tf_deploy` launchers under `bazel run` and direct execution from
 another directory, sharing local state in `//app:deploy`'s run directory under
 `bazel-bin`. See the header of `run_directory_test.sh` for the steps.
-
-`fmt/` (`fmt_<version>_test`, driven by `fmt_test.sh`) checks that `.fmt` and
-`.fmt_check` act only on `srcs` files by name, including files in
-subdirectories, and are omitted when `srcs` is empty. Which file extensions
-`tofu fmt` accepts by name is decided by the `tofu` binary, so `BUILD.bazel`
-generates one test per version in `KNOWN_VERSIONS`. See the header of
-`fmt_test.sh` for the steps.
 
 ## Case lists
 

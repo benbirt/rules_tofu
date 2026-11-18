@@ -420,7 +420,6 @@ tf_library(
     name = {name},
     srcs = {srcs},
     data = {data},
-    fmt_test = False,
     module_source = {source},
     module_version = {version},
     providers = {providers},

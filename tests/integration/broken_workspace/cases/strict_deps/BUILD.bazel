@@ -9,7 +9,6 @@ load("@rules_tofu//tf:defs.bzl", "tf_library")
 tf_library(
     name = "provider",
     srcs = ["provider.tf"],
-    fmt_test = False,
     deps = ["//cases/strict_deps/random"],
 )
 
@@ -17,7 +16,6 @@ tf_library(
 tf_library(
     name = "module",
     srcs = ["module.tf"],
-    fmt_test = False,
     deps = ["//cases/strict_deps/mid"],
 )
 
@@ -25,6 +23,5 @@ tf_library(
 tf_library(
     name = "local",
     srcs = ["local.tf"],
-    fmt_test = False,
     deps = ["//cases/strict_deps/mid"],
 )

@@ -6,6 +6,9 @@
 # Steps:
 #   1. `bazel build //...` validates //app (which calls @network_module//vpc by
 #      module_source, which in turn calls @dns_module//:dns) and //app:app_test.
+#      It also builds the empty-root libraries (//empty), the library whose
+#      srcs are all in a subdirectory (//sub_only) and the deploy without srcs
+#      (//nested:no_srcs_deploy).
 #   2. @network_module//vpc and @dns_module//:dns also build on their own, as
 #      root modules in their own repositories.
 #   3. `bazel run //app:app.plan` plans offline against the generated module
@@ -18,7 +21,18 @@
 #      loads a module from the manifest, and checks that tofu-test.json is
 #      written to its test outputs. The runner passes `tofu test` a flag
 #      (-json-into) that OpenTofu before 1.12 lacks, and tf_test once ran on no
-#      version except the default (issue #125).
+#      version except the default (issue #125). `bazel test //empty:test` runs
+#      a tf_test of an empty root module whose run block loads the library
+#      beside it (issue #119).
+#   6. Run the README's formatting commands at the workspace root; rules_tofu
+#      generates no format targets, so these commands are how a workspace is
+#      formatted. `bazel run @rules_tofu//tofu -- fmt -check -diff -recursive .`
+#      passes on the workspace as it is, with the bazel-* links present. After
+#      writing one unformatted .tf, .tofu, .tfvars, .tftest.hcl and
+#      .tofutest.hcl file at several depths, `fmt -check -recursive .` fails and
+#      lists exactly those files. `fmt -recursive .` rewrites them and the check
+#      passes again. Unformatted files behind a directory symlink and in a
+#      dot-directory are neither reported nor rewritten.
 #
 # Runs once per tofu version rules_tofu pins because the module manifest is
 # tofu's internal format.
@@ -82,5 +96,41 @@ elif [[ -f "${outputs_dir}/outputs.zip" ]]; then
   json_log="$(unzip -p "${outputs_dir}/outputs.zip" tofu-test.json 2>/dev/null || true)"
 fi
 grep -q -F '"@message"' <<<"${json_log}" || fail "the test left no JSON log (tofu-test.json) in ${outputs_dir}"
+# //empty:test has an empty root module; its run block loads ../nested.
+bazel test //empty:test --test_output=errors >&2 || fail "the test of an empty root module failed"
 
-echo "OK: with tofu ${TOFU_VERSION}, modules from other Bazel modules were called by module_source" >&2
+echo "--- 6. format the workspace ---" >&2
+# The builds above created the bazel-* directory symlinks; -recursive must
+# skip them.
+[[ -L bazel-bin ]] || fail "the workspace has no bazel-bin link for tofu fmt to skip"
+bazel run @rules_tofu//tofu -- fmt -check -diff -recursive . >&2 || fail "tofu fmt -check failed on the formatted workspace"
+
+unformatted='variable   "unformatted" {}'
+# One unformatted file of each kind tofu fmt handles, at several depths.
+fmt_files=(scratch.tf app/scratch.tofu app/scratch.tfvars app/tests/scratch.tftest.hcl nested/sub/scratch.tofutest.hcl)
+for f in "${fmt_files[@]}"; do
+  echo "${unformatted}" >"${f}"
+done
+# Files behind a directory symlink or in a dot-directory must be skipped.
+mkdir "${_TMPDIR}/linked" .hidden
+echo "${unformatted}" >"${_TMPDIR}/linked/scratch.tf"
+ln -s "${_TMPDIR}/linked" linked
+echo "${unformatted}" >.hidden/scratch.tf
+
+if out="$(bazel run @rules_tofu//tofu -- fmt -check -recursive . 2>/dev/null)"; then
+  fail "tofu fmt -check passed on unformatted files: ${out}"
+fi
+echo "${out}" >&2
+[[ "$(sort <<<"${out}")" == "$(printf '%s\n' "${fmt_files[@]}" | sort)" ]] || fail "tofu fmt -check should name exactly ${fmt_files[*]}, got: ${out}"
+
+bazel run @rules_tofu//tofu -- fmt -recursive . >&2 || fail "tofu fmt failed"
+bazel run @rules_tofu//tofu -- fmt -check -diff -recursive . >&2 || fail "tofu fmt -check still fails after tofu fmt"
+for f in "${fmt_files[@]}"; do
+  grep -q -x -F 'variable "unformatted" {}' "${f}" || fail "tofu fmt didn't rewrite ${f}: $(cat "${f}")"
+done
+for f in linked/scratch.tf .hidden/scratch.tf; do
+  grep -q -x -F "${unformatted}" "${f}" || fail "tofu fmt rewrote ${f}, which -recursive should not reach"
+done
+rm -r "${fmt_files[@]}" linked .hidden "${_TMPDIR}/linked"
+
+echo "OK: with tofu ${TOFU_VERSION}, modules from other Bazel modules were called by module_source, and tofu fmt formatted the workspace" >&2

@@ -10,7 +10,7 @@ custom_toolchain, and lock_dependency, which two cases share), with one
 <case_name>_test target per case.
 
 Multi-step tests (lock_update_test, module_dependency_*_test,
-run_directory_test, tf_modules_test, fmt_*_test) have their own driver scripts
+run_directory_test, tf_modules_test) have their own driver scripts
 and sub-workspaces below.
 
 The sub-workspace packages are excluded from the outer Bazel via
@@ -81,6 +81,7 @@ _CASES = [
     ("config_in_data", "broken_workspace", "//cases/config_in_data:lib", "in `data` is a configuration file. List it in `srcs`, or"),
     ("config_in_test_data", "broken_workspace", "//cases/config_in_data:test", "fixture/main.tofu.json` in `data` is a configuration file. List it in the `srcs` of a `tf_library` in `deps`"),
     ("test_file_in_srcs", "broken_workspace", "//cases/test_file_in_srcs:lib", "list it in the srcs of a `tf_test`"),
+    ("fmt_test_removed", "broken_workspace", "//cases/fmt_test_removed:lib", "no such attribute 'fmt_test'"),
     ("test_dirs_split", "broken_workspace", "//cases/test_dirs_split:split", "test files must be in one directory"),
     ("test_helper_missing", "broken_workspace", "//cases/test_helper_missing:test", "is not in the work tree; add the tf_library"),
     ("malformed_var_file", "broken_workspace", "//cases/malformed_var_file:deploy", "parse:"),
@@ -273,31 +274,3 @@ bazel_integration_test(
     ],
     workspace_path = "tf_modules",
 )
-
-# `.fmt` and `.fmt_check` act on the files in `srcs` by name, in
-# subdirectories too, and on nothing else in the package; a target without
-# `srcs` has neither. Which extensions `tofu fmt` accepts by name is the
-# binary's to decide, so this runs with every tofu version rules_tofu pins.
-# See fmt_test.sh.
-sh_binary(
-    name = "fmt_driver",
-    srcs = ["fmt_test.sh"],
-    data = ["nested_bazel.sh"],
-)
-
-[
-    bazel_integration_test(
-        name = "fmt_{}_test".format(version.replace(".", "_")),
-        timeout = "moderate",
-        bazel_binaries = bazel_binaries,
-        bazel_version = bazel_binaries.versions.current,
-        env = _ENV | {"TOFU_VERSION": version},
-        tags = _TAGS,
-        test_runner = ":fmt_driver",
-        workspace_files = integration_test_utils.glob_workspace_files("fmt") + [
-            "//:local_repository_files",
-        ],
-        workspace_path = "fmt",
-    )
-    for version in KNOWN_VERSIONS
-]

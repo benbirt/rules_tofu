@@ -14,7 +14,6 @@ tf_library(
 tf_test(
     name = "test",
     srcs = ["main.tftest.hcl"],
-    fmt_test = False,
     module = ":empty",
     # main.tftest.hcl loads ./lib in a run block, so :test lists it directly.
     deps = ["//cases/empty_root_test/lib"],
