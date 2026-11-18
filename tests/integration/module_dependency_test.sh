@@ -10,8 +10,10 @@
 #      root modules in their own repositories.
 #   3. `bazel run //app:app.plan` plans offline against the generated module
 #      manifest and checks the module chain's output.
-#   4. The toolchain's tofu reports TOFU_VERSION, catching a version override
-#      that did not take effect.
+#   4. From app/, `bazel run @rules_tofu//tofu -- version` reports TOFU_VERSION,
+#      catching a version override that did not take effect. A second run passes
+#      `fmt -list=false -write=false -diff` a relative file path and checks the
+#      diff, verifying that tofu runs in the directory Bazel was started in.
 #   5. `bazel test //app:app_test` runs the deploy's tf_test, whose run block
 #      loads a module from the manifest, and checks that tofu-test.json is
 #      written to its test outputs. The runner passes `tofu test` a flag
@@ -69,10 +71,14 @@ out="$(bazel run //app:app.plan 2>&1)" || fail "the plan failed: ${out}"
 echo "${out}" >&2
 grep -q -F 'www.app.example.com' <<<"${out}" || fail "the plan doesn't show the module chain's output"
 
-echo "--- 4. check the tofu version ---" >&2
-# Only the exec platform's tofu repository has been fetched.
-versions="$(for t in "$(bazel info output_base)"/external/rules_tofu++tofu+tofu_*/tofu; do "$t" version; done)"
-grep -q -F "v${TOFU_VERSION}" <<<"${versions}" || fail "expected tofu ${TOFU_VERSION}, got: ${versions}"
+echo "--- 4. run the pinned tofu ---" >&2
+version="$(cd app && bazel run @rules_tofu//tofu -- version)" || fail "bazel run @rules_tofu//tofu failed"
+grep -q -x -F "OpenTofu v${TOFU_VERSION}" <<<"${version}" || fail "expected tofu ${TOFU_VERSION}, got: ${version}"
+# A relative path resolves only if tofu runs in the directory Bazel started in.
+printf 'variable   "unformatted" {}\n' >app/scratch.tf
+out="$(cd app && bazel run @rules_tofu//tofu -- fmt -list=false -write=false -diff scratch.tf)" || fail "tofu fmt of a file in the directory Bazel was started in failed"
+grep -q -x -F '+variable "unformatted" {}' <<<"${out}" || fail "tofu fmt did not print the diff of app/scratch.tf: ${out}"
+rm app/scratch.tf
 
 echo "--- 5. run the tf_test ---" >&2
 bazel test //app:app_test --test_output=all >&2 || fail "the tf_test failed"
