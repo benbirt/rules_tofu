@@ -77,7 +77,7 @@ _CASES = [
     ("strict_deps_module", "broken_workspace", "//cases/strict_deps:module", "add \"//cases/strict_deps/net:net\" to the deps of //cases/strict_deps:module"),
     ("strict_deps_local", "broken_workspace", "//cases/strict_deps:local", "add the tf_library whose files are in \"cases/strict_deps/net\" to the deps of //cases/strict_deps:local"),
     ("module_source_duplicate", "broken_workspace", "//cases/module_source_duplicate:lib", "both have module_source"),
-    ("module_version_mismatch", "broken_workspace", "//cases/module_version_mismatch:lib", "is no longer acceptable"),
+    ("module_version_mismatch", "broken_workspace", "//cases/module_version_mismatch:lib", "modules are never fetched"),
     ("module_local_external", "broken_workspace", "//cases/module_local_external:lib", "is in another Bazel repository"),
     ("config_in_data", "broken_workspace", "//cases/config_in_data:lib", "in `data` is a configuration file. List it in `srcs`, or"),
     ("config_in_test_data", "broken_workspace", "//cases/config_in_data:test", "fixture/main.tofu.json` in `data` is a configuration file. List it in the `srcs` of a `tf_library` in `deps`"),

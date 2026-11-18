@@ -1830,7 +1830,12 @@ func TestRunner_Test_KeepsExecutableBit(t *testing.T) {
 func setupValidate(t *testing.T) (cmd *exec.Cmd, dir, stamp string, invocations func() []invocation) {
 	t.Helper()
 	bin := runnerBin(t)
-	dir = t.TempDir()
+	// Resolve t.TempDir() so dir matches filepath.Abs and $(pwd); on macOS,
+	// /var is a symlink to /private/var.
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	logPath := filepath.Join(dir, "tofu-invocations.log")
 	script := fakeTofuScript("echo \"progress of $1\"\nif [ \"$1\" = \"${FAKE_FAIL:-}\" ]; then echo \"$1 broke\" >&2; exit 3; fi\n")
@@ -1930,6 +1935,21 @@ func TestRunner_Validate_InitsValidatesAndStamps(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "work", "mypkg", ".terraform")); !os.IsNotExist(err) {
 		t.Errorf("the work tree gained .terraform: err=%v", err)
+	}
+}
+
+// An existing --plugin-dir is resolved to an absolute path and used in place.
+func TestRunner_Validate_PluginDirUsedInPlace(t *testing.T) {
+	cmd, dir, _, invocations := setupValidate(t)
+	pluginDir := filepath.Join(dir, "work.plugins")
+	if err := os.MkdirAll(filepath.Join(pluginDir, "registry.opentofu.org"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
+	}
+	if init := invocations()[0]; !init.hasArg("-plugin-dir=" + pluginDir) {
+		t.Errorf("init args = %v, want -plugin-dir=%s", init.args, pluginDir)
 	}
 }
 
