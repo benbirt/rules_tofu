@@ -111,9 +111,10 @@ _CASES = [
     ("custom_toolchain", "custom_toolchain", "//:lib", "custom tofu toolchain selected"),
 ]
 
-# Failures of bazel run on a tf_deploy launcher. In the first two cases the
-# target builds cleanly and the runner refuses at runtime, also covering
-# BUILD-attribute-to-flag wiring that Go unit tests do not see.
+# Failures of bazel run. Some targets build cleanly and fail at run time: for
+# `tf_deploy` launchers the refusal comes from the runner, which also covers
+# the plumbing from BUILD attributes to runner flags that the runner's Go
+# unit tests cannot see. Others fail in the build before reaching the runner.
 _RUN_CASES = [
     # (case_name, workspace_path, target inside that workspace, stderr fragment)
     ("ephemeral_state_refused", "broken_workspace", "//cases/ephemeral_state_refused:deploy.apply", "allow_ephemeral_state"),
@@ -125,6 +126,9 @@ _RUN_CASES = [
     ("launcher_run_invalid", "broken_workspace", "//cases/validate_fails:bad_deploy.plan", "TofuValidate //cases/validate_fails:bad_deploy failed"),
     ("launcher_run_dependency_invalid", "broken_workspace", "//cases/dependency_invalid:deploy.plan", "TofuValidate //cases/dependency_invalid/dep:dep failed"),
     ("launcher_run_duplicate_vars", "broken_workspace", "//cases/duplicate_vars:dup.plan", "RulesTofuVarFilesCheck //cases/duplicate_vars:dup failed"),
+    # `bazel run @rules_tofu//tofu` runs the `tofu` of the toolchain the root
+    # module registered (the failing stand-in), not a downloaded one.
+    ("custom_toolchain_run", "custom_toolchain", "@rules_tofu//tofu", "custom tofu toolchain selected"),
 ]
 
 # A nested Bazel is a whole build system: it writes to the repository cache
