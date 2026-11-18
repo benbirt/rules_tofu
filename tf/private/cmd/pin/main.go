@@ -39,9 +39,7 @@
 //     conflicting with it.
 //   - Otherwise pin combines constraints across directories by provider
 //     source and writes a scratch main.tf.json in a temporary directory with
-//     one root required_providers block. Exact pins in a versions.tf decide
-//     the versions, and without one OpenTofu picks the newest version every
-//     constraint accepts.
+//     one root required_providers block.
 //   - `tofu providers lock` runs in that scratch directory with no existing
 //     lock, since it keeps versions from an existing lock and has no -upgrade
 //     flag. The resulting lock replaces
@@ -225,9 +223,7 @@ func withoutSources(reqs []tfconfig.Requirement, sources []string) []tfconfig.Re
 	return kept
 }
 
-// requirements returns what one directory's files require: one Requirement per
-// provider source, sorted by source, joining distinct version constraints with
-// ", ", OpenTofu's AND operator.
+// requirements returns what one directory's files require, merged by combine.
 //
 // The files need not belong to one module: two tf_deploy targets in a package,
 // each with its own srcs, may require providers under the same local name with
