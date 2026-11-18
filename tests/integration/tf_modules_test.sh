@@ -37,6 +37,7 @@
 #      configuration of a directory outside modules/ that the module never
 #      calls, so //vpc/peering is not there to call (issues #76 and #140).
 #      No configuration file under examples/ is in the work tree either.
+#      Neither are the module's .tftest.hcl files.
 #   4. MODULE.bazel.lock records the git commit and registry module metadata.
 #      Replacing the git module's fact with a registry-module fact (location
 #      and sha256), shutting down Bazel and removing the output base's lockfile
@@ -55,8 +56,8 @@
 #   9. Declaring a module by a //<subdir> (vendor/shared) inside a git
 #      submodule fails during fetch naming the submodule.
 #  10. Building //invalid_caller, which calls a fetched module that does not
-#      validate, fails in the module's own validate action, named by its
-#      @tf_modules label, and says what can be done about it (issue #143).
+#      validate, fails in TofuValidate @tf_modules//invalid with remediation
+#      advice and without validating //invalid_caller (issue #143).
 
 set -euo pipefail
 
@@ -173,11 +174,10 @@ work_tree="$(bazel info bazel-bin)/app/app.work"
 if find -L "${work_tree}" -path '*/examples/*' \( -name '*.tf' -o -name '*.tofu' -o -name '*.tf.json' -o -name '*.tofu.json' \) | grep -q .; then
   fail "the work tree holds an example's configuration"
 fi
-# The module's test files are in no work tree either. Its library is
-# validated on its own, where tofu would read them and fail on the example
-# their run block loads.
+# Upstream test files are excluded from data; see
+# fixtures/network/vpc/defaults.tftest.hcl.
 if find -L "${work_tree}" -name '*.tftest.hcl' | grep -q .; then
-  fail "the work tree holds the fetched module's test files"
+  fail "the work tree contains test files from the fetched module"
 fi
 # //vpc/peering is outside modules/ and nothing in the module calls it: only
 # the tag's `subdirs` makes it part of the library.
@@ -307,15 +307,15 @@ tf_modules.module(
 )
 EOF
 if out="$(bazel build //invalid_caller 2>&1)"; then
-  fail "//invalid_caller built, but the fetched module it calls does not validate"
+  fail "//invalid_caller built despite depending on an invalid fetched module"
 fi
 echo "${out}" >&2
 grep -q -F 'TofuValidate @tf_modules//invalid failed' <<<"${out}" ||
-  fail "the failing action is not the fetched module's validation, named by its @tf_modules label"
-grep -q -F '@tf_modules//invalid, a module fetched by tf_modules, does not validate on its own' <<<"${out}" ||
-  fail "the failure doesn't say that the fetched module itself does not validate"
+  fail "expected failure in TofuValidate @tf_modules//invalid"
+grep -q -F 'rules_tofu: fetched module @tf_modules//invalid failed validation.' <<<"${out}" ||
+  fail "missing fetched-module remediation message"
 if grep -q -F 'TofuValidate //invalid_caller' <<<"${out}"; then
-  fail "//invalid_caller was validated although the module it depends on does not validate"
+  fail "//invalid_caller was validated after @tf_modules//invalid failed"
 fi
 
 echo "OK: tf_modules fetched git, archive and registry modules, pinned by commit" >&2

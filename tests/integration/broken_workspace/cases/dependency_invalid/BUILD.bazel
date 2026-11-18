@@ -1,12 +1,11 @@
 load("@rules_tofu//tf:defs.bzl", "tf_deploy", "tf_library", "tf_test")
 
-# A target is built only after its dependencies' own checks pass (issue
-# #143). Each target here is sound in itself and depends on a library that is
-# not, so building it alone must fail with the dependency's action as the one
-# that failed: `TofuValidate` or `TofuModules` of the dependency, never of
-# the target. Keep the dependencies broken.
+# Dependency-order failure cases for issue #143. Each target here is valid on
+# its own and depends on a broken library, so building or running it fails in
+# the dependency's TofuValidate or TofuModules action without checking this
+# target.
 
-# main.tf calls ./dep, which does not validate.
+# Calls ./dep, which fails validation.
 tf_library(
     name = "dependant",
     srcs = ["main.tf"],
@@ -14,8 +13,8 @@ tf_library(
     deps = ["//cases/dependency_invalid/dep"],
 )
 
-# The same through a deploy's launcher: `bazel run` must not get as far as
-# running tofu.
+# Same call from a deploy; bazel run on :deploy.plan fails in the build before
+# starting the runner.
 tf_deploy(
     name = "deploy",
     srcs = ["main.tf"],
@@ -24,20 +23,20 @@ tf_deploy(
     deps = ["//cases/dependency_invalid/dep"],
 )
 
-# A library whose root module is empty, so it validates whatever is in its
-# deps: nothing but the dependency's own action can fail.
+# Empty root module: would succeed on its own if deps validation were not
+# required.
 tf_library(
     name = "bundle",
     deps = ["//cases/dependency_invalid/dep"],
 )
 
-# A test of a sound module, with a helper in deps that does not validate.
 tf_library(
     name = "sound",
     srcs = ["sound.tf"],
     fmt_test = False,
 )
 
+# Valid module under test, broken helper in deps.
 tf_test(
     name = "test_helper",
     srcs = ["sound.tftest.hcl"],
@@ -46,8 +45,9 @@ tf_test(
     deps = ["//cases/dependency_invalid/dep"],
 )
 
-# undeclared fails its strict-deps check, in the manifest action that runs
-# before validation.
+# Empty root module depending on a library whose TofuModules action fails its
+# strict-deps check; would succeed on its own if deps manifests were not
+# required.
 tf_library(
     name = "manifest_dependant",
     fmt_test = False,

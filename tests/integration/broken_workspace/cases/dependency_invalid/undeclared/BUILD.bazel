@@ -2,8 +2,8 @@ load("@rules_tofu//tf:defs.bzl", "tf_library")
 
 package(default_visibility = ["//cases/dependency_invalid:__pkg__"])
 
-# main.tf requires hashicorp/random, which is not in `providers`: the
-# library's manifest action fails.
+# main.tf requires hashicorp/random without listing it in providers, so
+# TofuModules fails; keep it broken.
 tf_library(
     name = "undeclared",
     srcs = ["main.tf"],

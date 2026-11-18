@@ -163,25 +163,24 @@ the package are left alone.
 
 ### Build order
 
-A target is checked only after everything it depends on has passed its own
-checks. With `//net` in the `deps` of `//app`, `bazel build //app` validates
-`//net` first. If `//net` is broken, the build fails in `//net`'s action with
-`//net`'s error, and `//app` is not validated:
+Each target is checked only after its dependencies pass their checks. If
+`//app` has `//net` in `deps` and `//net` is broken, `bazel build //app` fails
+in `//net` without validating `//app`:
 
 ```
 ERROR: net/BUILD.bazel:3:11: TofuValidate //net:net failed: (Exit 1): bash failed: error executing TofuValidate command ...
 ```
 
-What runs a target waits for its checks in the same way:
+Launchers and tests wait for build checks too:
 
-- `bazel run` on `:name.plan`, `:name.apply` or `:name.destroy`, and
-  `bazel build` on one to run its script directly, first validate the deploy
-  and check its `var_files` for duplicate keys.
-- `bazel test` on a `tf_test` runs `tofu test` only once the test's work tree
-  validates, which waits for `module` and `deps`.
+- `bazel run` or `bazel build` on `:name.plan`, `:name.apply` or
+  `:name.destroy` validates the deploy and its `deps` and checks `var_files`
+  for duplicate keys.
+- `bazel test` on a `tf_test` validates `module`, `deps` and the test work tree
+  before running `tofu test`.
 
-On a cold build, a chain of `deps` validates one link at a time; the results are
-cached.
+On a cold build, validation along a chain of `deps` runs in sequence. Results
+are cached.
 
 ### Strict dependencies
 
@@ -456,9 +455,10 @@ submodules are not fetched; see [Known gaps](#known-gaps).
 Each generated `tf_library` lists as `srcs` the configuration files of the
 module's root, its `modules/` subdirectories and directories it calls itself,
 and carries the providers they require. Configuration files in other
-directories, such as examples, are left out and cannot be called. To call a
-`//<subdir>` outside `modules/` that the module does not call itself, name it
-in `subdirs`, which adds it to the library:
+directories, such as examples, are left out and cannot be called. Upstream test
+files are also left out. To call a `//<subdir>` outside `modules/` that the
+module does not call itself, name it in `subdirs`, which adds it to the
+library:
 
 ```python
 tf_modules.module(
@@ -471,11 +471,11 @@ tf_modules.module(
 External modules called transitively must also be declared with
 `tf_modules.module`.
 
-A fetched module is validated like any other library: on its own, in its root
-directory, before anything that depends on it (see [Build order](#build-order)).
-One that does not validate fails the build in its own action, named by its
-`@tf_modules` label, even if callers use only a `//<subdir>` of it. Declare a
-version that validates, or have the module fixed where it is published.
+Each fetched module is validated at its root directory before anything that
+depends on it, with no opt-out; see [Build order](#build-order). A module that
+does not validate fails in `TofuValidate @tf_modules//<path>` even if callers
+use only a `//<subdir>`. Declare a different version, or get the module fixed
+upstream.
 
 #### Keeping modules up to date
 
@@ -718,12 +718,15 @@ packages into `bazel-bin/<pkg>/<name>.plugins/` and write the module manifest to
 scratch directory, installs that manifest at
 `<pkg>/.terraform/modules/modules.json`, and runs
 `tofu init -backend=false -get=false -plugin-dir=... && tofu validate` as a
-cached action, which writes the empty `bazel-bin/<pkg>/<name>.validate.stamp`.
-A `tf_deploy` with `var_files` also writes `<name>.var_files_check.stamp` when
-no variable is set twice. Those stamps are a target's only default outputs: the
-work tree and plugin tree are built for the actions and launchers that read
-them. Each stamp is an input of the dependants' validation and of the launchers,
-which is what orders the build (see [Build order](#build-order)).
+cached action, writing the empty file `bazel-bin/<pkg>/<name>.validate.stamp`.
+A `tf_deploy` with `var_files` also writes `<name>.var_files_check.stamp` after
+checking for duplicate variable keys. Those stamps are the target's only
+default outputs; the work tree and plugin tree are built as inputs to
+validation and launchers. Each manifest action takes its direct
+dependencies' manifests as inputs. Each validate action takes their stamps,
+plus `<name>.var_files_check.stamp` on a deploy. Deploy launchers include the
+deploy's stamps in their runfiles and default outputs, and `tf_test` includes
+its validate stamp in its runfiles; see [Build order](#build-order).
 
 `.plan`, `.apply` and `.destroy` locate their runfiles and state directory from
 `$0` and mirror the work tree as symlinks into

@@ -422,10 +422,9 @@ def modules_manifest(ctx, work_tree_outputs, infos, providers_depset, strict, sr
       work_tree_outputs: list[File], the work tree's files (`materialize`).
       infos: the rule's deps, each a `TfLibraryInfo` or a struct with its
           `module`, `modules`, `dirs` and `modules_manifest` fields. The
-          module under test of a `tf_test` comes first. Their manifests are
-          inputs of the action, read by nothing: the rule's own files are
-          checked only once every dependency's have passed the same check
-          (issue #143).
+          module under test of a `tf_test` comes first. Each entry's
+          `modules_manifest` is an unused input of this action so upstream
+          manifest checks run first (issue #143).
       providers_depset: depset[TfProviderInfo], the providers in the rule's
           plugin tree.
       strict: direct dependencies allowed by strict-deps checks (`strict_deps`).
@@ -496,12 +495,7 @@ def modules_manifest(ctx, work_tree_outputs, infos, providers_depset, strict, sr
     return manifest
 
 def display_label(ctx):
-    """The target's label as users write it, for messages.
-
-    A library that `tf_modules` generated is named by its
-    `@tf_modules//<path>` label, which is the one BUILD files use: the
-    library itself is private to the hub.
-    """
+    """The target's public label (`@tf_modules//<path>` when generated)."""
     return getattr(ctx.attr, "tf_modules_label", "") or _display_label(ctx.label)
 
 def _display_label(label):

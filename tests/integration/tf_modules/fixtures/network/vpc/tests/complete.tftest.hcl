@@ -1,5 +1,5 @@
-# The module's own tests, as upstream modules carry them. This one loads an
-# example, whose configuration is no part of the generated library.
+# Upstream test file in tests/, which tofu also reads by default; see
+# ../defaults.tftest.hcl.
 run "complete" {
   command = plan
 

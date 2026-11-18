@@ -1,8 +1,7 @@
 load("@rules_tofu//tf:defs.bzl", "tf_library")
 
-# main.tf calls a fetched module that does not validate. tf_modules_test.sh
-# declares the module (step 10); the build then fails as the module, named by
-# its @tf_modules label, before this library is checked.
+# tf_modules_test.sh (step 10) declares @tf_modules//invalid, which fails
+# validation before this library is checked.
 tf_library(
     name = "invalid_caller",
     srcs = ["main.tf"],

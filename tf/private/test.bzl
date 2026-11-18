@@ -209,10 +209,9 @@ exec "$R/{runner}" \\
         ),
     )
 
-    # The stamp is in the runfiles so that `bazel test` runs `tofu test` only
-    # once the test's work tree validates, which in turn waits for `module`
-    # and `deps`. As a default output alone it would be built beside the test
-    # run, not before it.
+    # Include validate_stamp in runfiles so bazel test runs tofu test only
+    # after the test work tree, module and deps validate; in DefaultInfo.files
+    # alone, validation runs in parallel with the test.
     runfiles = ctx.runfiles(
         files = [tofu.binary, manifest, validate_stamp] + ([lock] if lock else []) + work_tree_outputs + plugin_outputs,
     ).merge(ctx.attr._runner_bin[DefaultInfo].default_runfiles)
@@ -296,10 +295,11 @@ def tf_test(name, srcs, module, deps = None, data = None, providers = None, var_
     See [Tests](https://github.com/benbirt/rules_tofu#tests).
 
     Generated targets:
-      - `:<name>`: `bazel build` validates `module` and `srcs`, once `module`
-        and `deps` have passed their own checks; `bazel test` then copies the
-        work tree into `$TEST_TMPDIR` and runs `tofu init -backend=false` and
-        `tofu test` offline against the vendored providers.
+      - `:<name>`: `bazel build` validates `module` and `srcs` after `module`
+        and `deps` pass their checks; `bazel test` waits for validation, then
+        copies the work tree into `$TEST_TMPDIR` and runs
+        `tofu init -backend=false` and `tofu test` offline against the vendored
+        providers.
       - `:<name>.fmt`: `bazel run` target that reformats main-repository
         `.tftest.hcl` and `.tofutest.hcl` source files in `srcs` in place.
       - `:<name>.fmt_check`: `bazel test` target, emitted when

@@ -113,11 +113,9 @@ exec "$R/{runner}" \\
         ),
     )
 
-    # The deploy's stamps make the launcher wait for its checks, `tofu validate`
-    # among them. `bazel run` builds an executable and its runfiles, so they
-    # are there; `bazel build` builds the default outputs, so they are there
-    # too, for a launcher that is built and then run directly. The script
-    # itself is written without inputs and could not require them.
+    # ctx.actions.write takes no inputs, so include deploy.stamps in runfiles
+    # for bazel run and in default outputs for bazel build before running the
+    # script directly.
     runfiles = ctx.runfiles(
         files = [tofu.binary, deploy.modules_manifest] + deploy.stamps + ([deploy.lock] if deploy.lock else []) + deploy.work_tree_files.to_list(),
     ).merge(ctx.attr._runner_bin[DefaultInfo].default_runfiles)

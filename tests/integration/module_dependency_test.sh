@@ -16,8 +16,9 @@
 #      loads a module from the manifest, and checks that tofu-test.json is
 #      written to its test outputs. The runner passes `tofu test` a flag
 #      (-json-into) that OpenTofu before 1.12 lacks, and tf_test once ran on no
-#      version except the default (issue #125). The test's runfiles hold its
-#      validate stamp, so the test runs only after validation (issue #143).
+#      version except the default (issue #125). Also checks that the test's
+#      runfiles manifest lists app_test.validate.stamp, ordering validation
+#      before tofu test (issue #143).
 #
 # Runs once per tofu version rules_tofu pins because the module manifest is
 # tofu's internal format.
@@ -78,6 +79,6 @@ elif [[ -f "${outputs_dir}/outputs.zip" ]]; then
 fi
 grep -q -F '"@message"' <<<"${json_log}" || fail "the test left no JSON log (tofu-test.json) in ${outputs_dir}"
 grep -q -F 'app/app_test.validate.stamp' "$(bazel info bazel-bin)/app/app_test.sh.runfiles_manifest" ||
-  fail "the test's runfiles lack its validate stamp, so the test does not wait for validation"
+  fail "app_test.sh.runfiles_manifest lacks app/app_test.validate.stamp"
 
 echo "OK: with tofu ${TOFU_VERSION}, modules from other Bazel modules were called by module_source" >&2

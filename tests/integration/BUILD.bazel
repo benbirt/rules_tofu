@@ -88,17 +88,16 @@ _CASES = [
     ("registry_sha256_mismatch", "broken_workspace", "//cases/registry_sha256_mismatch:lib", "but the registry reports"),
     ("provider_repo_private", "broken_workspace", "//cases/provider_repo_private:lib", "Visibility error"),
     ("stale_lock", "broken_workspace", "//cases/stale_lock:lib", "bazel run @tf_providers//:pin"),
-    # A target is built only after its dependencies' checks pass, so each of
-    # these fails with the dependency's action as the one that failed (issue
-    # #143). The targets themselves are sound: `bundle` and
-    # `manifest_dependant` would build if their dependency were not required.
+    # Dependency-order failures (issue #143; see
+    # cases/dependency_invalid/BUILD.bazel): building a dependant reports the
+    # broken dependency's action as failed.
     ("dependency_invalid", "broken_workspace", "//cases/dependency_invalid:dependant", "TofuValidate //cases/dependency_invalid/dep:dep failed"),
     ("dependency_invalid_bundle", "broken_workspace", "//cases/dependency_invalid:bundle", "TofuValidate //cases/dependency_invalid/dep:dep failed"),
     ("dependency_invalid_manifest", "broken_workspace", "//cases/dependency_invalid:manifest_dependant", "TofuModules //cases/dependency_invalid/undeclared:undeclared failed"),
     ("test_module_invalid", "broken_workspace", "//cases/dependency_invalid/dep:test", "TofuValidate //cases/dependency_invalid/dep:dep failed"),
     ("test_helper_invalid", "broken_workspace", "//cases/dependency_invalid:test_helper", "TofuValidate //cases/dependency_invalid/dep:dep failed"),
-    # Building a launcher builds its deploy's checks: its default outputs
-    # include their stamps, for a launcher that is built and then run directly.
+    # A launcher's default outputs include its deploy's stamps, so building the
+    # launcher runs the deploy's checks.
     ("launcher_build_invalid", "broken_workspace", "//cases/validate_fails:bad_deploy.plan", "TofuValidate //cases/validate_fails:bad_deploy failed"),
     ("duplicate_root_version", "broken_module", "//cases/duplicate_root_version:lib", "declares tofu.version more than once"),
     # A dependency's from_lock is ignored, so the root must supply its providers.
@@ -112,19 +111,17 @@ _CASES = [
     ("custom_toolchain", "custom_toolchain", "//:lib", "custom tofu toolchain selected"),
 ]
 
-# Failures of `bazel run` on the launcher a `tf_deploy` generates. In the
-# first two the target builds cleanly and the refusal comes from the runner
-# process; they also cover the plumbing from BUILD attribute to runner flag,
-# which the runner's Go unit tests cannot see.
+# Failures of bazel run on a tf_deploy launcher. In the first two cases the
+# target builds cleanly and the runner refuses at runtime, also covering
+# BUILD-attribute-to-flag wiring that Go unit tests do not see.
 _RUN_CASES = [
     # (case_name, workspace_path, target inside that workspace, stderr fragment)
     ("ephemeral_state_refused", "broken_workspace", "//cases/ephemeral_state_refused:deploy.apply", "allow_ephemeral_state"),
     # A `backend "local"` with a relative path keeps state under bazel-bin too.
     ("local_backend_refused", "broken_workspace", "//cases/local_backend_refused:deploy.apply", "does not provably keep state outside"),
-    # These never reach the runner: a launcher's runfiles include its deploy's
-    # stamps, so `bazel run` fails in the build when the deploy does not
-    # validate, a library in its deps does not, or its `var_files` repeat a
-    # variable (issue #143).
+    # Launcher runfiles include the deploy's stamps, so bazel run fails in the
+    # build before reaching the runner when the deploy, a library in deps or
+    # the var_files check fails (issue #143).
     ("launcher_run_invalid", "broken_workspace", "//cases/validate_fails:bad_deploy.plan", "TofuValidate //cases/validate_fails:bad_deploy failed"),
     ("launcher_run_dependency_invalid", "broken_workspace", "//cases/dependency_invalid:deploy.plan", "TofuValidate //cases/dependency_invalid/dep:dep failed"),
     ("launcher_run_duplicate_vars", "broken_workspace", "//cases/duplicate_vars:dup.plan", "RulesTofuVarFilesCheck //cases/duplicate_vars:dup failed"),

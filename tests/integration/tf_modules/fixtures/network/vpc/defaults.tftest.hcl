@@ -1,6 +1,6 @@
-# A test file in the module's own directory, which tofu reads without being
-# told. It loads an example, whose configuration is no part of the generated
-# library.
+# Upstream test file in the module root, loading an excluded example.
+# tf_modules must omit test files from data so validating @tf_modules//network
+# does not read this file (tf_modules_test.sh, step 3).
 run "defaults" {
   command = plan
 

@@ -9,9 +9,8 @@ tf_library(
     fmt_test = False,
 )
 
-# The same file as a deploy's root module: its launchers require its
-# validation, so `bazel run` of one fails in the build and never runs tofu
-# (issue #143).
+# Same broken root module on a deploy: building or running a launcher fails in
+# bad_deploy's validation and never starts the runner (issue #143).
 tf_deploy(
     name = "bad_deploy",
     srcs = ["main.tf"],

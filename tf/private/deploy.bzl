@@ -74,8 +74,8 @@ def _tf_deploy_impl(ctx):
     )
     var_files_check_stamps = [var_files_check_stamp] if var_files_check_stamp != None else []
 
-    # Validation waits for the deps' own and for the duplicate-variable
-    # check, so a deploy that validates has passed every check.
+    # Require deps' validate stamps and the duplicate-variable stamp before
+    # running tofu validate (issues #143 and #150).
     validate_stamp = _tf_init_validate(
         ctx,
         work_tree_files = work_tree_files,
@@ -88,10 +88,10 @@ def _tf_deploy_impl(ctx):
     )
     stamps = [validate_stamp] + var_files_check_stamps
 
-    # The stamps alone are the default outputs, as for a tf_library: the work
-    # tree and the provider packages beside it are inputs of the actions and
-    # launchers that read them, not something to hand to whoever builds the
-    # deploy (issue #156).
+    # Default outputs hold only the stamps, as on tf_library, so remote builds
+    # do not download the work tree and provider packages for top-level
+    # deploys (issue #156). TfDeployInfo.work_tree_files still carries them
+    # for launchers.
     return [
         DefaultInfo(files = depset(direct = stamps)),
         TfDeployInfo(
@@ -181,8 +181,8 @@ def tf_deploy(name, srcs = None, deps = None, vars = None, var_files = None, dat
     Generated targets:
       - `:<name>`: materialises the work tree, checks for duplicate variable
         keys across `vars` and `var_files`, and runs
-        `tofu init -backend=false && tofu validate` once the `deps` have
-        passed their own checks. The launchers below require it to build.
+        `tofu init -backend=false && tofu validate` after `deps` pass their
+        checks. Launchers require these checks before running.
       - `:<name>.plan`: `bazel run` target that runs `tofu plan`, saving the
         plan file to `<state-dir>/tfplan`.
       - `:<name>.apply`: `bazel run` target that runs a fresh `tofu apply`
