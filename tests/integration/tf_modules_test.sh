@@ -148,7 +148,7 @@ plan() {
 }
 
 echo "--- 2. plan ---" >&2
-plan "app-v1 10.0.0.0/24 www.example.com direct hub-peered"
+plan "app-v1 10.0.0.0/24 www.example.com direct hub-peered only-plain"
 network_repo="$(find "$(bazel info output_base)/external" -maxdepth 1 -name '*tf_modules_network')"
 [[ -d "${network_repo}" ]] || fail "can't find the network module's repository: '${network_repo}'"
 [[ -L "${network_repo}/vpc/modules/subnet/outputs.tf" ]] || fail "the symlink to a file of the module was removed"

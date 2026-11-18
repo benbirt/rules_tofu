@@ -382,7 +382,7 @@ def _tf_module_repo_impl(repository_ctx):
     else:
         own_dot_files = dot_files
         root_dot_files = []
-    data = ['glob(["**"], exclude = {})'.format(repr(excluded)), repr(own_dot_files)]
+    data = ['glob(["**"], exclude = {}, allow_empty = True)'.format(repr(excluded)), repr(own_dot_files)]
     if package:
         # The module's library lives in its own directory, which is what calls
         # reach, but local paths may lead out of it into the rest of the files.
@@ -392,7 +392,7 @@ def _tf_module_repo_impl(repository_ctx):
             content = """\
 filegroup(
     name = {name},
-    srcs = glob(["**"], exclude = {excluded}) + {dot_files},
+    srcs = glob(["**"], exclude = {excluded}, allow_empty = True) + {dot_files},
     visibility = ["//:__subpackages__"],
 )
 
