@@ -102,6 +102,11 @@ _EXCLUDED = [
     "BUILD.bazel",
 ]
 
+# Test files, excluded from the module's globs too. A generated library is
+# validated with its module's directory as the root module, where tofu would
+# read them.
+_TEST_GLOBS = ["**/*" + ext for ext in (".tftest.hcl", ".tofutest.hcl", ".tftest.json", ".tofutest.json")]
+
 # What tofu reads as a module's configuration. No rule takes a configuration
 # file as data, so the globs leave them all out. A generated library lists
 # those of the directories it serves in srcs; an example's are in no target.
@@ -374,7 +379,7 @@ def _tf_module_repo_impl(repository_ctx):
                 outside.append(path)
     srcs = sorted(srcs) + ["//:" + path for path in sorted(outside)]
 
-    excluded = _EXCLUDED + _CONFIG_GLOBS
+    excluded = _EXCLUDED + _CONFIG_GLOBS + _TEST_GLOBS
     dot_files = _dot_files(repository_ctx)
     if package:
         own_dot_files = [path[len(package) + 1:] for path in dot_files if path.startswith(package + "/")]

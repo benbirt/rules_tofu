@@ -62,7 +62,7 @@ echo "--- 4. default outputs ---" >&2
 files="$(bazel cquery --output=files //app:deploy 2>/dev/null)" || fail "cquery of //app:deploy failed"
 echo "${files}" >&2
 grep -q -F '/app/deploy.validate.stamp' <<<"${files}" || fail "the deploy's default outputs lack its validate stamp"
-if grep -v '\.stamp$' <<<"${files}" | grep -q .; then
+if grep -q -v '\.stamp$' <<<"${files}"; then
   fail "the deploy's default outputs hold more than the stamps of its checks"
 fi
 for command in plan apply destroy; do

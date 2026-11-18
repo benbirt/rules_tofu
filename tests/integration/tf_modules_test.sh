@@ -173,6 +173,12 @@ work_tree="$(bazel info bazel-bin)/app/app.work"
 if find -L "${work_tree}" -path '*/examples/*' \( -name '*.tf' -o -name '*.tofu' -o -name '*.tf.json' -o -name '*.tofu.json' \) | grep -q .; then
   fail "the work tree holds an example's configuration"
 fi
+# The module's test files are in no work tree either. Its library is
+# validated on its own, where tofu would read them and fail on the example
+# their run block loads.
+if find -L "${work_tree}" -name '*.tftest.hcl' | grep -q .; then
+  fail "the work tree holds the fetched module's test files"
+fi
 # //vpc/peering is outside modules/ and nothing in the module calls it: only
 # the tag's `subdirs` makes it part of the library.
 cp MODULE.bazel "${_TMPDIR}/MODULE.bazel"
