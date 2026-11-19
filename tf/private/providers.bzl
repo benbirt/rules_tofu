@@ -58,8 +58,7 @@ TfLibraryInfo = provider(
 )
 
 # tf_deploy symlinks every work-tree input under
-# `bazel-bin/<package>/<name>.work/` at its work_tree_path and writes
-# rules_tofu.auto.tfvars.json beside the root module's configuration.
+# `bazel-bin/<package>/<name>.work/` at its work_tree_path.
 TfDeployInfo = provider(
     doc = "Inputs and metadata of a `tf_deploy` for its runner targets and `tf_test`.",
     fields = {
@@ -79,7 +78,8 @@ TfDeployInfo = provider(
         "modules": "depset[struct(label, source, version, dir, dirs)]: `module` of the deploy's transitive deps.",
         "dirs": "list[string]: work-tree directories of the deploy's `srcs` and `data`, callable by " +
                 "relative path from `tf_test`.",
-        "tfvars_content": "string: the `rules_tofu.auto.tfvars.json` rendered from `vars`.",
+        "vars": "dict[string, string]: the deploy's `vars`, passed to `tofu` as `-var=<name>=<value>` " +
+                "before `-var-file` flags.",
         "var_files": "list[File]: the `var_files`, in declaration order.",
         "stamps": "list[File]: empty stamps from the deploy's build checks: `TofuValidate` and, when " +
                   "`var_files` is non-empty, the duplicate-variable check. Included in launcher runfiles " +

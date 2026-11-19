@@ -116,19 +116,19 @@ func fakeTofuScript(extra string) string {
 		"exit 0\n"
 }
 
-// setup creates a temporary work tree with the given vars written to
-// rules_tofu.auto.tfvars.json, and a fake tofu script that logs each invocation
-// to a temp file. It returns:
+// setup creates a temporary work tree holding variables.tf in the package
+// directory and a fake tofu script that logs each invocation to a temp file.
+// It returns:
 //   - a pre-configured runner Cmd to which callers may append flags
 //   - addVarFile: writes a .tfvars.json file and returns its path
 //   - invocations: reads and returns all recorded tofu invocations
-func setup(t *testing.T, vars map[string]any) (
+func setup(t *testing.T) (
 	cmd *exec.Cmd,
 	addVarFile func(map[string]any) string,
 	invocations func() []invocation,
 ) {
 	t.Helper()
-	return setupPkg(t, vars, "mypkg")
+	return setupPkg(t, "mypkg")
 }
 
 // setupPkg is like setup but places the deploy at the given workspace-relative
@@ -137,7 +137,7 @@ func setup(t *testing.T, vars map[string]any) (
 //
 // The runner is given a state directory `<tmp>/state`, so tofu runs in
 // `<tmp>/state/work/<pkgDir>` (see runDir), and an output root `<tmp>/out`.
-func setupPkg(t *testing.T, vars map[string]any, pkgDir string) (
+func setupPkg(t *testing.T, pkgDir string) (
 	cmd *exec.Cmd,
 	addVarFile func(map[string]any) string,
 	invocations func() []invocation,
@@ -156,7 +156,9 @@ func setupPkg(t *testing.T, vars map[string]any, pkgDir string) (
 	if err := os.MkdirAll(filepath.Join(workTree, pkgDir), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeJSON(t, filepath.Join(workTree, pkgDir, "rules_tofu.auto.tfvars.json"), vars)
+	if err := os.WriteFile(filepath.Join(workTree, pkgDir, "variables.tf"), []byte("# variables.tf\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	var varFileCounter int
 	addVarFile = func(contents map[string]any) string {
@@ -203,7 +205,7 @@ func setupPkg(t *testing.T, vars map[string]any, pkgDir string) (
 }
 
 func TestRunner_NoVarFiles(t *testing.T) {
-	cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
+	cmd, _, invocations := setup(t)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
 	}
@@ -241,7 +243,7 @@ func TestRunner_NoVarFiles(t *testing.T) {
 }
 
 func TestRunner_VarFileNoOverlap(t *testing.T) {
-	cmd, addVarFile, invocations := setup(t, map[string]any{"region": "us-east-1"})
+	cmd, addVarFile, invocations := setup(t)
 	vf := addVarFile(map[string]any{"env": "prod"})
 	cmd.Args = append(cmd.Args, "--var-file="+vf)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -264,7 +266,7 @@ func TestRunner_VarFileNoOverlap(t *testing.T) {
 // sit in the work tree for OpenTofu's file() function without interfering with
 // runner execution.
 func TestRunner_WithDataFile(t *testing.T) {
-	cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
+	cmd, _, invocations := setup(t)
 
 	// Simulate a data file materialised by the data attribute at its short_path
 	// under the work tree.
@@ -298,7 +300,7 @@ func TestRunner_WithDataFile(t *testing.T) {
 }
 
 func TestRunner_ExtraArgsPassedToPlan(t *testing.T) {
-	cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
+	cmd, _, invocations := setup(t)
 	cmd.Args = append(cmd.Args, "--", "--target=aws_instance.foo")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
@@ -314,7 +316,7 @@ func TestRunner_ExtraArgsPassedToPlan(t *testing.T) {
 }
 
 func TestRunner_ExtraArgsPassedToApply(t *testing.T) {
-	cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
+	cmd, _, invocations := setup(t)
 	cmd.Args = append(cmd.Args,
 		"--command=apply",
 		// No backend block here, so apply needs the ephemeral-state opt-in.
@@ -338,7 +340,7 @@ func TestRunner_ExtraArgsPassedToApply(t *testing.T) {
 }
 
 func TestRunner_ExtraArgsPassedToDestroy(t *testing.T) {
-	cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
+	cmd, _, invocations := setup(t)
 	cmd.Args = append(cmd.Args,
 		"--command=destroy",
 		// No backend block here, so destroy needs the ephemeral-state opt-in.
@@ -394,7 +396,7 @@ func TestRunner_NoStateFlags(t *testing.T) {
 	for _, withBackend := range []bool{false, true} {
 		for _, command := range []string{"plan", "apply", "destroy"} {
 			t.Run(fmt.Sprintf("%s/backend=%v", command, withBackend), func(t *testing.T) {
-				cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
+				cmd, _, invocations := setup(t)
 				if withBackend {
 					setBackendRecord(cmd, backendRecord(t, "s3", map[string]any{"bucket": "b"}))
 				}
@@ -415,26 +417,45 @@ func TestRunner_NoStateFlags(t *testing.T) {
 	}
 }
 
-// tofu init receives -var-file flags in declaration order alongside the
-// command so OpenTofu can evaluate variables in backend and cloud blocks.
-func TestRunner_Init_VarFiles(t *testing.T) {
-	cmd, addVarFile, invocations := setup(t, map[string]any{"region": "us-east-1"})
-	first := addVarFile(map[string]any{"env": "prod"})
-	second := addVarFile(map[string]any{"state_root": "/var/lib/tofu"})
-	cmd.Args = append(cmd.Args, "--var-file="+first, "--var-file="+second)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
-	}
-	for _, inv := range invocations() {
-		var got []string
-		for _, a := range inv.args {
-			if strings.HasPrefix(a, "-var-file=") {
-				got = append(got, a)
+// Both tofu init and the subcommand receive every --var as -var=<name>=<value>
+// followed by every --var-file as -var-file=<path>, regardless of how --var
+// and --var-file are interleaved on the runner command line. OpenTofu
+// evaluates variables in backend and cloud blocks during init. Each --var
+// value is passed as a single argument preserving spaces, quotes, `$` and
+// extra `=` characters. Trailing arguments go only to the subcommand after
+// those flags so they override earlier values.
+func TestRunner_VarsThenVarFiles(t *testing.T) {
+	for _, command := range []string{"plan", "apply", "destroy"} {
+		t.Run(command, func(t *testing.T) {
+			cmd, addVarFile, invocations := setup(t)
+			first := addVarFile(map[string]any{"env": "prod"})
+			second := addVarFile(map[string]any{"state_root": "/var/lib/tofu"})
+			vars := []string{`name=it's "a b" = $HOME`, `tags={"k"="v"}`, "empty="}
+			flags := []string{"--allow-ephemeral-state", "--var-file=" + first, "--var=" + vars[0], "--var-file=" + second, "--var=" + vars[1], "--var=" + vars[2], "--", "-var=name=override"}
+			if out, err := withCommand(cmd, command, flags...).CombinedOutput(); err != nil {
+				t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
 			}
-		}
-		if want := []string{"-var-file=" + first, "-var-file=" + second}; !reflect.DeepEqual(got, want) {
-			t.Errorf("%s var files = %v, want %v", inv.args[0], got, want)
-		}
+			want := []string{"-var=" + vars[0], "-var=" + vars[1], "-var=" + vars[2], "-var-file=" + first, "-var-file=" + second}
+			invs := invocations()
+			if len(invs) != 2 {
+				t.Fatalf("got %d tofu invocations, want init then %s: %+v", len(invs), command, invs)
+			}
+			for i, inv := range invs {
+				var got []string
+				for _, a := range inv.args {
+					if strings.HasPrefix(a, "-var") {
+						got = append(got, a)
+					}
+				}
+				wantInv := want
+				if i == 1 {
+					wantInv = append(append([]string{}, want...), "-var=name=override")
+				}
+				if !reflect.DeepEqual(got, wantInv) {
+					t.Errorf("%s variable flags = %q, want %q", inv.args[0], got, wantInv)
+				}
+			}
+		})
 	}
 }
 
@@ -444,7 +465,7 @@ func TestRunner_Init_VarFiles(t *testing.T) {
 // removes BUILD_WORKSPACE_DIRECTORY to match running a built launcher directly
 // rather than through `bazel run`.
 func TestRunner_NoCheckoutNeeded(t *testing.T) {
-	cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
+	cmd, _, invocations := setup(t)
 	for _, e := range cmd.Env {
 		if strings.HasPrefix(e, "BUILD_WORKSPACE_DIRECTORY=") {
 			t.Fatalf("setup left %s in the runner's environment", e)
@@ -478,7 +499,7 @@ func TestRunner_MissingRequiredFlags(t *testing.T) {
 	for _, flagName := range requiredFlags {
 		flagName := flagName
 		t.Run(flagName, func(t *testing.T) {
-			cmd, _, _ := setup(t, map[string]any{"region": "us-east-1"})
+			cmd, _, _ := setup(t)
 			filtered := cmd.Args[:1] // keep argv[0]
 			for _, arg := range cmd.Args[1:] {
 				if strings.HasPrefix(arg, flagName+"=") || arg == flagName {
@@ -579,7 +600,7 @@ func assertRefusedEphemeralState(t *testing.T, cmd *exec.Cmd) {
 // When tofu init writes no backend record, apply and destroy are refused
 // unless --allow-ephemeral-state is set, while plan runs ungated.
 func TestRunner_EphemeralState_NoBackend(t *testing.T) {
-	cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
+	cmd, _, invocations := setup(t)
 	for _, command := range []string{"apply", "destroy"} {
 		assertRefusedEphemeralState(t, withCommand(cmd, command))
 	}
@@ -606,7 +627,7 @@ func TestRunner_EphemeralState_EmptyRecord(t *testing.T) {
 		"no type": `{"version": 3, "backend": {"type": "", "config": null}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			cmd, _, _ := setup(t, map[string]any{"region": "us-east-1"})
+			cmd, _, _ := setup(t)
 			setBackendRecord(cmd, record)
 			assertRefusedEphemeralState(t, withCommand(cmd, "apply"))
 		})
@@ -621,7 +642,7 @@ func TestRunner_EphemeralState_RemoteBackendAllowed(t *testing.T) {
 		"cloud": {"hostname": "app.example.com", "organization": "acme", "workspaces": map[string]any{"name": "prod"}},
 	} {
 		t.Run(typ, func(t *testing.T) {
-			cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
+			cmd, _, invocations := setup(t)
 			setBackendRecord(cmd, backendRecord(t, typ, config))
 			for _, command := range []string{"apply", "destroy"} {
 				if out, err := withCommand(cmd, command).CombinedOutput(); err != nil {
@@ -640,7 +661,7 @@ func TestRunner_EphemeralState_RemoteBackendAllowed(t *testing.T) {
 // deploy whose backend block was deleted is checked against the new init run
 // rather than the stale record.
 func TestRunner_EphemeralState_StaleRecordRemoved(t *testing.T) {
-	cmd, _, _ := setup(t, map[string]any{"region": "us-east-1"})
+	cmd, _, _ := setup(t)
 	record := recordPath(t, cmd)
 	if err := os.MkdirAll(filepath.Dir(record), 0o755); err != nil {
 		t.Fatal(err)
@@ -665,7 +686,7 @@ func TestRunner_EphemeralState_UnreadableRecord(t *testing.T) {
 		"local, bad setting": `{"version": 3, "backend": {"type": "local", "config": {"path": 7}}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			cmd, _, _ := setup(t, map[string]any{"region": "us-east-1"})
+			cmd, _, _ := setup(t)
 			setBackendRecord(cmd, record)
 			assertRefused(t, withCommand(cmd, "apply"), "can't tell where")
 			if out, err := withCommand(cmd, "apply", "--allow-ephemeral-state").CombinedOutput(); err != nil {
@@ -680,7 +701,7 @@ func TestRunner_EphemeralState_UnreadableRecord(t *testing.T) {
 // tofu init -migrate-state, covering -input=false blocking OpenTofu's prompt.
 func TestRunner_InitFailure_NamesLocalState(t *testing.T) {
 	const hint = "tofu init -migrate-state"
-	cmd, _, _ := setup(t, map[string]any{"region": "us-east-1"})
+	cmd, _, _ := setup(t)
 	setFakeTofu(t, cmd, "exit 1\n")
 	out, err := withCommand(cmd, "plan").CombinedOutput()
 	if err == nil || strings.Contains(string(out), hint) {
@@ -701,7 +722,7 @@ func TestRunner_InitFailure_NamesLocalState(t *testing.T) {
 // tofu runs with the run directory's root itself as its working directory. The
 // BCR test module e2e/smoke has this shape.
 func TestRunner_EmptyPackageDir_RunsAtRunDirRoot(t *testing.T) {
-	cmd, _, invocations := setupPkg(t, map[string]any{"region": "us-east-1"}, "")
+	cmd, _, invocations := setupPkg(t, "")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("runner failed unexpectedly with empty --package-dir: %v\n%s", err, out)
 	}
@@ -718,14 +739,14 @@ func TestRunner_EmptyPackageDir_RunsAtRunDirRoot(t *testing.T) {
 	for _, inv := range invs {
 		assertSameDir(t, inv.cwd, runDir(t, cmd))
 	}
-	assertLink(t, filepath.Join(runDir(t, cmd), "rules_tofu.auto.tfvars.json"), filepath.Join(argValue(t, cmd, "--work-tree"), "rules_tofu.auto.tfvars.json"))
+	assertLink(t, filepath.Join(runDir(t, cmd), "variables.tf"), filepath.Join(argValue(t, cmd, "--work-tree"), "variables.tf"))
 }
 
 // TestRunner_LockFile_CopiedBeforeInit verifies that --lock-file lands at
 // .terraform.lock.hcl in the root module's run directory, replacing a lock left
 // by an earlier run, so init checks against the pinned lock.
 func TestRunner_LockFile_CopiedBeforeInit(t *testing.T) {
-	cmd, _, invocations := setup(t, map[string]any{})
+	cmd, _, invocations := setup(t)
 	cwd := filepath.Join(runDir(t, cmd), "mypkg")
 	if err := os.MkdirAll(cwd, 0o755); err != nil {
 		t.Fatal(err)
@@ -762,7 +783,7 @@ func TestRunner_LockFile_CopiedBeforeInit(t *testing.T) {
 // earlier run: it records that build's provider versions, and would make init
 // refuse a provider bumped since.
 func TestRunner_NoLockFile_RemovesLeftoverLock(t *testing.T) {
-	cmd, _, _ := setup(t, map[string]any{})
+	cmd, _, _ := setup(t)
 	cwd := filepath.Join(runDir(t, cmd), "mypkg")
 	if err := os.MkdirAll(cwd, 0o755); err != nil {
 		t.Fatal(err)
@@ -817,7 +838,6 @@ func setupTest(t *testing.T) (cmd *exec.Cmd, workTree, scratch, outputs string, 
 			t.Fatal(err)
 		}
 	}
-	writeJSON(t, filepath.Join(workTree, "mypkg", "rules_tofu.auto.tfvars.json"), map[string]any{"name": "x"})
 
 	modulesManifest := filepath.Join(dir, "modules.json")
 	if err := os.WriteFile(modulesManifest, []byte(testManifest), 0o644); err != nil {
@@ -848,6 +868,7 @@ func setupTest(t *testing.T) (cmd *exec.Cmd, workTree, scratch, outputs string, 
 		"--command=test",
 		"--test-dir=tests",
 		"--var-file=mypkg/test.tfvars",
+		"--var=name=a b",
 	)
 	cmd.Env = append(os.Environ(),
 		"TOFU_LOG="+logPath,
@@ -857,10 +878,11 @@ func setupTest(t *testing.T) (cmd *exec.Cmd, workTree, scratch, outputs string, 
 	return cmd, workTree, scratch, outputs, invocations
 }
 
-// `--command=test` copies the work tree into TEST_TMPDIR, inits it offline
-// with -backend=false and the test directory, and runs `tofu test` there with
-// the JSON log in the outputs, the var files re-based onto the copy and the
-// extra arguments last. The runfiles work tree is left as it was.
+// `--command=test` copies the work tree into TEST_TMPDIR, initialises it
+// offline with -backend=false and -test-directory, and runs `tofu test` there
+// with the JSON log in the outputs. Both commands receive -var and -var-file,
+// with relative var files resolved into the copy. Trailing arguments go to
+// `tofu test` last. The runfiles work tree is left untouched.
 func TestRunner_Test_InitsAndTestsACopy(t *testing.T) {
 	cmd, workTree, scratch, outputs, invocations := setupTest(t)
 	cmd.Args = append(cmd.Args, "--", "-verbose")
@@ -890,17 +912,21 @@ func TestRunner_Test_InitsAndTestsACopy(t *testing.T) {
 	if !init.hasArgWithPrefix("-plugin-dir=") {
 		t.Errorf("init lacks -plugin-dir: %v", init.args)
 	}
-	wantTest := []string{"test", "-no-color", "-test-directory=tests", "-json-into=" + filepath.Join(outputs, "tofu-test.json"),
-		"-var-file=" + filepath.Join(scratch, "rules_tofu.work", "mypkg", "test.tfvars"), "-verbose"}
+	varArgs := []string{"-var=name=a b", "-var-file=" + filepath.Join(scratch, "rules_tofu.work", "mypkg", "test.tfvars")}
+	if got := init.args[len(init.args)-len(varArgs):]; !reflect.DeepEqual(got, varArgs) {
+		t.Errorf("init args end %q, want %q", got, varArgs)
+	}
+	wantTest := append([]string{"test", "-no-color", "-test-directory=tests", "-json-into=" + filepath.Join(outputs, "tofu-test.json")}, varArgs...)
+	wantTest = append(wantTest, "-verbose")
 	if !reflect.DeepEqual(test.args, wantTest) {
 		t.Errorf("test args = %q, want %q", test.args, wantTest)
 	}
-	// The copy holds the sources' contents, the manifest and the generated
-	// tfvars; the runfiles tree gained nothing.
+	// The copy holds the sources' contents and the manifest. The runfiles
+	// tree is untouched.
 	if data, err := os.ReadFile(filepath.Join(copyPkg, "tests", "t.tftest.hcl")); err != nil || string(data) != "# mypkg/tests/t.tftest.hcl\n" {
 		t.Errorf("copied test file = %q, %v", data, err)
 	}
-	for _, f := range []string{".terraform/modules/modules.json", "rules_tofu.auto.tfvars.json"} {
+	for _, f := range []string{".terraform/modules/modules.json", "main.tf"} {
 		if _, err := os.Stat(filepath.Join(copyPkg, f)); err != nil {
 			t.Errorf("copy lacks %s: %v", f, err)
 		}
@@ -1025,7 +1051,7 @@ func TestRunner_Test_StateDirNotRequired(t *testing.T) {
 // so edited backend blocks take effect without passing -reconfigure, which
 // OpenTofu rejects when a cloud block is present.
 func TestRunner_Init_FreshBackend(t *testing.T) {
-	cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
+	cmd, _, invocations := setup(t)
 	setBackendRecord(cmd, backendRecord(t, "s3", map[string]any{"bucket": "old"}))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
@@ -1049,7 +1075,7 @@ func TestRunner_Init_FreshBackend(t *testing.T) {
 // tofu runs with TF_DATA_DIR fixed to the run directory's `.terraform` and no
 // TF_PLUGIN_CACHE_DIR, whatever the parent environment holds.
 func TestRunner_Env_DataDirAndNoPluginCache(t *testing.T) {
-	cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
+	cmd, _, invocations := setup(t)
 	cmd.Env = append(cmd.Env, "TF_DATA_DIR=/bogus/data", "TF_PLUGIN_CACHE_DIR=/bogus/cache")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
@@ -1186,12 +1212,12 @@ func writeWorkTreeFile(t *testing.T, cmd *exec.Cmd, rel, content string) string 
 // absolute symlinks, so the root module, its data files and the modules beside
 // it are all where tofu expects them. Nothing is written into the work tree.
 func TestRunner_RunDir_MirrorsWorkTree(t *testing.T) {
-	cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
+	cmd, _, invocations := setup(t)
 	// The lock and the data directory are what tofu writes beside the
 	// configuration.
 	setFakeTofu(t, cmd, ": > .terraform.lock.hcl; mkdir -p .terraform/providers\n")
 	files := []string{
-		"mypkg/rules_tofu.auto.tfvars.json",
+		"mypkg/variables.tf",
 		"mypkg/main.tf",
 		"mypkg/templates/a.tftpl",
 		"modules/net/main.tf",
@@ -1222,7 +1248,7 @@ func TestRunner_RunDir_MirrorsWorkTree(t *testing.T) {
 // absolute before tofu, which runs elsewhere, sees them, and before they
 // become link targets.
 func TestRunner_RunDir_RelativeFlags(t *testing.T) {
-	cmd, addVarFile, invocations := setup(t, map[string]any{"region": "us-east-1"})
+	cmd, addVarFile, invocations := setup(t)
 	base := filepath.Dir(argValue(t, cmd, "--work-tree"))
 	// The runner makes them absolute against its working directory as the
 	// kernel names it, which is not always how t.TempDir() spells it. On macOS
@@ -1260,8 +1286,8 @@ func TestRunner_RunDir_RelativeFlags(t *testing.T) {
 		t.Errorf("plan args = %v, want %s", invs[1].args, arg)
 	}
 	assertLink(t,
-		filepath.Join(want["--state-dir"], "work", "mypkg", "rules_tofu.auto.tfvars.json"),
-		filepath.Join(want["--work-tree"], "mypkg", "rules_tofu.auto.tfvars.json"))
+		filepath.Join(want["--state-dir"], "work", "mypkg", "variables.tf"),
+		filepath.Join(want["--work-tree"], "mypkg", "variables.tf"))
 }
 
 // The run directory follows the work tree from one run to the next: a file
@@ -1270,7 +1296,7 @@ func TestRunner_RunDir_RelativeFlags(t *testing.T) {
 // terraform.tfstate from a deploy with no backend block; relative local
 // backend paths are preserved the same way (issue #86).
 func TestRunner_RunDir_FollowsWorkTreeAndKeepsState(t *testing.T) {
-	cmd, _, _ := setup(t, map[string]any{"region": "us-east-1"})
+	cmd, _, _ := setup(t)
 	// apply writes terraform.tfstate in cwd; destroy fails unless it stays.
 	setFakeTofu(t, cmd, `case "$1" in
   apply) echo applied > terraform.tfstate ;;
@@ -1305,7 +1331,7 @@ esac
 // the user's, and the runner stops before running tofu. An empty directory
 // holds nothing and gives way.
 func TestRunner_RunDir_FileInTheWay(t *testing.T) {
-	cmd, _, _ := setup(t, map[string]any{"region": "us-east-1"})
+	cmd, _, _ := setup(t)
 	writeWorkTreeFile(t, cmd, "mypkg/main.tf", "# main\n")
 	writeWorkTreeFile(t, cmd, "mypkg/was_a_dir", "now a file\n")
 	cwd := filepath.Join(runDir(t, cmd), "mypkg")
@@ -1344,7 +1370,7 @@ func TestRunner_RunDir_FileInTheWay(t *testing.T) {
 // providers links into that launcher's plugin tree and init relinks it, while
 // the workspace selection in environment is the user's.
 func TestRunner_RunDir_DataDirAcrossRuns(t *testing.T) {
-	cmd, _, _ := setup(t, map[string]any{"region": "us-east-1"})
+	cmd, _, _ := setup(t)
 	dataDir := filepath.Join(runDir(t, cmd), "mypkg", ".terraform")
 	stale := filepath.Join(dataDir, "providers", "registry.opentofu.org", "hashicorp", "null")
 	if err := os.MkdirAll(filepath.Dir(stale), 0o755); err != nil {
@@ -1431,7 +1457,7 @@ func TestRunner_LocalBackend_Gate(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
+			cmd, _, invocations := setup(t)
 			base := filepath.Dir(argValue(t, cmd, "--work-tree"))
 			outside := filepath.Join(base, "durable")
 			outputRoot := argValue(t, cmd, "--output-root")
@@ -1483,7 +1509,7 @@ func TestRunner_Test_SymlinkToDirectoryFails(t *testing.T) {
 }
 
 func TestRunner_RunDir_SymlinkToDirectoryFails(t *testing.T) {
-	cmd, _, _ := setup(t, map[string]any{"region": "us-east-1"})
+	cmd, _, _ := setup(t)
 	writeWorkTreeFile(t, cmd, "mypkg/main.tf", "# main\n")
 	writeWorkTreeFile(t, cmd, "modules/net/main.tf", "# net\n")
 	workTree := argValue(t, cmd, "--work-tree")
@@ -1627,7 +1653,7 @@ func setupValidate(t *testing.T) (cmd *exec.Cmd, dir, stamp string, invocations 
 // scratch directory and leaves the input work tree untouched.
 func TestRunner_Validate_InitsValidatesAndStamps(t *testing.T) {
 	cmd, dir, stamp, invocations := setupValidate(t)
-	cmd.Args = append(cmd.Args, "--lock-file=lock/.terraform.lock.hcl", "--test-dir=tests", "--var-file=sources/main.tf", "--", "-json")
+	cmd.Args = append(cmd.Args, "--lock-file=lock/.terraform.lock.hcl", "--test-dir=tests", "--var-file=sources/main.tf", "--var=name=a b", "--", "-json")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
@@ -1652,7 +1678,12 @@ func TestRunner_Validate_InitsValidatesAndStamps(t *testing.T) {
 	if !init.hasArgWithPrefix("-plugin-dir=/") || init.hasArg("-plugin-dir="+filepath.Join(dir, "work.plugins")) {
 		t.Errorf("init args = %v, want an absolute fallback -plugin-dir", init.args)
 	}
-	wantValidate := []string{"validate", "-test-directory=tests", "-var-file=" + filepath.Join(dir, "sources", "main.tf"), "-json"}
+	varArgs := []string{"-var=name=a b", "-var-file=" + filepath.Join(dir, "sources", "main.tf")}
+	if got := init.args[len(init.args)-len(varArgs):]; !reflect.DeepEqual(got, varArgs) {
+		t.Errorf("init args end %q, want %q", got, varArgs)
+	}
+	wantValidate := append([]string{"validate", "-test-directory=tests"}, varArgs...)
+	wantValidate = append(wantValidate, "-json")
 	if !reflect.DeepEqual(validate.args, wantValidate) {
 		t.Errorf("validate args = %q, want %q", validate.args, wantValidate)
 	}

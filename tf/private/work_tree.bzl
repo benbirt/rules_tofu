@@ -2,8 +2,7 @@
 
 A work tree is the directory under `bazel-bin/<pkg>/<name>.work/` into which a
 rule symlinks its configuration, data, test and `var_files` inputs at their
-`work_tree_path`, plus `rules_tofu.auto.tfvars.json` for a `tf_deploy` or a
-`tf_test` of one. Main-repository files keep their workspace-relative path and
+`work_tree_path`. Main-repository files keep their workspace-relative path and
 external files go under `external/<repo>/...`. The vendored provider packages
 live in a sibling directory, `bazel-bin/<pkg>/<name>.plugins/`, so
 `tofu init -plugin-dir=<plugin_tree>` reads them in place without copying large
@@ -16,10 +15,9 @@ sibling plugin tree and `modules_manifest` writes `<name>.modules.json`.
 load(":providers.bzl", "TfLibraryInfo")
 
 # Only structural OpenTofu inputs are allowed in a rule's srcs. Variable values
-# come from `tf_deploy(vars = {...})` and var_files on tf_deploy or tf_test;
-# allowing `.tfvars[.json]` here would create ambiguous precedence with
-# `rules_tofu.auto.tfvars.json` and let a reusable module declare values it has
-# no business owning.
+# come from vars on tf_deploy and var_files on tf_deploy or tf_test. Allowing
+# .tfvars or .tfvars.json here would let a reusable library supply variable
+# values.
 #
 # `.tofu` and `.tofu.json` are OpenTofu-only configuration files: tofu reads
 # `foo.tofu` and `foo.tofu.json` in place of `foo.tf` and `foo.tf.json` beside
@@ -60,9 +58,8 @@ def check_no_auto_tfvars(ctx, files):
     `*.auto.tfvars[.json]` from the root module's directory, and `tofu test`
     reads them from the test directory too. One in `data` would set variables
     alongside `vars` and `var_files` without being read by the duplicate-key
-    check. An `*.auto.tfvars[.json]` sorting after
-    `rules_tofu.auto.tfvars.json` or an auto-loaded file in a test
-    subdirectory would also override `vars`.
+    check.
+
     `var_files` are not checked here: `tofu` loads them via `-var-file` in the
     order the rule chooses, and a deploy's are checked against `vars` and each
     other.
@@ -123,6 +120,29 @@ def shell_quote(s):
     """Return `s` single-quoted as one shell word for generated scripts."""
     return "'" + s.replace("'", "'\\''") + "'"
 
+def var_flags(ctx, vars):
+    """Return `--var=<name>=<value>` runner flags for `vars`, sorted by name.
+
+    Fails analysis if a variable name is empty or contains `=`. `tofu` splits a
+    `-var` argument at the first `=`, so `a=b` would assign to `a`.
+
+    Args:
+      ctx: rule ctx, for the label in the error.
+      vars: dict[string, string], a `tf_deploy`'s `vars`.
+
+    Returns:
+      list[string]: one `--var=<name>=<value>` flag per entry.
+    """
+    flags = []
+    for name, value in sorted(vars.items()):
+        if not name or "=" in name:
+            fail("`{}`: variable names in `vars` must not be empty or contain `=` (got `{}`).".format(
+                ctx.label,
+                name,
+            ))
+        flags.append("--var={}={}".format(name, value))
+    return flags
+
 def check_has_configuration(ctx, entries):
     """Fail a deploy whose root module holds no configuration file.
 
@@ -176,29 +196,21 @@ def files_entries(files):
     """`struct(path, file)` for each of `files`, at its `work_tree_path`."""
     return [struct(path = work_tree_path(f), file = f) for f in files]
 
-def materialize(ctx, entries, tfvars_content = None, tfvars_dir = None):
+def materialize(ctx, entries):
     """Materialise a work tree under `<pkg>/<name>.work/`.
 
     For each `struct(path, file)` in `entries`, declares `<name>.work/<path>`
-    and symlinks it to `file`. If `tfvars_content` is non-None, also writes
-    `rules_tofu.auto.tfvars.json` in `tfvars_dir` under `<name>.work/`.
+    and symlinks it to `file`.
 
-    Fails if any entry in any directory is named `.terraform.lock.hcl`, if two
-    distinct files share a work-tree path, or if an entry collides with the
-    generated `rules_tofu.auto.tfvars.json`.
+    Fails if any entry in any directory is named `.terraform.lock.hcl` or if
+    two distinct files share a work-tree path.
 
     Args:
       ctx: rule ctx.
       entries: list[struct(path, file)] of work-tree paths (`work_tree_path`) and Files.
-      tfvars_content: optional string; None for a `tf_library` or a `tf_test`
-          of one.
-      tfvars_dir: work-tree directory for `rules_tofu.auto.tfvars.json`,
-          defaulting to the rule's own package. A `tf_test` passes the tested
-          deploy's package directory.
 
     Returns:
-      list[File]: the declared work-tree symlinks, plus the generated tfvars
-      file when `tfvars_content` is set.
+      list[File]: the declared work-tree symlinks.
     """
     work_prefix = ctx.label.name + ".work"
     outputs = []
@@ -228,21 +240,6 @@ def materialize(ctx, entries, tfvars_content = None, tfvars_dir = None):
         out = ctx.actions.declare_file(work_prefix + "/" + path)
         ctx.actions.symlink(output = out, target_file = entry.file)
         outputs.append(out)
-
-    if tfvars_content != None:
-        tfvars_path = work_prefix + "/" + _join(
-            tfvars_dir if tfvars_dir != None else package_dir(ctx.label),
-            "rules_tofu.auto.tfvars.json",
-        )
-        if tfvars_path[len(work_prefix) + 1:] in seen:
-            fail(
-                "`{}` collides with the generated rules_tofu.auto.tfvars.json. ".format(
-                    seen[tfvars_path[len(work_prefix) + 1:]].path,
-                ) + "Rename that file: the name is reserved for the values in `vars`.",
-            )
-        tfvars_file = ctx.actions.declare_file(tfvars_path)
-        ctx.actions.write(output = tfvars_file, content = tfvars_content)
-        outputs.append(tfvars_file)
 
     return outputs
 

@@ -1,4 +1,4 @@
-load("@rules_tofu//tf:defs.bzl", "tf_deploy", "tf_library")
+load("@rules_tofu//tf:defs.bzl", "tf_deploy", "tf_library", "tf_test")
 
 # Referencing a var_file that contains malformed JSON must fail during the
 # duplicate key check at build time.
@@ -10,5 +10,22 @@ tf_library(
 tf_deploy(
     name = "deploy",
     var_files = ["bad.tfvars.json"],
+    deps = [":lib"],
+)
+
+# A tf_test's var_files are not checked for duplicate keys. Passing them to
+# TofuValidate makes `bazel build` fail on the malformed file.
+tf_test(
+    name = "test",
+    srcs = ["main.tftest.hcl"],
+    module = ":lib",
+    var_files = ["bad.tfvars.json"],
+)
+
+# A `vars` key containing `=` must fail analysis because tofu splits
+# `-var=a=b=c` at the first `=` and would set `a`.
+tf_deploy(
+    name = "name_with_equals",
+    vars = {"a=b": "c"},
     deps = [":lib"],
 )

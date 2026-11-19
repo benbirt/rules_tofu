@@ -115,7 +115,7 @@ configuration file in the deploy's package, `bazel build` fails.
 |-----------|---------|
 | `srcs` | Deploy-local configuration files, typically `backend` and `provider` blocks, with the same allowed extensions as `tf_library.srcs`. |
 | `deps` | `tf_library` targets included in the work tree. |
-| `vars` | String dictionary of variable values written to `rules_tofu.auto.tfvars.json`. See [Variables and data files](#variables-and-data-files). |
+| `vars` | String dictionary of variable values passed as `-var=<name>=<value>`. See [Variables and data files](#variables-and-data-files). |
 | `var_files` | `.tfvars` or `.tfvars.json` files passed via `-var-file`, including generated outputs. |
 | `data` | Files placed in the work tree for `file()` and `templatefile()`. |
 | `providers` | Providers required by `srcs`, as `@tf_providers//<namespace>/<name>`. Providers from `deps` are also installed. See [Strict dependencies](#strict-dependencies). |
@@ -517,9 +517,10 @@ the [API docs](https://registry.bazel.build/modules/rules_tofu/latest/docs).
 
 ## Variables and data files
 
-`vars` sets string-valued variables inline. `var_files` passes `.tfvars` or
-`.tfvars.json` files, including generated outputs, via `-var-file`. `data`
-symlinks files at workspace-relative paths for `file()` and `templatefile()`:
+`vars` passes each entry to `tofu` as `-var=<name>=<value>`. `var_files` passes
+`.tfvars` or `.tfvars.json` files, including generated outputs, via
+`-var-file`. `data` symlinks files at workspace-relative paths for `file()` and
+`templatefile()`:
 
 ```python
 genrule(
@@ -538,15 +539,24 @@ tf_deploy(
 )
 ```
 
-`tf_deploy` writes `vars` to `rules_tofu.auto.tfvars.json` in its package
-directory. OpenTofu converts string values such as `"3"` or `"true"` when a
-variable is typed `number` or `bool`, while untyped variables receive the string
-as written. Put lists, maps and objects in `var_files` instead. Because
-`tofu validate` ignores variable values, a type mismatch in `vars` surfaces at
-`plan` rather than `bazel build`.
+OpenTofu reads each `vars` value by the variable's declared type. A `string` or
+untyped variable receives the text as written, without interpolation. Strings
+such as `"3"` and `"true"` convert to `number` and `bool`. For any other type,
+including `any`, OpenTofu parses the value as an expression. Write
+`"[\"a\", \"b\"]"` for a `list(string)`. A string for an `any` variable needs
+its own quotes, such as `"\"hello\""`.
 
-Variable keys must not overlap across `vars` and `var_files` on a `tf_deploy`;
-`bazel build` fails on duplicates.
+`bazel build` fails if variable keys overlap across `vars` and `var_files` or
+between `var_files` on a `tf_deploy`. `tofu validate` checks `var_files`
+syntax, not variable types or whether the root module declares each `-var`
+name. A wrong type or an undeclared name in `vars` fails at `plan` rather than
+`bazel build`. `tofu test` also accepts undeclared `-var` names.
+
+Launchers pass `vars` sorted by name and then `var_files` in listed order to
+both `tofu init` and the command so `backend` and `cloud` blocks can use
+variables. Arguments after `--` follow them on `plan`, `apply` and `destroy`
+only. A later flag overrides an earlier one, as in
+`bazel run :prod.plan -- -var region=eu-west-1`.
 
 ## State and backends
 
@@ -718,8 +728,7 @@ downloads instead.
 `tf_library` and `tf_deploy` assemble a work tree in
 `bazel-bin/<pkg>/<name>.work/`, symlinking main-repository sources, `data` and
 `var_files` at workspace-relative paths and external repositories under
-`external/<repository>/`. `tf_deploy` writes `vars` to
-`rules_tofu.auto.tfvars.json`. Both rules symlink exec-platform provider
+`external/<repository>/`. Both rules symlink exec-platform provider
 packages into `bazel-bin/<pkg>/<name>.plugins/` and write the module manifest to
 `bazel-bin/<pkg>/<name>.modules.json`. `bazel build` copies the work tree into a
 scratch directory, installs that manifest at
@@ -750,7 +759,9 @@ command.
 `bazel test`, it copies the work tree into `$TEST_TMPDIR`, installs
 `<name>.modules.json`, and runs `tofu init -backend=false` followed by
 `tofu test`. Both phases pass `-test-directory` when `srcs` is in a
-subdirectory of `module`'s package.
+subdirectory of `module`'s package. Validation, deploy launchers and `tf_test`
+pass any `-var` and `-var-file` flags to both `tofu init` and the command that
+follows it.
 
 ## Restrictions
 
@@ -758,7 +769,6 @@ subdirectory of `module`'s package.
 - Test files belong in `tf_test.srcs`, not `tf_library` or `tf_deploy`.
 - `.terraform.lock.hcl` is rejected in `srcs` and `data`; pass lock files via
   `tf_providers.from_lock`.
-- `rules_tofu.auto.tfvars.json` is reserved in a `tf_deploy` package for `vars`.
 - `data` rejects configuration files (`.tf`, `.tf.json`, `.tofu` and
   `.tofu.json`), except dot-prefixed ones; list them in `srcs`, the only files
   checked against `providers` and `deps`.

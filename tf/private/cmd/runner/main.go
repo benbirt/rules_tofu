@@ -15,6 +15,7 @@
 //   - --package-dir: root module directory relative to --work-tree, or "" for
 //     the workspace root package.
 //   - --lock-file: .terraform.lock.hcl from tf_providers.from_lock.
+//   - --var: name=value passed via -var, repeatable.
 //   - --var-file: .tfvars or .tfvars.json file passed via -var-file,
 //     repeatable.
 //   - --test-dir: for test and validate of a tf_test, test directory relative
@@ -37,7 +38,7 @@
 //   - Copy any --lock-file to .terraform.lock.hcl and --modules-manifest to
 //     .terraform/modules/modules.json in <state-dir>/work/<package-dir>, then
 //     run `tofu init -input=false -get=false -plugin-dir=<plugin-dir>` there
-//     with the -var-file flags, TF_DATA_DIR set to its .terraform and
+//     with the variable flags, TF_DATA_DIR set to its .terraform and
 //     TF_PLUGIN_CACHE_DIR unset.
 //   - For apply and destroy without --allow-ephemeral-state, read the backend
 //     recorded in .terraform/terraform.tfstate (see backend.go) and refuse if
@@ -46,8 +47,13 @@
 //     absolute paths outside --output-root.
 //   - Run `tofu plan -input=false -out=<state-dir>/tfplan` (printing
 //     "rules_tofu: plan saved to <path>" to stdout), `tofu apply -input=false`
-//     or `tofu destroy -input=false`, with the -var-file flags and any
+//     or `tofu destroy -input=false`, with the variable flags and any
 //     trailing arguments.
+//
+// Every mode passes --var as -var=<name>=<value> and then --var-file as
+// -var-file=<path>, each in the order given, to both `tofu init` and the
+// subcommand. Trailing arguments follow them on the subcommand only. A later
+// variable flag overrides an earlier one.
 //
 // Runner passes no -state, -state-out or -backend-config flags and never
 // rewrites a backend block: OpenTofu owns where state lives. Without a backend
@@ -88,6 +94,7 @@ var (
 	workTree        = flag.String("work-tree", "", "path to the materialised work tree root")
 	packageDir      = flag.String("package-dir", "", "work-tree-relative directory of the root module; empty for the workspace root package")
 	pluginDir       = flag.String("plugin-dir", "", "absolute path to the vendored provider plugin tree, passed to tofu init via -plugin-dir")
+	vars            = flags.StringList("var", "name=value passed to tofu via -var (repeatable)")
 	varFiles        = flags.StringList("var-file", "path to a .tfvars or .tfvars.json file passed to tofu via -var-file (repeatable)")
 	modulesManifest = flag.String("modules-manifest", "", "the .terraform/modules/modules.json recording every module call, copied into place before tofu init -get=false")
 	lockFile        = flag.String("lock-file", "", "optional .terraform.lock.hcl pinning the providers (tf_providers.from_lock), copied next to the configuration before tofu init")
@@ -198,17 +205,14 @@ func run() error {
 	if err := installModulesManifest(*modulesManifest, cwd); err != nil {
 		return err
 	}
-	varFileArgs := make([]string, len(*varFiles))
-	for i, f := range *varFiles {
-		varFileArgs[i] = "-var-file=" + f
-	}
+	varArgs := variableArgs(*varFiles)
 
 	// Removing the previous backend record above makes tofu init read any
 	// backend or cloud block afresh without `bazel clean`. -reconfigure is not
-	// passed because tofu rejects it when a cloud block is present. -var-file
-	// flags are passed because backend and cloud blocks may reference
-	// variables.
-	initArgs := append([]string{"init", "-input=false", "-get=false", "-plugin-dir=" + *pluginDir}, varFileArgs...)
+	// passed because tofu rejects it when a cloud block is present. The
+	// variable flags are passed because backend and cloud blocks may
+	// reference variables.
+	initArgs := append([]string{"init", "-input=false", "-get=false", "-plugin-dir=" + *pluginDir}, varArgs...)
 	if err := runTofu(env, cwd, initArgs...); err != nil {
 		if *lockFile != "" {
 			log.Print("if the provider versions in required_providers changed, run `bazel run @tf_providers//:pin` to update the lock file.")
@@ -230,20 +234,20 @@ func run() error {
 
 	switch *command {
 	case "plan":
-		args := append([]string{"plan", "-input=false", "-out=" + planFile}, varFileArgs...)
+		args := append([]string{"plan", "-input=false", "-out=" + planFile}, varArgs...)
 		args = append(args, extraArgs...)
 		if err := runTofu(env, cwd, args...); err != nil {
 			return fmt.Errorf("tofu plan: %w", err)
 		}
 		fmt.Printf("rules_tofu: plan saved to %s\n", planFile)
 	case "apply":
-		applyArgs := append([]string{"apply", "-input=false"}, varFileArgs...)
+		applyArgs := append([]string{"apply", "-input=false"}, varArgs...)
 		applyArgs = append(applyArgs, extraArgs...)
 		if err := runTofu(env, cwd, applyArgs...); err != nil {
 			return fmt.Errorf("tofu apply: %w", err)
 		}
 	case "destroy":
-		destroyArgs := append([]string{"destroy", "-input=false"}, varFileArgs...)
+		destroyArgs := append([]string{"destroy", "-input=false"}, varArgs...)
 		destroyArgs = append(destroyArgs, extraArgs...)
 		if err := runTofu(env, cwd, destroyArgs...); err != nil {
 			return fmt.Errorf("tofu destroy: %w", err)
@@ -256,6 +260,20 @@ func run() error {
 func hasContent(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.Mode().IsRegular() && info.Size() > 0
+}
+
+// variableArgs returns -var=<v> for each --var flag followed by -var-file=<f>
+// for each path in files. Callers pass files after resolving --var-file paths
+// for tofu's working directory.
+func variableArgs(files []string) []string {
+	args := make([]string, 0, len(*vars)+len(files))
+	for _, v := range *vars {
+		args = append(args, "-var="+v)
+	}
+	for _, f := range files {
+		args = append(args, "-var-file="+f)
+	}
+	return args
 }
 
 // varFilePtrs returns a pointer to each --var-file value.

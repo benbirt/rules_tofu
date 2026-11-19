@@ -14,7 +14,7 @@ the same output directory, never from the checkout or
 
 load("//toolchain:toolchain.bzl", "TOOLCHAIN_TYPE")
 load(":providers.bzl", "TfDeployInfo")
-load(":work_tree.bzl", "runfiles_path")
+load(":work_tree.bzl", "runfiles_path", "shell_quote", "var_flags")
 
 _RUNNER_BIN_LABEL = "//tf/private/cmd/runner:runner"
 
@@ -36,21 +36,25 @@ def _tf_runner_impl(ctx):
     work_tree_root = "{}/{}.work".format(package_rel, ctx.attr.deploy.label.name)
     plugin_tree_root = "{}/{}.plugins".format(package_rel, ctx.attr.deploy.label.name)
 
-    var_file_flags = "".join([
-        '    --var-file="$R/{root}/{p}" \\\n'.format(root = work_tree_root, p = p)
-        for p in deploy.var_file_relpaths
-    ])
-
     # Emitted as a bare flag only when the deploy opts in: Go's flag package
     # reads a valueless boolean flag as true, and omitting the line entirely
     # leaves the runner's own `false` default in place.
-    ephemeral_state_flag = ""
+    flag_lines = ""
     if deploy.allow_ephemeral_state:
-        ephemeral_state_flag = "    --allow-ephemeral-state \\\n"
-
-    lock_flag = ""
+        flag_lines += "    --allow-ephemeral-state \\\n"
     if deploy.lock:
-        lock_flag = '    --lock-file="$R/{}" \\\n'.format(runfiles_path(workspace_name, deploy.lock))
+        flag_lines += "    --lock-file=\"$R\"/{} \\\n".format(shell_quote(runfiles_path(workspace_name, deploy.lock)))
+
+    # Quote each flag as a single shell word so spaces, quotes, `$` and
+    # newlines in `vars` values reach the runner intact.
+    flag_lines += "".join([
+        "    {} \\\n".format(shell_quote(flag))
+        for flag in var_flags(ctx, deploy.vars)
+    ])
+    flag_lines += "".join([
+        "    --var-file=\"$R\"/{} \\\n".format(shell_quote(work_tree_root + "/" + p))
+        for p in deploy.var_file_relpaths
+    ])
 
     out = ctx.actions.declare_file(ctx.label.name + ".sh")
 
@@ -87,29 +91,27 @@ if [[ ! -d "$R" ]]; then
     echo "rules_tofu: no runfiles tree at $R: run this launcher where Bazel built it (bazel run, or its path under bazel-bin), not a copy of or a link to it" >&2
     exit 1
 fi
-exec "$R/{runner}" \\
-    --tofu="$R/{tofu}" \\
-    --work-tree="$R/{work_tree}" \\
-    --package-dir="{pkg}" \\
-    --plugin-dir="$R/{plugin_tree}" \\
-    --modules-manifest="$R/{modules_manifest}" \\
-    --state-dir="$D/{state_dir_name}" \\
-    --output-root="$D/{output_root_rel}" \\
-    --command="{command}" \\
-{ephemeral_state_flag}{lock_flag}{var_file_flags}    -- "$@"
+exec "$R"/{runner} \\
+    --tofu="$R"/{tofu} \\
+    --work-tree="$R"/{work_tree} \\
+    --package-dir={pkg} \\
+    --plugin-dir="$R"/{plugin_tree} \\
+    --modules-manifest="$R"/{modules_manifest} \\
+    --state-dir="$D"/{state_dir_name} \\
+    --output-root="$D"/{output_root_rel} \\
+    --command={command} \\
+{flag_lines}    -- "$@"
 """.format(
-            runner = runner_rel,
-            tofu = tofu_rel,
-            work_tree = work_tree_root,
-            plugin_tree = plugin_tree_root,
-            modules_manifest = runfiles_path(workspace_name, deploy.modules_manifest),
-            pkg = deploy.package_dir,
-            state_dir_name = ctx.attr.deploy.label.name + ".rules_tofu-state",
-            output_root_rel = output_root_rel,
-            command = ctx.attr.command,
-            ephemeral_state_flag = ephemeral_state_flag,
-            lock_flag = lock_flag,
-            var_file_flags = var_file_flags,
+            runner = shell_quote(runner_rel),
+            tofu = shell_quote(tofu_rel),
+            work_tree = shell_quote(work_tree_root),
+            plugin_tree = shell_quote(plugin_tree_root),
+            modules_manifest = shell_quote(runfiles_path(workspace_name, deploy.modules_manifest)),
+            pkg = shell_quote(deploy.package_dir),
+            state_dir_name = shell_quote(ctx.attr.deploy.label.name + ".rules_tofu-state"),
+            output_root_rel = shell_quote(output_root_rel),
+            command = shell_quote(ctx.attr.command),
+            flag_lines = flag_lines,
         ),
     )
 

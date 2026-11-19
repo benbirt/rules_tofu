@@ -13,8 +13,8 @@ import (
 // runValidate implements --command=validate for the TofuValidate build action
 // of tf_library, tf_deploy and tf_test. It stages the work tree in a temporary
 // directory removed on exit (see stage), runs `tofu init` and `tofu validate`
-// there, and writes --stamp. --var-file flags and extraArgs are passed to
-// `tofu validate` for issue #150; no rule passes them yet.
+// there, and writes --stamp. Both commands receive the -var and -var-file
+// flags. `tofu validate` also receives extraArgs.
 func runValidate(extraArgs []string) error {
 	if *stamp == "" {
 		return errors.New("--stamp is required")
@@ -57,9 +57,7 @@ func runValidate(extraArgs []string) error {
 	}
 
 	args := append([]string{"validate"}, s.dirArgs...)
-	for _, f := range *varFiles {
-		args = append(args, "-var-file="+f)
-	}
+	args = append(args, s.varArgs...)
 	args = append(args, extraArgs...)
 	if err := runTofu(s.env, s.cwd, args...); err != nil {
 		// For an empty root module, `tofu init` installs no providers

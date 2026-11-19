@@ -1,0 +1,33 @@
+load("@rules_tofu//tf:defs.bzl", "tf_deploy", "tf_test")
+
+# Each `vars` entry reaches tofu as `-var=<name>=<value>`. main.tf checks that
+# OpenTofu parses each value according to the variable's declared type. The
+# backend block reads `state_dir`, which requires passing `vars` to `tofu init`.
+# run_directory_test.sh overrides `who` and `where` with flags after `--`.
+tf_deploy(
+    name = "deploy",
+    srcs = ["main.tf"],
+    allow_ephemeral_state = True,
+    var_files = ["deploy.tfvars"],
+    vars = {
+        "anything": "{ n = 3 }",
+        "size": "3",
+        "enabled": "true",
+        "state_dir": "state dir",
+        "tags": "{ \"a key\" = \"v=1\", plain = \"it's\" }",
+        "text": "it's \"quoted\", a=b, $HOME, `id` and ${braces}\nand a second line",
+        "untyped": "3",
+        "who": "vars",
+        "zones": "[\"a\", \"b c\"]",
+    },
+)
+
+# A tf_test's `var_files` follow the deploy's `vars` and `var_files` on the
+# tofu command line. `tests/test.tfvars` overrides `who` from `vars` and
+# `where` from `deploy.tfvars`.
+tf_test(
+    name = "deploy_test",
+    srcs = ["tests/vars.tftest.hcl"],
+    module = ":deploy",
+    var_files = ["tests/test.tfvars"],
+)

@@ -70,8 +70,8 @@ func syncRunDir(workTree, runRoot, cwd string) error {
 	if err := linkTree(workTree, runRoot); err != nil {
 		return fmt.Errorf("populate the run directory %s: %w", runRoot, err)
 	}
-	// The root module's directory holds at least the generated variables
-	// file, so it exists by now; make sure, for tofu's sake.
+	// A deploy's root module holds at least one configuration file, so cwd
+	// exists unless runner was invoked directly on an empty directory.
 	return os.MkdirAll(cwd, 0o755)
 }
 
