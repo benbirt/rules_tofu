@@ -238,15 +238,8 @@ func requirements(files []string) ([]tfconfig.Requirement, error) {
 	if err != nil {
 		return nil, err
 	}
-	var effective []tfconfig.Declared
-	for _, d := range declared {
-		if d.Override {
-			effective = slices.DeleteFunc(effective, func(e tfconfig.Declared) bool { return e.Name == d.Name })
-		}
-		effective = append(effective, d)
-	}
 	versions := map[string][]string{}
-	for _, d := range effective {
+	for _, d := range tfconfig.ApplyOverrides(declared) {
 		if _, ok := versions[d.Source]; !ok {
 			versions[d.Source] = nil
 		}

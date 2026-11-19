@@ -6,12 +6,10 @@ load("@rules_tofu//tf:defs.bzl", "tf_deploy", "tf_library")
 tf_library(
     name = "lib",
     srcs = ["main.tf"],
-    fmt_test = False,
 )
 
 tf_deploy(
     name = "dup",
-    fmt_test = False,
     var_files = ["extra.tfvars.json"],
     vars = {"foo": "from-vars"},
     deps = [":lib"],
@@ -20,7 +18,6 @@ tf_deploy(
 # Same check but using a standard HCL .tfvars file instead of JSON.
 tf_deploy(
     name = "dup_hcl",
-    fmt_test = False,
     var_files = ["extra.tfvars"],
     vars = {"foo": "from-vars"},
     deps = [":lib"],

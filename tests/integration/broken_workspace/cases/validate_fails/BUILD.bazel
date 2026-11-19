@@ -6,7 +6,6 @@ load("@rules_tofu//tf:defs.bzl", "tf_deploy", "tf_library")
 tf_library(
     name = "bad",
     srcs = ["main.tf"],
-    fmt_test = False,
 )
 
 # Same broken root module on a deploy: building or running a launcher fails in
@@ -15,5 +14,4 @@ tf_deploy(
     name = "bad_deploy",
     srcs = ["main.tf"],
     allow_ephemeral_state = True,
-    fmt_test = False,
 )

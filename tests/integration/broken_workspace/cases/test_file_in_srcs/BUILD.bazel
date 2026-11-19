@@ -8,5 +8,4 @@ tf_library(
         "main.tf",
         "main.tftest.hcl",
     ],
-    fmt_test = False,
 )

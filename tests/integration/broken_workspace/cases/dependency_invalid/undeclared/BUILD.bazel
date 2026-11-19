@@ -7,5 +7,4 @@ package(default_visibility = ["//cases/dependency_invalid:__pkg__"])
 tf_library(
     name = "undeclared",
     srcs = ["main.tf"],
-    fmt_test = False,
 )

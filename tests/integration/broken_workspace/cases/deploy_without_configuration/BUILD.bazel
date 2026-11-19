@@ -9,7 +9,6 @@ load("@rules_tofu//tf:defs.bzl", "tf_deploy")
 tf_deploy(
     name = "deps_only",
     allow_ephemeral_state = True,
-    fmt_test = False,
     deps = ["//cases/deploy_without_configuration/lib"],
 )
 
@@ -18,5 +17,4 @@ tf_deploy(
     name = "subdirectory_only",
     srcs = ["stack/main.tf"],
     allow_ephemeral_state = True,
-    fmt_test = False,
 )

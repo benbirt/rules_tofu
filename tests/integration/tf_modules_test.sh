@@ -25,17 +25,19 @@
 #        shared/.hidden.tofu) are data, which tofu passes over.
 #      - An uninitialised git submodule entry at vendor/shared is unused and
 #        not fetched (issue #94).
+#      - plain holds only main.tf, so its library's data glob matches nothing
+#        (issue #164).
 #   2. `@tf_providers//:pin` writes the initial .terraform.lock.hcl. Nothing in
 #      the main repository requires a provider: the lock records hashicorp/null
 #      (from the git module) and hashicorp/time (from //vpc/peering), and omits
 #      hashicorp/random, which is used only under examples/. //app then
 #      plans offline across the git module (which calls a registry module
 #      and requires a provider only the module names), a submodule under
-#      modules/, one outside modules/ via //<subdir>, the archive, and the
-#      registry module directly. Checks the fetched network repository: the
-#      file symlink and the files named "files" and "module" remain, while
-#      .bazelignore, vpc/examples/BUILD.bazel and all other symlinks were
-#      removed.
+#      modules/, one outside modules/ via //<subdir>, the configuration-only
+#      module, the archive, and the registry module directly. Checks the
+#      fetched network repository: the file symlink and the files named "files"
+#      and "module" remain, while .bazelignore, vpc/examples/BUILD.bazel and
+#      all other symlinks were removed.
 #   3. Removing `subdirs` from the network module's tag fails
 #      `bazel build //app` naming the attribute: the library leaves out the
 #      configuration of a directory outside modules/ that the module never
@@ -177,7 +179,7 @@ grep -q 'provider "registry.opentofu.org/hashicorp/time"' .terraform.lock.hcl ||
 if grep -q 'hashicorp/random' .terraform.lock.hcl; then
   fail "the lock covers hashicorp/random, which only the git module's examples require"
 fi
-plan "app-v1 10.0.0.0/24 www.example.com direct hub-peered"
+plan "app-v1 10.0.0.0/24 www.example.com direct hub-peered only-plain"
 network_repo="$(find "$(bazel info output_base)/external" -maxdepth 1 -name '*tf_modules_network')"
 [[ -d "${network_repo}" ]] || fail "can't find the network module's repository: '${network_repo}'"
 [[ -L "${network_repo}/vpc/modules/subnet/outputs.tf" ]] || fail "the symlink to a file of the module was removed"

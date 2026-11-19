@@ -1,0 +1,33 @@
+load("@rules_tofu//tf:defs.bzl", "tf_deploy", "tf_library", "tf_test")
+
+# Library whose srcs span subdirectories, as in a module with submodules.
+tf_library(
+    name = "lib",
+    srcs = glob([
+        "**/*.tf",
+        "**/*.tofu",
+    ]),
+    visibility = ["//empty:__pkg__"],
+)
+
+# Test files belong in tf_test rather than tf_library.srcs. `bazel build //...`
+# validates them here without running `bazel test` on this target.
+tf_test(
+    name = "tests",
+    srcs = glob(["tests/*.tftest.hcl"]),
+    module = ":lib",
+)
+
+# Library and deploy with no srcs of their own. :no_srcs_deploy builds because
+# tf_deploy requires a configuration file in its package directory (issue #119),
+# and :lib supplies one here through :no_srcs_lib.
+tf_library(
+    name = "no_srcs_lib",
+    deps = [":lib"],
+)
+
+tf_deploy(
+    name = "no_srcs_deploy",
+    allow_ephemeral_state = True,
+    deps = [":no_srcs_lib"],
+)

@@ -7,20 +7,17 @@ tf_library(
     name = "lib",
     srcs = ["main.tf"],
     data = ["sub/main.tf"],
-    fmt_test = False,
 )
 
 tf_library(
     name = "root",
     srcs = ["main.tf"],
-    fmt_test = False,
     deps = [":sub"],
 )
 
 tf_library(
     name = "sub",
     srcs = ["sub/main.tf"],
-    fmt_test = False,
 )
 
 # A test's srcs are test files, so the error must not send the file there.
@@ -28,6 +25,5 @@ tf_test(
     name = "test",
     srcs = ["main.tftest.hcl"],
     data = ["fixture/main.tofu.json"],
-    fmt_test = False,
     module = ":root",
 )

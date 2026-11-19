@@ -1,0 +1,9 @@
+load("@rules_tofu//tf:defs.bzl", "tf_library")
+
+# Every file in srcs is in a subdirectory, leaving the package directory itself
+# without configuration. Only tf_library allows this; tf_deploy requires a
+# configuration file in its own package directory.
+tf_library(
+    name = "lib",
+    srcs = ["vpc/main.tf"],
+)

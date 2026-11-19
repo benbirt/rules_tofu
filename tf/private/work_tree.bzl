@@ -85,8 +85,8 @@ def check_no_config_in_data(ctx, files, srcs_take_configuration = True):
     """Fail if any of `files`, a rule's data, is a configuration file.
 
     `data` holds what `file()` and `templatefile()` read. A configuration
-    file there would be code that nothing checks: only `srcs` are held to the
-    rule's `providers` and `deps`, and formatted. tofu passes over a file
+    file there would be code that nothing checks: only `srcs` are checked
+    against the rule's `providers` and `deps`. `tofu` passes over a file
     whose name starts with a dot, so such a file is data whatever its
     extension.
 
@@ -119,6 +119,10 @@ def runfiles_path(workspace_name, f):
         return sp[3:]
     return workspace_name + "/" + sp
 
+def shell_quote(s):
+    """Return `s` single-quoted as one shell word for generated scripts."""
+    return "'" + s.replace("'", "'\\''") + "'"
+
 def check_has_configuration(ctx, entries):
     """Fail a deploy whose root module holds no configuration file.
 
@@ -132,6 +136,7 @@ def check_has_configuration(ctx, entries):
     root = package_dir(ctx.label)
     for entry in entries:
         directory, _, name = entry.path.rpartition("/")
+
         # tofu passes over a file whose name starts with a dot.
         if directory == root and name.endswith(_CONFIG_EXTS) and not name.startswith("."):
             return
@@ -178,6 +183,10 @@ def materialize(ctx, entries, tfvars_content = None, tfvars_dir = None):
     and symlinks it to `file`. If `tfvars_content` is non-None, also writes
     `rules_tofu.auto.tfvars.json` in `tfvars_dir` under `<name>.work/`.
 
+    Fails if any entry in any directory is named `.terraform.lock.hcl`, if two
+    distinct files share a work-tree path, or if an entry collides with the
+    generated `rules_tofu.auto.tfvars.json`.
+
     Args:
       ctx: rule ctx.
       entries: list[struct(path, file)] of work-tree paths (`work_tree_path`) and Files.
@@ -196,6 +205,14 @@ def materialize(ctx, entries, tfvars_content = None, tfvars_dir = None):
     seen = {}
     for entry in entries:
         path = entry.path
+        if path.rpartition("/")[2] == ".terraform.lock.hcl":
+            fail(("`{}`: `{}` is an OpenTofu provider lock file, which `srcs` and `data` cannot " +
+                  "include because `rules_tofu` manages the provider lock itself. Remove or exclude " +
+                  "it from `srcs` and `data`, and pass the workspace's lock to " +
+                  "`tf_providers.from_lock` in `MODULE.bazel` (README, \"Restrictions\").").format(
+                ctx.label,
+                entry.file.short_path,
+            ))
         if path in seen:
             other = seen[path]
             if other != entry.file:
@@ -378,17 +395,16 @@ def strict_deps(providers, infos):
         dirs = [d for info in infos for d in info.dirs],
     )
 
-def modules_manifest(ctx, work_tree_outputs, infos, providers_depset, strict, srcs, data, root = None, test_dir = None, own = None):
+def modules_manifest(ctx, work_tree_outputs, infos, strict, srcs, data, root = None, test_dir = None, own = None):
     """Emit the action writing this rule's `.terraform/modules/modules.json`.
 
     See //tf/private/cmd/modules: every module call from the root module down
     is recorded, local ones by their directory in the work tree and others by
     the dep whose `module_source` they name, so `tofu init -get=false` finds
-    them all installed. The validate action and the runner copy the manifest
-    into place. The action also fails when a module requires a provider that
-    `providers_depset` lacks, naming the label to add. It also fails when
-    `srcs` use a provider or module absent from `strict`, other than `own`, or
-    call a directory that holds no files from `srcs`, `data` or `strict`.
+    them all installed. The runner copies the manifest into place for
+    validation, tests and deploys. The action also fails when `srcs` use a
+    provider or module absent from `strict`, other than `own`, or call a
+    directory that holds no files from `srcs`, `data` or `strict`.
 
     Args:
       ctx: rule ctx. Must declare `_modules_bin` (cfg = "exec") on the rule.
@@ -398,8 +414,6 @@ def modules_manifest(ctx, work_tree_outputs, infos, providers_depset, strict, sr
           module under test of a `tf_test` comes first. Each entry's
           `modules_manifest` is an unused input of this action so upstream
           manifest checks run first (issue #143).
-      providers_depset: depset[TfProviderInfo], the providers in the rule's
-          plugin tree.
       strict: direct dependencies allowed by strict-deps checks (`strict_deps`).
       srcs: list[File], the rule's `srcs`.
       data: list[File], the rule's `data`, which holds no configuration.
@@ -449,10 +463,6 @@ def modules_manifest(ctx, work_tree_outputs, infos, providers_depset, strict, sr
     args.add("--root", root if root != None else package_dir(ctx.label))
     args.add("--modules", listing)
     args.add("--label", display_label(ctx))
-    args.add_all(
-        sorted({p.address: None for p in providers_depset.to_list()}.keys()),
-        before_each = "--provider",
-    )
     args.add_all(sorted({p: None for p in strict.providers}.keys()), before_each = "--direct-provider")
     if test_dir != None:
         args.add("--test-dir", test_dir or ".")

@@ -10,14 +10,12 @@ tf_library(
     name = "library_tfvars",
     srcs = ["main.tf"],
     data = ["terraform.tfvars"],
-    fmt_test = False,
 )
 
 tf_library(
     name = "library_auto_tfvars",
     srcs = ["main.tf"],
     data = ["extra.auto.tfvars"],
-    fmt_test = False,
 )
 
 # In a subdirectory, which would be a root module's only if something made
@@ -26,19 +24,16 @@ tf_deploy(
     name = "deploy_auto_tfvars_json",
     srcs = ["main.tf"],
     data = ["env/prod.auto.tfvars.json"],
-    fmt_test = False,
 )
 
 tf_library(
     name = "lib",
     srcs = ["main.tf"],
-    fmt_test = False,
 )
 
 tf_test(
     name = "test_tfvars_json",
     srcs = ["main.tftest.hcl"],
     data = ["terraform.tfvars.json"],
-    fmt_test = False,
     module = ":lib",
 )

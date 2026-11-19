@@ -9,7 +9,7 @@
 
 Bazel rules for [OpenTofu](https://opentofu.org/) and Terraform-compatible
 configuration. `bazel build` runs `tofu init` and `tofu validate` offline as a
-cached action; `bazel test` checks formatting and runs `tofu test`; `bazel run`
+cached action; `bazel test` runs `tofu test`; `bazel run`
 plans, applies and destroys. Bazel downloads and pins the `tofu` binary,
 provider plugins and external modules by digest or commit, so `tofu init` never
 contacts the network.
@@ -102,7 +102,6 @@ A reusable bundle of configuration files with no variable values and no `.plan`,
 | `providers` | Providers required by `srcs`, as `@tf_providers//<namespace>/<name>`. See [Strict dependencies](#strict-dependencies). |
 | `module_source` | Address by which HCL `module` blocks call this library when it lives in another Bazel repository. See [Modules](#modules). |
 | `module_version` | Version checked against callers' `version` constraints on a registry `module_source`. Defaults to the version of the Bazel module that holds the library when `module_source` is set; setting it without `module_source` is an error. |
-| `fmt_test` | Emit `:name.fmt_check` when `srcs` is non-empty. Defaults to `True`. |
 
 ### `tf_deploy`
 
@@ -121,7 +120,6 @@ configuration file in the deploy's package, `bazel build` fails.
 | `data` | Files placed in the work tree for `file()` and `templatefile()`. |
 | `providers` | Providers required by `srcs`, as `@tf_providers//<namespace>/<name>`. Providers from `deps` are also installed. See [Strict dependencies](#strict-dependencies). |
 | `allow_ephemeral_state` | Permit `apply` and `destroy` when state lives under `bazel-bin`. Defaults to `False`; see [State and backends](#state-and-backends). |
-| `fmt_test` | Emit `:name.fmt_check` when `srcs` is non-empty. Defaults to `True`. |
 
 ### `tf_test`
 
@@ -137,7 +135,6 @@ Runs `tofu test` over a module's test files as a Bazel test. See
 | `var_files` | `.tfvars` or `.tfvars.json` files passed via `-var-file`. |
 | `data` | Files placed in the work tree. |
 | `allow_network` | Allow network access during tests instead of blocking it in the sandbox. Defaults to `False`. |
-| `fmt_test` | Emit `:name.fmt_check`. Defaults to `True`. |
 
 ### Generated targets
 
@@ -145,8 +142,6 @@ Runs `tofu test` over a module's test files as a Bazel test. See
 |--------|------|---------|-----------|
 | `:name` | `tf_library`, `tf_deploy` | `bazel build` | Materialises the work tree and runs `tofu init -backend=false && tofu validate`. |
 | `:name` | `tf_test` | `bazel test` | Runs `tofu test` offline; `bazel build` validates the module and test files. |
-| `:name.fmt_check` | all | `bazel test` | Checks `tofu fmt` formatting of `.tf`, `.tofu`, `.tftest.hcl` and `.tofutest.hcl` files in `srcs`, including generated and external files. |
-| `:name.fmt` | all | `bazel run` | Reformats main-repository `.tf`, `.tofu`, `.tftest.hcl` and `.tofutest.hcl` source files in `srcs` in place. |
 | `:name.plan` | `tf_deploy` | `bazel run` | Runs `tofu plan`, saving the plan file to `<state-dir>/tfplan`. |
 | `:name.apply` | `tf_deploy` | `bazel run` | Runs a fresh `tofu apply` without reading `tfplan`. Prompts unless `-- -auto-approve` is passed. |
 | `:name.destroy` | `tf_deploy` | `bazel run` | Runs `tofu destroy`. Prompts unless `-- -auto-approve` is passed. |
@@ -156,10 +151,6 @@ directly from any working directory. It locates its runfiles and state directory
 relative to its own path, so do not copy or symlink the script elsewhere. Extra
 arguments after `--`, or passed directly to the `.sh` script, are forwarded to
 `tofu` in the deploy's shared run directory. See [How it works](#how-it-works).
-
-`:name.fmt` and `:name.fmt_check` are emitted when `srcs` is non-empty. They act
-only on the files in `srcs`, including those in subdirectories; other files in
-the package are left alone.
 
 ### Strict dependencies
 
@@ -560,26 +551,16 @@ Variable keys must not overlap across `vars` and `var_files` on a `tf_deploy`;
 
 ## State and backends
 
-A deploy managing real infrastructure should declare a remote `backend "..." {}`
-or `cloud {}` block in `srcs`. The runner never rewrites backend blocks; `tofu`
-resolves them from the deploy's run directory,
-`bazel-bin/<pkg>/<name>.rules_tofu-state/work/<pkg>`.
+Launchers run `tofu` in the deploy's run directory,
+`bazel-bin/<pkg>/<name>.rules_tofu-state/work/<pkg>`. `apply` and `destroy`
+refuse to run without `allow_ephemeral_state = True` in two cases:
 
-State lands inside `bazel-bin` in two cases:
+- No `backend` or `cloud` block, which writes state to
+  `bazel-bin/<pkg>/<name>.rules_tofu-state/work/<pkg>/terraform.tfstate`.
+- `backend "local"`, unless both `path` and `workspace_dir` resolve to absolute
+  paths outside `bazel-out` after following symlinks.
 
-- No `backend` or `cloud` block: state is stored at
-  `bazel-bin/<pkg>/<name>.rules_tofu-state/terraform.tfstate`.
-- `backend "local"` without literal absolute paths outside `bazel-out` for both
-  `path` and `workspace_dir`. Those attributes default to `terraform.tfstate`
-  and `terraform.tfstate.d` in the run directory. Even with paths outside
-  `bazel-out`, local backend state remains single-machine.
-
-State under `bazel-bin` is machine-local, forks across build configurations and
-is deleted by `bazel clean`, so `apply` and `destroy` refuse to run against it
-by default. `plan` is never gated. Set `allow_ephemeral_state = True` only for
-demos, throwaway sandboxes or state-bucket bootstrap. After bootstrapping a
-state bucket, add the remote `backend` block, run `tofu init -migrate-state`,
-and remove `allow_ephemeral_state`.
+`plan` is never gated.
 
 ## Tests
 
@@ -638,6 +619,34 @@ run "plans_a_subnet_per_name" {
   block's destroy fails, `tofu test` writes `errored_test.tfstate` and exits 0;
   `tf_test` fails the test and copies that file into undeclared outputs. Pass
   extra flags with `--test_arg=-verbose`.
+
+## Formatting
+
+`rules_tofu` generates no format targets. Run the pinned binary via
+[`@rules_tofu//tofu`](#running-tofu) at the workspace root:
+
+```sh
+bazel run @rules_tofu//tofu -- fmt -recursive .
+bazel run @rules_tofu//tofu -- fmt -check -diff -recursive .
+```
+
+`-recursive` does not follow directory symlinks, so Bazel's `bazel-*` links are
+skipped.
+
+With [`rules_lint`](https://github.com/bazel-contrib/rules_lint), pass
+`@rules_tofu//tofu` as the `terraform` tool:
+
+```python
+# BUILD.bazel
+load("@aspect_rules_lint//format:defs.bzl", "format_multirun")
+
+format_multirun(
+    name = "format",
+    terraform = "@rules_tofu//tofu",
+)
+```
+
+This repository's [`tools/BUILD.bazel`](tools/BUILD.bazel) is a working example.
 
 ## The `tofu` binary
 
@@ -735,10 +744,8 @@ consistent across runs until `bazel clean`. If a leftover regular file in the
 state tree collides with a configuration path, the runner fails rather than
 overwriting it. Each run installs `<name>.modules.json` at
 `.terraform/modules/modules.json`, pins `TF_DATA_DIR` to `.terraform`, and
-unsets `TF_PLUGIN_CACHE_DIR`. It then runs
-`tofu init -input=false -get=false -reconfigure -plugin-dir=...` to re-read the
-backend block without migrating state, followed by the command with `-var-file`
-flags.
+unsets `TF_PLUGIN_CACHE_DIR`. It then runs `tofu init` followed by the `tofu`
+command.
 
 `tf_test` validates `module` and `srcs` during `bazel build`. During
 `bazel test`, it copies the work tree into `$TEST_TMPDIR`, installs
@@ -754,8 +761,8 @@ subdirectory of `module`'s package.
   `tf_providers.from_lock`.
 - `rules_tofu.auto.tfvars.json` is reserved in a `tf_deploy` package for `vars`.
 - `data` rejects configuration files (`.tf`, `.tf.json`, `.tofu` and
-  `.tofu.json`), except dot-prefixed ones; list them in `srcs`, which are
-  checked and formatted.
+  `.tofu.json`), except dot-prefixed ones; list them in `srcs`, the only files
+  checked against `providers` and `deps`.
 - `data` rejects `terraform.tfvars`, `terraform.tfvars.json`, `*.auto.tfvars`
   and `*.auto.tfvars.json` in any directory because OpenTofu auto-loads them
   outside the duplicate-key check; pass variable files via `var_files`.

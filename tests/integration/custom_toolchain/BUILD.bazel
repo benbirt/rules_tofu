@@ -20,5 +20,4 @@ toolchain(
 tf_library(
     name = "lib",
     srcs = ["main.tf"],
-    fmt_test = False,
 )

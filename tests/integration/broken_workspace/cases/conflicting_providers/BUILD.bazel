@@ -26,7 +26,6 @@ tf_provider(
 tf_library(
     name = "lib",
     srcs = ["main.tf"],
-    fmt_test = False,
     providers = [
         ":prov1",
         ":prov2",
@@ -47,7 +46,6 @@ tf_provider(
 tf_library(
     name = "platforms",
     srcs = ["main.tf"],
-    fmt_test = False,
     providers = [
         ":prov1",
         ":prov1_arm64",

@@ -27,12 +27,12 @@ bazel test //...
 | `tf/providers/` | `tf_providers` module extension |
 | `tf/modules/` | `tf_modules` module extension |
 | `tf/private/` | Rule implementations and work-tree materialisation |
-| `tf/private/cmd/{runner,dupcheck,pin,lockjson,modscan,modules}/` | Go binaries: runtime `tofu` wrapper, duplicate-variable check, `@tf_providers//:pin`, lock reader, module scanner and module manifest writer |
+| `tf/private/cmd/{runner,dupcheck,pin,lockjson,modscan,modules}/` | Go binaries: build-time validation and runtime `tofu` wrapper, duplicate-variable check, `@tf_providers//:pin`, lock reader, module scanner and module manifest writer |
 | `tf/private/cmd/internal/{flags,tfconfig}/` | Shared Go packages: repeatable CLI flags and HCL / module-source parsing |
 | `toolchain/` | OpenTofu binary download and toolchain registration |
 | `tofu/` | `@rules_tofu//tofu`, the toolchain's runnable `tofu` (rule in `tf/private/tofu_binary.bzl`) |
 | `docs/` | `starlark_doc_extract` target per public `.bzl` file, shipped as the BCR `docs_url` archive |
-| `tools/` | Maintainer tools (excluded from releases): `update_versions` pins an OpenTofu release |
+| `tools/` | Maintainer tools (excluded from releases): `update_versions` pins an OpenTofu release; `format` formats the repository |
 | `tests/integration/` | Bazel-in-Bazel integration tests ([`tests/integration/README.md`](tests/integration/README.md)) |
 | `tests/tofu/` | Tests for `//tofu` used as another target's tool |
 | `examples/` | Usage examples |
@@ -44,12 +44,12 @@ bazel test //...
 1. One lock file, owned by the root module. `rules_tofu` reads only the root
    module's `tf_providers.from_lock` `.terraform.lock.hcl`, written by
    `bazel run @tf_providers//:pin`. Do not accept `.terraform.lock.hcl` in
-   `srcs` or `data`, and do not relax the check in `tf/private/init_action.bzl`
-   that fails when one reaches a work tree. Providers on
-   `registry.opentofu.org` are pinned by that lock alone. Root
-   `tf_providers.provider` tags are only for off-registry providers, and tags in
-   dependencies are ignored. Every provider download must be gated on a SHA-256
-   digest: one of the lock file's `zh:` hashes, or the tag's `sha256`.
+   `srcs` or `data`, and do not relax the analysis-time check in `materialize`
+   (`tf/private/work_tree.bzl`) that rejects it in any work-tree directory.
+   Providers on `registry.opentofu.org` are pinned by that lock alone. Root
+   `tf_providers.provider` tags are only for off-registry providers, and tags
+   in dependencies are ignored. Every provider download must be gated on a
+   SHA-256 digest: one of the lock file's `zh:` hashes, or the tag's `sha256`.
 2. Building validates. `bazel build` on any `tf_library`, `tf_deploy` or
    `tf_test` target runs `tofu init -backend=false` and `tofu validate` (with
    the test directory for `tf_test`). Do not bypass or defer this. Every
@@ -70,8 +70,8 @@ bazel test //...
    and `.destroy` scripts find their runfiles tree and state directory relative
    to `$0`, so they work both under `bazel run` and when run directly. Neither
    the launchers nor the runner may read `BUILD_WORKSPACE_DIRECTORY` or the
-   checkout; only `:<name>.fmt` and `@tf_providers//:pin`, which write to the
-   checkout, require `bazel run`. `tofu` runs in
+   checkout; only `@tf_providers//:pin` writes to the checkout and requires
+   `bazel run`. `tofu` runs in
    `<name>.rules_tofu-state/work/<pkg>`, never in runfiles or `<name>.work/`,
    and resolves `backend` blocks itself without runner rewrites.
    `@rules_tofu//tofu` is the only launcher that reads
@@ -99,9 +99,6 @@ bazel test //tests/integration/...
 USE_BAZEL_VERSION=8.5.0 bazel test //tests/integration/...
 git checkout -- MODULE.bazel.lock
 
-# A single target's format check (`bazel test //...` runs them all):
-bazel test //examples/hello:greet_lib.fmt_check
-
 # `tofu test` targets (offline, network blocked):
 bazel test //examples/hello/tests:all
 
@@ -118,17 +115,25 @@ On the pinned Bazel version, CI runs builds, tests and example plans with
 
 ## Formatting and lint
 
-CI's `lint` job runs `gofmt -l .`, `buildifier -mode=check -r .` and
-`buildifier -lint=warn -r .` as separate steps, plus `bazel mod tidy` to check
-that `MODULE.bazel` is unchanged. Locally, `-mode` defaults to `fix`, so one
-`buildifier` invocation both formats Starlark files in place and prints lint
-warnings:
+No `bazel test` target checks formatting. CI's `lint` job runs
+`bazel run //tools:format.check`,
+`bazel run @buildifier_prebuilt//:buildifier -- -lint=warn -r .` and
+`bazel run //tofu -- fmt -check -diff -recursive examples e2e/smoke`, plus
+`bazel mod tidy` to check that `MODULE.bazel` is unchanged. Run locally:
 
 ```sh
-gofmt -w .
+bazel run //tools:format
 bazel run @buildifier_prebuilt//:buildifier -- -lint=warn -r .
+bazel run //tofu -- fmt -recursive examples e2e/smoke
 bazel mod tidy
 ```
+
+`//tools:format` uses `rules_lint` to format git-tracked Go, Starlark, `.tf`
+and `.tfvars` files, including `tests/integration` and nested workspaces. Set
+`rules-lint-ignored` in `.gitattributes` to exclude a file. `rules_lint` 2.9.1
+skips `.tofu`, `.tftest.hcl` and `.tofutest.hcl` files, so the `tofu fmt` step
+is their only check. It names `examples` and `e2e/smoke` to skip
+`tests/integration`, where negative-case fixtures may be malformed on purpose.
 
 When adding a nested Bazel module under `e2e/` or `tests/integration/`:
 
@@ -157,10 +162,10 @@ writes the five platform digests into
 hand.
 
 Test an entry that is not the default with its generated per-version
-integration tests (dots replaced by underscores):
+integration test (dots replaced by underscores):
 
 ```sh
-bazel test //tests/integration:module_dependency_1_12_1_test //tests/integration:fmt_1_12_1_test
+bazel test //tests/integration:module_dependency_1_12_1_test
 ```
 
 With `--default`, the examples, `e2e/smoke` and the remaining integration tests

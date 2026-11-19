@@ -1,7 +1,6 @@
 """The tf_test macro and its underlying rule."""
 
 load("//toolchain:toolchain.bzl", "TOOLCHAIN_TYPE")
-load(":fmt.bzl", _tf_fmt = "tf_fmt", _tf_fmt_check = "tf_fmt_check_test")
 load(":init_action.bzl", _tf_init_validate = "tf_init_validate")
 load(":providers.bzl", "TfDeployInfo", "TfLibraryInfo", "TfProviderInfo")
 load(
@@ -17,8 +16,8 @@ load(
     _own_dirs = "own_dirs",
     _plugin_tree_root = "plugin_tree_root",
     _provider_lock = "provider_lock",
-    _strict_deps = "strict_deps",
     _runfiles_path = "runfiles_path",
+    _strict_deps = "strict_deps",
     _work_tree_path = "work_tree_path",
     _work_tree_root = "work_tree_root",
 )
@@ -133,7 +132,6 @@ def _tf_test_impl(ctx):
         ctx,
         work_tree_outputs,
         infos,
-        providers_depset,
         _strict_deps(direct_providers, infos),
         ctx.files.srcs,
         ctx.files.data,
@@ -281,7 +279,7 @@ _tf_test = rule(
     doc = "Underlying rule for `tf_test`. Use the macro.",
 )
 
-def tf_test(name, srcs, module, deps = None, data = None, providers = None, var_files = None, allow_network = False, fmt_test = True, **kwargs):
+def tf_test(name, srcs, module, deps = None, data = None, providers = None, var_files = None, allow_network = False, **kwargs):
     """Runs `tofu test` over a module's test files as a Bazel test.
 
     Test files are materialised at their workspace-relative paths alongside
@@ -296,18 +294,11 @@ def tf_test(name, srcs, module, deps = None, data = None, providers = None, var_
     that file into undeclared outputs. Pass extra CLI flags via `--test_arg`.
     See [Tests](https://github.com/benbirt/rules_tofu#tests).
 
-    Generated targets:
-      - `:<name>`: `bazel build` validates `module` and `srcs` after `module`
-        and `deps` pass their checks; `bazel test` waits for validation, then
-        copies the work tree into `$TEST_TMPDIR` and runs
-        `tofu init -backend=false` and `tofu test` offline against the vendored
-        providers.
-      - `:<name>.fmt`: `bazel run` target that reformats main-repository
-        `.tftest.hcl` and `.tofutest.hcl` source files in `srcs` in place.
-      - `:<name>.fmt_check`: `bazel test` target, emitted when
-        `fmt_test = True`, that checks formatting of `.tftest.hcl` and
-        `.tofutest.hcl` files in `srcs`, including generated and external
-        files.
+    `:<name>` is the only generated target. `bazel build` validates `module`
+    and `srcs` after `module` and `deps` pass their checks. `bazel test` waits
+    for validation, then copies the work tree into `$TEST_TMPDIR` and runs
+    `tofu init -backend=false` and `tofu test` offline against the vendored
+    providers.
 
     Args:
       name: Target name.
@@ -343,16 +334,9 @@ def tf_test(name, srcs, module, deps = None, data = None, providers = None, var_
           the sandbox while plans and mocked applies run offline. When `True`,
           the target carries `external` and `requires-network` and is never
           cached.
-      fmt_test: Emit `:<name>.fmt_check` when `True`; defaults to `True`.
-      **kwargs: Forwarded to the underlying rules. `visibility` and `testonly`
-          apply to all generated targets; other test attributes such as `tags`,
-          `size` and `timeout` apply to `:<name>`.
+      **kwargs: Attributes forwarded to the underlying test rule, such as
+          `tags`, `size` and `timeout`.
     """
-    common_kwargs = {}
-    for forwarded in ("visibility", "testonly"):
-        if forwarded in kwargs:
-            common_kwargs[forwarded] = kwargs.pop(forwarded)
-
     tags = list(kwargs.pop("tags", []))
     if allow_network:
         tags = tags + ["external", "requires-network"]
@@ -368,13 +352,5 @@ def tf_test(name, srcs, module, deps = None, data = None, providers = None, var_
         providers = providers or [],
         var_files = var_files or [],
         tags = tags,
-        **dict(common_kwargs, **kwargs)
+        **kwargs
     )
-
-    _tf_fmt(name = name + ".fmt", srcs = srcs, **common_kwargs)
-    if fmt_test:
-        _tf_fmt_check(
-            name = name + ".fmt_check",
-            srcs = srcs,
-            **common_kwargs
-        )

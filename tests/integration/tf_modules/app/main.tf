@@ -13,6 +13,11 @@ module "peering" {
   peer   = "hub"
 }
 
+module "plain" {
+  source = "git::file://@FIXTURES@/network.git//plain?ref=v1.0.0"
+  name   = "only"
+}
+
 module "dns" {
   source = "file://@FIXTURES@/dns.tar.gz"
   zone   = "example.com"
@@ -25,5 +30,5 @@ module "label" {
 }
 
 output "summary" {
-  value = "${module.vpc.id} ${module.subnet.cidr} ${module.dns.fqdn} ${module.label.id} ${module.peering.peer}"
+  value = "${module.vpc.id} ${module.subnet.cidr} ${module.dns.fqdn} ${module.label.id} ${module.peering.peer} ${module.plain.name}"
 }

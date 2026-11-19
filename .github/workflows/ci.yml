@@ -169,23 +169,6 @@ jobs:
             done
           done
 
-      # Go sources are formatted by gofmt, which buildifier does not cover.
-      # The version comes from go.mod so there is one source of truth, even
-      # though Bazel builds with the SDK pinned in MODULE.bazel.
-      - name: Set up Go
-        uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-
-      - name: Check Go formatting
-        run: |
-          unformatted=$(gofmt -l .)
-          if [ -n "$unformatted" ]; then
-            echo "::error::Go files are not gofmt-clean. Run 'gofmt -w .' and commit:"
-            echo "$unformatted"
-            exit 1
-          fi
-
       - name: Set up Bazel
         uses: bazel-contrib/setup-bazel@0.19.2
         with:
@@ -195,12 +178,23 @@ jobs:
           repository-cache: |
             - MODULE.bazel
             - MODULE.bazel.lock
+            - toolchain/versions.bzl
 
-      - name: Run buildifier (format check)
-        run: bazel run @buildifier_prebuilt//:buildifier -- -mode=check -r .
+      # Runs gofmt, buildifier and //tofu via rules_lint across every
+      # git-tracked Go, Starlark, .tf and .tfvars file, including e2e/smoke
+      # and tests/integration.
+      - name: Check formatting
+        run: bazel run //tools:format.check
 
       - name: Run buildifier (lint warnings)
         run: bazel run @buildifier_prebuilt//:buildifier -- -lint=warn -r .
+
+      # rules_lint 2.9.1 passes only .tf and .tfvars files to //tofu, so this
+      # step is the only check of .tofu, .tftest.hcl and .tofutest.hcl files.
+      # Passing examples and e2e/smoke excludes tests/integration, where
+      # negative-case fixtures may be malformed on purpose.
+      - name: Check OpenTofu formatting
+        run: bazel run //tofu -- fmt -check -diff -recursive examples e2e/smoke
 
       # `bazel mod tidy` manages use_repo lines (rules_tofu's extensions report
       # their direct deps for it) and normalises MODULE.bazel; it must have nothing
