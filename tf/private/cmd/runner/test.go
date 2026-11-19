@@ -8,8 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-
-	"github.com/benbirt/rules_tofu/tf/private/cmd/internal/tfconfig"
+	"strings"
 )
 
 // runTest implements --command=test: `tofu test` for a tf_test target, run as
@@ -131,7 +130,7 @@ func stage(scratch string) (*staged, error) {
 	// installs no providers there and leaves the lock unpruned, causing
 	// `tofu validate` and `tofu test` to fail against the empty
 	// .terraform/providers directory.
-	s.hasConfig = tfconfig.HasConfig(s.cwd)
+	s.hasConfig = hasConfig(s.cwd)
 	if *lockFile != "" && s.hasConfig {
 		if err := installLockFile(*lockFile, s.cwd); err != nil {
 			return nil, err
@@ -227,4 +226,25 @@ func copyFile(src, dst string) error {
 		mode = 0o755
 	}
 	return os.WriteFile(dst, data, mode)
+}
+
+// hasConfig reports whether dir contains a non-dot .tf, .tf.json, .tofu or
+// .tofu.json entry. It duplicates tfconfig.HasConfig so the runner binary does
+// not link the HCL parser; keep the two aligned.
+func hasConfig(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		for _, ext := range []string{".tf", ".tf.json", ".tofu", ".tofu.json"} {
+			if strings.HasSuffix(e.Name(), ext) {
+				return true
+			}
+		}
+	}
+	return false
 }

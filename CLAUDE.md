@@ -487,8 +487,10 @@ Then `bazel shutdown` so the new startup flags take effect.
 - Reject an empty root in `tf_deploy` at analysis (`check_has_configuration`;
   `deploy_deps_only`, `deploy_subdirectory_only`), because `tofu` validates an
   empty directory and then refuses to plan it.
-- Keep `tfconfig.HasConfig` and `check_has_configuration` aligned on what counts
-  as configuration: regular non-dot files with the four config extensions.
+- Keep `tfconfig.HasConfig`, `hasConfig` in the runner and
+  `check_has_configuration` aligned on what counts as configuration: regular
+  non-dot files with the four config extensions. `hasConfig` duplicates
+  `tfconfig.HasConfig` so `runner` links no HCL parser.
   `tfconfig.Effective` and `EffectiveTests` drop dotfiles for all callers; `pin`
   reads through `Effective`.
 - Reject `TEST_SRC_EXTS` in `tf_library` and `tf_deploy` `srcs`
@@ -581,14 +583,21 @@ Then `bazel shutdown` so the new startup flags take effect.
   wiped by `bazel clean` and forks across build configurations and checkouts,
   so applying against it orphans live infrastructure:
   - Count state as durable only with a remote backend, a `cloud` block, or a
-    `backend "local"` whose `path` and `workspace_dir` are literal absolute
-    paths outside `--output-root` (`bazel-out`), resolving symlinks and
-    allowing a missing tail (`localBackendEphemeral`). No backend block, or any
-    other local one, is ephemeral.
-  - Detect the backend with a read-only filesystem scan of the root module's
-    configuration in the launcher's work tree (`detectBackend`).
-  - Run the check in the Go runner before starting `tofu` or creating
-    `--state-dir`, leave `plan` ungated, and don't weaken it to a warning.
+    `backend "local"` whose `path` and `workspace_dir` are both absolute paths
+    outside `--output-root` (`bazel-out`), resolving symlinks and allowing a
+    missing tail (`localBackendEphemeral`). Null or empty local attributes use
+    OpenTofu's relative defaults and are ephemeral, as is having no `backend`
+    or `cloud` block.
+  - Read the backend from the `.terraform/terraform.tfstate` record written by
+    `tofu init` in the run directory (`recordedBackend`; issue #149), never by
+    parsing configuration in the runner. Missing or empty `backend` metadata
+    means no `backend` or `cloud` block; a `cloud` block has type `"cloud"`.
+    Reading the record uses OpenTofu's own result after merging `_override`
+    files and evaluating variables. Because the format is internal to OpenTofu,
+    `module_dependency_<version>_test` covers it across `KNOWN_VERSIONS`.
+  - Run the check in the Go runner (`checkStateDurable`) after `tofu init` and
+    before `tofu apply` or `tofu destroy`, refuse when the record cannot be
+    parsed, leave `plan` ungated, and don't weaken the refusal to a warning.
 - Run `tofu` for deploys in `<state-dir>/work/<package-dir>` (`rundir.go`), a
   symlink mirror shared by `.plan`, `.apply` and `.destroy` (issues #86, #91):
   - Never run `tofu` in per-target runfiles or the `<name>.work` build output.
@@ -596,14 +605,20 @@ Then `bazel shutdown` so the new startup flags take effect.
     `.destroy` would resolve relative paths to different trees, and
     `<name>.work` is an action input that must never gain `tofu`'s files or a
     `.terraform.lock.hcl`.
-  - On each run, clear symlinks, the old lock and `.terraform/providers`,
-    preserve the rest of `.terraform/` and relative local state, and error
-    rather than overwriting any regular file blocking a config link, which
-    would shadow a configuration file.
-  - Never rewrite a `backend` block or pass `-backend-config`, and omit
-    `-state` flags when a backend block is present. `tofu` owns path and
-    expression resolution, which keeps one behaviour for every backend. There
-    is no run-directory lock (`README.md`, "Restrictions").
+  - On each run, clear symlinks, the old lock, `.terraform/providers` and the
+    backend record `.terraform/terraform.tfstate`, preserve the rest of
+    `.terraform/` and local state, and error rather than overwriting any
+    regular file blocking a config link, which would shadow a configuration
+    file.
+  - Never rewrite a `backend` block or pass `-backend-config`, `-state` or
+    `-state-out`. OpenTofu owns path and expression resolution across all
+    backends; without a `backend` or `cloud` block it writes
+    `terraform.tfstate` in the run directory, so `tofu workspace` works there
+    too. There is no run-directory lock (`README.md`, "Restrictions").
+  - Pass `-var-file` flags to `tofu init` as well as to the command because
+    `backend` and `cloud` blocks may reference variables. `vars` reach
+    `tofu init` via `rules_tofu.auto.tfvars.json`; if issue #150 removes that
+    file, pass `vars` to `tofu init` as `-var`.
 - Keep deploy launchers (`tf/private/runner.bzl`) standalone like a
   `go_binary`, with each `tf_runner` in its deploy's package:
   - Resolve runfiles and state from `$0` with absolute paths so `bazel run` and
@@ -632,9 +647,12 @@ Then `bazel shutdown` so the new startup flags take effect.
   - Pin `TF_DATA_DIR` to `<cwd>/.terraform` so an inherited `TF_DATA_DIR`
     cannot make `tofu init -get=false` miss the module manifest.
   - Strip `TF_PLUGIN_CACHE_DIR` so `tofu` uses only the vendored plugin tree.
-  - Pass `-reconfigure` to `tofu init` on `plan`, `apply` and `destroy` (issue
-    #92) so saved backend state in `.terraform/` cannot block an edited
-    `backend` block until `bazel clean`.
+  - Remove `.terraform/terraform.tfstate` before `tofu init` (`syncRunDir`,
+    `backendRecordPath`; issue #92) so saved backend settings cannot block an
+    edited `backend` block until `bazel clean`. Don't pass `-reconfigure`:
+    `tofu init` rejects `-reconfigure` when a `cloud` block is present, and
+    removing a `backend` block under `-reconfigure` leaves the stale record in
+    place for `recordedBackend` to read.
 - Route all work-tree and plugin-tree materialisation through
   `tf/private/work_tree.bzl` (`materialize`, `materialize_plugin_tree`,
   `work_tree_root`, `plugin_tree_root`) across `library.bzl`, `deploy.bzl` and
