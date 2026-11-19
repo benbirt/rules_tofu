@@ -277,9 +277,8 @@ terraform {
 
 Lock files written by `terraform` against `registry.terraform.io` are rejected
 until regenerated with `pin`. When `required_providers` drifts from the lock,
-`bazel build` fails and points to `pin`. An unpinned provider has no package in
-`@tf_providers`, so a target listing it fails with Bazel's "no such package"
-error; `pin` still runs and locks it.
+`bazel build` fails and points to `pin`. Running `pin` works even while a target
+names a provider not yet in the lock.
 
 #### Keeping the lock up to date
 
@@ -803,36 +802,6 @@ subdirectory of `module`'s package.
   calls enter one, fetching fails and names the submodule. A submodule reached
   only via `file()` or an external `//<subdir>` call is omitted at fetch time
   and fails when read or called.
-
-## Upgrading from 0.5
-
-- Providers on `registry.opentofu.org` are now pinned by `.terraform.lock.hcl`
-  only. In the root module's `MODULE.bazel`, any `tf_providers.provider` tag
-  without `url_template` now fails the build, with or without `sha256`. For each
-  such tag:
-  1. Delete the tag.
-  2. Add `tf_providers.from_lock(lock_file = "//:.terraform.lock.hcl")` to
-     `MODULE.bazel` if absent, and ensure the lock's directory has a
-     `BUILD.bazel` or `BUILD` file.
-  3. To keep the exact version the tag pinned, declare it in a `versions.tf` in
-     a `tf_library`'s `srcs` with the provider in `providers` (see
-     [`examples/lock`](examples/lock)); otherwise `pin` selects the newest
-     version allowed by `required_providers`.
-  4. Run `bazel run @tf_providers//:pin` and commit `.terraform.lock.hcl`.
-  5. Run `bazel mod deps --lockfile_mode=update` and commit any changes to
-     `MODULE.bazel.lock`.
-
-  See [Restrictions](#restrictions) for `from_lock`'s Go SDK floor and `GOPROXY`
-  requirements.
-- In the root module, `tf_providers.provider` tags with `url_template` remain
-  for off-registry providers and require `source`, `version`, `url_template` and
-  `sha256`.
-- `tf_providers.provider` tags in `bazel_dep` modules are now ignored. Lock or
-  tag every provider your dependencies use in the root module; `pin` finds
-  registry ones through external `deps`.
-- `sha256` no longer accepts `linux_386` or `windows_386`; remove those keys.
-- Remove `platform_key` from any custom `opentofu_toolchain`;
-  `TofuInfo.platform_key` has been removed.
 
 ## Contributing
 

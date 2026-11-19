@@ -87,6 +87,7 @@ _CASES = [
     ("malformed_var_file", "broken_workspace", "//cases/malformed_var_file:deploy", "parse:"),
     ("conflicting_providers", "broken_workspace", "//cases/conflicting_providers:lib", "conflicting versions"),
     ("conflicting_provider_platforms", "broken_workspace", "//cases/conflicting_providers:platforms", "for two execution platforms: `linux_amd64` and `linux_arm64`"),
+    ("conflicting_provider_platforms_distinct", "broken_workspace", "//cases/conflicting_providers:platforms_distinct", "for two execution platforms: `linux_amd64` and `linux_arm64` (`registry.opentofu.org/hashicorp/aws` and `registry.opentofu.org/hashicorp/random`)"),
     ("missing_platform", "broken_workspace", "//cases/missing_platform:lib", "Provider `acme/windows-only@1.0.0` has packages only for `windows_amd64`, not for"),
     ("provider_repo_private", "broken_workspace", "//cases/provider_repo_private:lib", "Visibility error"),
     ("stale_lock", "broken_workspace", "//cases/stale_lock:lib", "bazel run @tf_providers//:pin"),

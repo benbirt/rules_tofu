@@ -249,15 +249,17 @@ def materialize(ctx, entries, tfvars_content = None, tfvars_dir = None):
 def materialize_plugin_tree(ctx, providers_depset):
     """Symlink provider packages into this rule's sibling plugin tree.
 
-    Declares outputs under `<name>.plugins/` beside the work tree for each
-    unique `(address, version)`, using OpenTofu's canonical plugin-dir layout
+    Declares outputs under `<name>.plugins/` beside the work tree once per
+    provider `address`, using OpenTofu's canonical plugin-dir layout
     `<host>/<namespace>/<name>/<version>/<os>_<arch>/`: a symlink to every
     file from the unpacked zip so the directory matches the lock's `h1:` hash
     and `tofu init` locates the binary.
 
     Each `TfProviderInfo` carries one platform's package, selected for the
-    execution platform of the target listing it. Fails if two entries for the
-    same address disagree on `version` or `platform`.
+    execution platform of the target listing it, while one plugin tree serves
+    a single `tofu` binary. Fails if any two entries disagree on `platform`,
+    even for different addresses, or if two entries for the same `address`
+    disagree on `version`.
 
     Args:
       ctx: rule ctx.
@@ -269,8 +271,26 @@ def materialize_plugin_tree(ctx, providers_depset):
     plugin_prefix = ctx.label.name + ".plugins"
 
     seen = {}
+    first = None
     outputs = []
     for prov in providers_depset.to_list():
+        # Check against `first` rather than `seen[prov.address]`: each target
+        # resolves `cfg = "exec"` for its own `providers`, so a target and its
+        # `deps` can contribute distinct providers for different platforms.
+        if first == None:
+            first = prov
+        elif first.platform != prov.platform:
+            fail(
+                ("`{label}` receives providers for two execution platforms: `{a}` and `{b}` " +
+                 "(`{addr_a}` and `{addr_b}`). Configure `{label}` and its `deps` to resolve the " +
+                 "same execution platform (for example with matching `exec_compatible_with`).").format(
+                    label = ctx.label,
+                    a = first.platform,
+                    b = prov.platform,
+                    addr_a = first.address,
+                    addr_b = prov.address,
+                ),
+            )
         prior = seen.get(prov.address)
         if prior != None:
             if prior.version != prov.version:
@@ -281,21 +301,6 @@ def materialize_plugin_tree(ctx, providers_depset):
                         addr = prov.address,
                         a = prior.version,
                         b = prov.version,
-                    ),
-                )
-
-            # Execution platforms are resolved per target, so a target and its
-            # deps can select different platforms for the same provider; one
-            # plugin tree cannot mix them.
-            if prior.platform != prov.platform:
-                fail(
-                    ("`{label}` receives provider `{addr}` for two execution platforms: `{a}` and `{b}`. " +
-                     "Configure `{label}` and its `deps` to resolve the same execution platform " +
-                     "(for example with matching `exec_compatible_with`).").format(
-                        label = ctx.label,
-                        addr = prov.address,
-                        a = prior.platform,
-                        b = prov.platform,
                     ),
                 )
             continue

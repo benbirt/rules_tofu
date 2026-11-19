@@ -51,3 +51,23 @@ tf_library(
         ":prov1_arm64",
     ],
 )
+
+# Distinct provider addresses for two execution platforms also fail, naming
+# both addresses: the platform check spans the whole plugin tree, not each
+# address separately.
+tf_provider(
+    name = "random_arm64",
+    address = "registry.opentofu.org/hashicorp/random",
+    files = ["package/terraform-provider-aws"],
+    platform = "linux_arm64",
+    version = "3.9.1",
+)
+
+tf_library(
+    name = "platforms_distinct",
+    srcs = ["main.tf"],
+    providers = [
+        ":prov1",
+        ":random_arm64",
+    ],
+)

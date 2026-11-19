@@ -604,9 +604,11 @@ Then `bazel shutdown` so the new startup flags take effect.
   so `@tf_providers//<ns>/<name>` selects for the execution platform in both
   validation and launchers (`README.md`, "Known gaps"); don't design around
   cross-compilation. `TfProviderInfo` carries `platform`, and
-  `materialize_plugin_tree` fails if one provider arrives for two platforms,
-  which happens when a target and one of its `deps` resolve different execution
-  platforms (`conflicting_provider_platforms`). Don't re-add `platform_key` to
+  `materialize_plugin_tree` fails if any two providers in a plugin tree have
+  different platforms, even at distinct addresses
+  (`conflicting_provider_platforms`, `conflicting_provider_platforms_distinct`):
+  a target and its `deps` resolve execution platforms independently, while one
+  plugin tree serves a single `tofu` binary. Don't re-add `platform_key` to
   `opentofu_toolchain` or `TofuInfo` (issue #146).
 - Constrain `tofu` toolchains with `exec_compatible_with` only (no
   `target_compatible_with`) so non-host `--platforms` flags still resolve one

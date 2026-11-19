@@ -346,10 +346,9 @@ _provider_tag = tag_class(
           "provider or a vendor build published elsewhere) by URL template and " +
           "per-platform SHA-256 digests. Providers on `registry.opentofu.org` are pinned " +
           "with `from_lock` instead. Only root-module tags are used; tags in dependencies " +
-          "are ignored, and a provider tagged only by dependencies fails to load unless " +
-          "the root module pins it. `pin` excludes tagged providers from the lock; a " +
-          "provider present in both a root tag and the lock fails when used until the " +
-          "tag is removed or `pin` rewrites the lock.",
+          "are ignored. `pin` excludes tagged providers from the lock; a provider " +
+          "present in both a root tag and the lock fails when used until the tag is " +
+          "removed or `pin` rewrites the lock.",
     attrs = {
         "source": attr.string(
             mandatory = True,
@@ -373,8 +372,8 @@ _provider_tag = tag_class(
         "sha256": attr.string_dict(
             doc = "Required. Map of `<os>_<arch>` platform key (`linux_amd64`, `linux_arm64`, " +
                   "`darwin_amd64`, `darwin_arm64`, `windows_amd64`) to each zip's SHA-256 digest. " +
-                  "Each build downloads only its execution platform's package; building on an " +
-                  "unlisted execution platform fails analysis naming the listed platforms.",
+                  "Building on an unlisted execution platform fails analysis naming the listed " +
+                  "platforms.",
         ),
     },
 )
@@ -587,18 +586,14 @@ tf_providers = module_extension(
     doc = """Downloads OpenTofu providers and exposes `@tf_providers`.
 
 BUILD files reference providers as `@tf_providers//<namespace>/<name>` in lower
-case and without a version. Only providers required by built targets are
-fetched, and `tofu init` runs offline against them. Each build downloads only
-the package for the execution platform `tofu` runs on: `linux_amd64`,
-`linux_arm64`, `darwin_amd64`, `darwin_arm64` or `windows_amd64`.
+case and without a version. `tofu init` runs offline against them.
 
 Only the root module pins providers. Providers on `registry.opentofu.org` are
-pinned by `.terraform.lock.hcl` via `from_lock`, with downloads verified against
-the lock's `zh:` hashes. Off-registry providers are pinned by `provider` tags
-setting `source`, `version`, `url_template` and `sha256`. `from_lock` and
-`provider` tags in dependencies are ignored, so the root module locks or tags
-every provider its dependencies use. Nothing about providers is recorded in
-`MODULE.bazel.lock`.
+pinned by `.terraform.lock.hcl` via `from_lock`. Off-registry providers are
+pinned by `provider` tags setting `source`, `version`, `url_template` and
+`sha256`. `from_lock` and `provider` tags in dependencies are ignored, so the
+root module locks or tags every provider its dependencies use. Nothing about
+providers is recorded in `MODULE.bazel.lock`.
 
 `from_lock` parses the lock with a Go helper compiled by `rules_go`'s host Go
 SDK, honouring `GOPROXY`, `GONOSUMDB`, `GOPRIVATE`, `GONOPROXY` and `GOSUMDB`;
