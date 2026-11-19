@@ -32,7 +32,7 @@ terraform {
     }
     posthog = {
       source  = "PostHog/posthog"
-      version = "1.0.24"
+      version = "1.0.30"
     }
     utils = {
       source  = "cloudposse/utils"
