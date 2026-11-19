@@ -11,17 +11,13 @@ bazel_dep(name = "rules_tofu", version = "0.0.0")
 tf_providers = use_extension("@rules_tofu//tf/providers:extensions.bzl", "tf_providers")
 tf_providers.from_lock(lock_file = "//:.terraform.lock.hcl")
 
-# Two requests for one provider that can't be ordered, as two dependencies
-# of the root might make between them, and the root pins neither. That is
-# the root's to settle, and must fail only a build that uses the provider
-# (`//:unorderable`), never the extension: `//:lib` still fails for its own
-# reason.
+# A 0.5-style registry-provider tag without `url_template` or `sha256`, which
+# `check_tag` rejects in a root module. Dependency tags are ignored regardless
+# of attributes, so extension evaluation succeeds (`//:lib` still fails for its
+# own reason) and only `@tf_providers//acme/tagged` (`//:tagged`) fails to
+# load, reporting that the root module does not pin it.
 tf_providers.provider(
-    source = "acme/unorderable",
+    source = "acme/tagged",
     version = "1.9.0",
-)
-tf_providers.provider(
-    source = "acme/unorderable",
-    version = "2.0.0-rc1",
 )
 use_repo(tf_providers, "tf_providers")

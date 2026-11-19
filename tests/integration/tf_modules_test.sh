@@ -27,7 +27,11 @@
 #        not fetched (issue #94).
 #      - plain holds only main.tf, so its library's data glob matches nothing
 #        (issue #164).
-#   2. //app plans offline across the git module (which calls a registry module
+#   2. `@tf_providers//:pin` writes the initial .terraform.lock.hcl. Nothing in
+#      the main repository requires a provider: the lock records hashicorp/null
+#      (from the git module) and hashicorp/time (from //vpc/peering), and omits
+#      hashicorp/random, which is used only under examples/. //app then
+#      plans offline across the git module (which calls a registry module
 #      and requires a provider only the module names), a submodule under
 #      modules/, one outside modules/ via //<subdir>, the configuration-only
 #      module, the archive, and the registry module directly. Checks the
@@ -46,24 +50,19 @@
 #      makes the next build resolve and record the commit again (issue #96).
 #   5. Moving v1.0.0 to a new commit and running `bazel clean --expunge` still
 #      plans the old commit's content and passes with --lockfile_mode=error.
-#   6. Switching from provider tags to
-#      tf_providers.from_lock(lock_file = "//:.terraform.lock.hcl") and running
-#      @tf_providers//:pin locks hashicorp/null (from the git module) and
-#      hashicorp/time (from //vpc/peering), leaves out hashicorp/random (used
-#      only under examples/), and re-plans //app.
-#   7. Building //bad, which calls a fetched module that calls an undeclared
+#   6. Building //bad, which calls a fetched module that calls an undeclared
 #      one, fails during fetch naming the tf_modules.module tag to add.
-#   8. Declaring a module by a //<subdir> (peering_link) that is a symlink
+#   7. Declaring a module by a //<subdir> (peering_link) that is a symlink
 #      fails during fetch naming the directory the link points to.
-#   9. Declaring a module by a //<subdir> (vendor/shared) inside a git
+#   8. Declaring a module by a //<subdir> (vendor/shared) inside a git
 #      submodule fails during fetch naming the submodule.
-#  10. Adding another tf_modules.module tag and rebuilding //app leaves
+#   9. Adding another tf_modules.module tag and rebuilding //app leaves
 #      existing tf_module_files_* repositories untouched (issue #157). The
 #      network module's library repository is still regenerated.
-#  11. Editing vpc/peering/main.tf in place to drop hashicorp/time and
+#  10. Editing vpc/peering/main.tf in place to drop hashicorp/time and
 #      updating commit on the network module's tag regenerates
 #      vpc/BUILD.bazel without that provider.
-#  12. Building //invalid_caller, which calls a fetched module that does not
+#  11. Building //invalid_caller, which calls a fetched module that does not
 #      validate, fails in TofuValidate @tf_modules//invalid with remediation
 #      advice and without validating //invalid_caller (issue #143).
 
@@ -159,7 +158,27 @@ plan() {
   grep -q -F "$1" <<<"${out}" || fail "the plan doesn't show '$1'"
 }
 
-echo "--- 2. plan ---" >&2
+echo "--- 2. pin and plan ---" >&2
+# The workspace starts with from_lock and no lock file. Main-repository files
+# declare no providers; pin discovers hashicorp/null from the git module and
+# hashicorp/time from //vpc/peering, and runs `bazel query` via $BAZEL so it
+# shares the nested output base.
+BAZEL="${_TMPDIR}/bazel"
+cat >"${BAZEL}" <<EOF
+#!/usr/bin/env bash
+exec "${BIT_BAZEL_BINARY}" --output_user_root="${NESTED_USER_ROOT}" --output_base="${NESTED_OUTPUT_BASE}" "\$@"
+EOF
+chmod +x "${BAZEL}"
+[[ ! -e .terraform.lock.hcl ]] || fail "the workspace already has a lock"
+BAZEL="${BAZEL}" bazel run @tf_providers//:pin >&2 || fail "pin failed"
+cat .terraform.lock.hcl >&2
+grep -q 'provider "registry.opentofu.org/hashicorp/null"' .terraform.lock.hcl ||
+  fail "the lock doesn't cover hashicorp/null, which the git module requires"
+grep -q 'provider "registry.opentofu.org/hashicorp/time"' .terraform.lock.hcl ||
+  fail "the lock doesn't cover hashicorp/time, which the submodule //app calls by //vpc/peering requires"
+if grep -q 'hashicorp/random' .terraform.lock.hcl; then
+  fail "the lock covers hashicorp/random, which only the git module's examples require"
+fi
 plan "app-v1 10.0.0.0/24 www.example.com direct hub-peered only-plain"
 network_repo="$(find "$(bazel info output_base)/external" -maxdepth 1 -name '*tf_modules_network')"
 [[ -d "${network_repo}" ]] || fail "can't find the network module's repository: '${network_repo}'"
@@ -236,35 +255,7 @@ bazel clean --expunge >&2
 plan "app-v1 10.0.0.0/24"
 bazel build --lockfile_mode=error //app >&2 || fail "the build with --lockfile_mode=error failed"
 
-echo "--- 6. pin ---" >&2
-# The root pins hashicorp/null and hashicorp/time with a lock instead of tags.
-# Nothing in the main repository requires them: the git module requires null,
-# and its submodule outside modules/ that //app calls requires time.
-sed -i.bak '/^tf_providers.provider($/,/^)$/d' MODULE.bazel
-rm MODULE.bazel.bak
-# A backslash-newline, not `\n`, which BSD sed doesn't read as a newline.
-sed -i.bak 's|^use_repo(tf_providers, "tf_providers")$|tf_providers.from_lock(lock_file = "//:.terraform.lock.hcl")\
-use_repo(tf_providers, "tf_providers")|' MODULE.bazel
-rm MODULE.bazel.bak
-grep -q -x -F 'tf_providers.from_lock(lock_file = "//:.terraform.lock.hcl")' MODULE.bazel || fail "couldn't switch MODULE.bazel to from_lock"
-BAZEL="${_TMPDIR}/bazel"
-cat >"${BAZEL}" <<EOF
-#!/usr/bin/env bash
-exec "${BIT_BAZEL_BINARY}" --output_user_root="${NESTED_USER_ROOT}" --output_base="${NESTED_OUTPUT_BASE}" "\$@"
-EOF
-chmod +x "${BAZEL}"
-BAZEL="${BAZEL}" bazel run @tf_providers//:pin >&2 || fail "pin failed"
-cat .terraform.lock.hcl >&2
-grep -q 'provider "registry.opentofu.org/hashicorp/null"' .terraform.lock.hcl ||
-  fail "the lock doesn't cover hashicorp/null, which the git module requires"
-grep -q 'provider "registry.opentofu.org/hashicorp/time"' .terraform.lock.hcl ||
-  fail "the lock doesn't cover hashicorp/time, which the submodule //app calls by //vpc/peering requires"
-if grep -q 'hashicorp/random' .terraform.lock.hcl; then
-  fail "the lock covers hashicorp/random, which only the git module's examples require"
-fi
-plan "app-v1 10.0.0.0/24"
-
-echo "--- 7. an undeclared module ---" >&2
+echo "--- 6. an undeclared module ---" >&2
 cat >>MODULE.bazel <<EOF
 tf_modules.module(
     name = "caller",
@@ -278,7 +269,7 @@ echo "${out}" >&2
 grep -q -F 'tf_modules.module(source = "acme/missing/null", version = "...")' <<<"${out}" ||
   fail "the failure doesn't name the tag to add"
 
-echo "--- 8. a module directory that is a symlink ---" >&2
+echo "--- 7. a module directory that is a symlink ---" >&2
 cat >>MODULE.bazel <<EOF
 tf_modules.module(
     name = "peering_link",
@@ -292,7 +283,7 @@ echo "${out}" >&2
 grep -q -F '`peering_link` is a symlink in the fetched files, to vpc/peering' <<<"${out}" ||
   fail "the failure doesn't name the directory the link leads to"
 
-echo "--- 9. a module directory in a git submodule ---" >&2
+echo "--- 8. a module directory in a git submodule ---" >&2
 git_ ls-tree HEAD vendor/shared | grep -q '^160000 commit' || fail "the fixture's git submodule didn't survive to the tagged commit"
 cat >>MODULE.bazel <<EOF
 tf_modules.module(
@@ -307,7 +298,7 @@ echo "${out}" >&2
 grep -q -F '"/vendor/shared" is in the git submodule "vendor/shared" of the repository, and rules_tofu does not fetch git submodules' <<<"${out}" ||
   fail "the failure doesn't name the git submodule"
 
-echo "--- 10. adding a module without re-fetching ---" >&2
+echo "--- 9. adding a module without re-fetching ---" >&2
 bazel build //app >&2 || fail "//app doesn't build before the tag is added"
 external="$(bazel info output_base)/external"
 # Running a repository rule rewrites @<repo>.marker. On Bazel 9, a
@@ -354,7 +345,7 @@ files_repos -newer "${_TMPDIR}/before_tag" | grep -q 'tf_module_files_shared$' |
 # An in-place edit changes neither git_submodules nor directory_symlinks.
 # _tf_module_repo has no pin attributes, so it regenerates vpc/BUILD.bazel
 # only because metadata.json records the pin.
-echo "--- 11. regenerating a library on a new pin ---" >&2
+echo "--- 10. regenerating a library on a new pin ---" >&2
 library="${network_repo}/vpc/BUILD.bazel"
 grep -q -F '"@tf_providers//hashicorp/time"' "${library}" ||
   fail "vpc/BUILD.bazel doesn't list hashicorp/time before the commit update"
@@ -377,7 +368,7 @@ if grep -q -F 'hashicorp/time' "${library}"; then
   fail "vpc/BUILD.bazel still lists hashicorp/time after re-fetching at a new commit"
 fi
 
-echo "--- 12. a fetched module that does not validate ---" >&2
+echo "--- 11. a fetched module that does not validate ---" >&2
 cat >>MODULE.bazel <<EOF
 tf_modules.module(
     name = "invalid",

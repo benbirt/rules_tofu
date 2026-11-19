@@ -75,9 +75,8 @@ opentofu_toolchain(
     name = "toolchain_impl",
     binary = "{binary}",
     version = "{version}",
-    platform_key = "{platform_key}",
 )
-""".format(binary = binary_name, version = version, platform_key = platform_key),
+""".format(binary = binary_name, version = version),
         executable = False,
     )
 
@@ -102,7 +101,7 @@ def _tofu_hub_impl(repository_ctx):
     lines = ["package(default_visibility = [\"//visibility:public\"])", ""]
 
     # tofu runs only on the execution platform across validation, launchers,
-    # tests and pin, and provider binaries are selected for that platform
+    # tests and pin, and rules select provider packages for that platform
     # too. Set exec_compatible_with alone: setting target_compatible_with makes
     # tf_* targets fail toolchain resolution when --platforms differs from the
     # host (issue #105).

@@ -1,7 +1,8 @@
 """Bzlmod module extension that downloads OpenTofu providers for `@tf_providers`.
 
-Pins provider plugins via `.terraform.lock.hcl` or `MODULE.bazel` tags for
-`tf_library`, `tf_deploy` and `tf_test` targets to use offline:
+Pins provider plugins for `tf_library`, `tf_deploy` and `tf_test` targets to
+use offline. Providers on `registry.opentofu.org` are pinned via
+`.terraform.lock.hcl`; off-registry providers use `tf_providers.provider`:
 
     tf_providers = use_extension("@rules_tofu//tf/providers:extensions.bzl", "tf_providers")
     tf_providers.from_lock(lock_file = "//:.terraform.lock.hcl")
@@ -12,77 +13,60 @@ BUILD files reference each provider as `@tf_providers//<namespace>/<name>`.
 
 # Maintainer notes.
 #
-# Each provider gets a private repo, `tf_providers_<ns>_<name>`, whose
-# `:provider` target carries `TfProviderInfo` and is visible only to the
-# `@tf_providers` hub; the hub aliases `@tf_providers//<ns>/<name>` onto it.
+# Each provider gets one private repo per platform,
+# `tf_providers_<ns>_<name>_<os>_<arch>`, whose `:provider` target carries that
+# platform's `TfProviderInfo` and is visible only to `@tf_providers`.
+# `@tf_providers//<ns>/<name>` is an alias with a `select()` over
+# `config_setting`s in the hub. Rules take `providers` with `cfg = "exec"`, so
+# the alias selects for the execution platform where `tofu` runs, and Bazel
+# fetches only that platform's repo.
 # Sources are lower-cased, as OpenTofu normalises provider addresses.
 #
-# Each platform's zip comes from the OpenTofu registry's download endpoint,
-# which gives its URL and SHA256 (see `download_location` in source.bzl),
-# unless a tag sets `url_template`. A pinned platform's zip is checked against
-# the pin; when fetched via the registry, the registry's checksum is compared
-# with the pin first so a wrong pin fails naming the right value. Without a pin
-# the registry is trusted: the extension asks it which of `DEFAULT_PLATFORMS`
-# it publishes and their SHA256s, and records them as facts in
-# MODULE.bazel.lock, which later evaluations and fresh clones reuse.
+# Only the root module pins providers, matching OpenTofu, where the root lock
+# chooses versions and child modules only constrain them. `from_lock` and
+# `provider` tags in dependencies are ignored. The extension makes no network
+# requests and records nothing in MODULE.bazel.lock.
 #
-# Tags for the same `source` resolve to one version: the root module's, else
-# the highest (`highest_version`). `sha256` maps for the winning version are
-# unioned across modules; conflicting digests or `url_template`s fail. The tofu
-# extension resolves differently: the root arbitrates and disagreeing
-# dependencies are an error. A provider is a per-configuration artefact a
-# library depends on, the same domain as Bzlmod's own MVS, whereas the tofu
-# binary is one global tool and which version a build runs is the root's call.
+# Providers on registry.opentofu.org are pinned by the lock. Because lock
+# hashes carry no platform names, each locked provider gets a repo for every
+# platform in `DEFAULT_PLATFORMS`. When fetched, that repo queries the
+# registry's download endpoint for its zip URL and SHA-256 and requires the
+# digest to match one of the lock's `zh:` hashes. Lock-only updates therefore
+# leave MODULE.bazel.lock valid. Locked targets also carry the lock file so
+# builds copy it next to the root configuration for `tofu init`.
 #
-# Only the root module's `from_lock` counts. A locked provider gets the same
-# kind of repo with the lock's version. When fetched, the repo resolves each
-# platform's digest from the registry and accepts it only if it matches one of
-# the lock's `zh:` hashes, so locked providers record no facts and a bot's lock
-# update is complete without touching MODULE.bazel.lock. A lock entry wins over
-# dependencies' tags; one the root also tags is a conflict that fails the
-# provider's fetch until `pin` drops it from the lock. An unusable entry
-# becomes a repo that fails when fetched, so `pin` stays runnable. The hub is
-# always created, and its `:pin` rewrites the lock with `tofu providers lock`
-# against the `required_providers` of every tf_library, tf_deploy and tf_test
-# in the workspace and their external deps. A locked provider's target carries
-# the lock, which builds copy next to the configuration so `tofu init` checks
-# against it.
+# Off-registry providers are pinned by root `provider` tags setting `source`,
+# `version`, `url_template` and `sha256`, with one repo per `sha256` key. `pin`
+# excludes root-tagged providers from the lock.
+#
+# An unusable provider (a lock/tag conflict, an unusable lock entry, or a
+# provider tagged only by dependencies) gets a `@tf_providers//<ns>/<name>`
+# package whose BUILD file calls `fail()`. The extension itself still succeeds,
+# keeping `@tf_providers//:pin` runnable. The hub is always created; `:pin`
+# runs `tofu providers lock` across `required_providers` of the workspace's
+# tf_library, tf_deploy and tf_test targets and their external deps.
 
 load("//tf/private:fetched_tree.bzl", "walk")
 load("//tf/private:repo_metadata.bzl", "reproducible")
-load(":lock.bzl", "lock_entries", "lock_sha256s")
+load("//toolchain:versions.bzl", "PLATFORMS")
+load(":lock.bzl", "lock_entries", "lock_vouches")
 load(
     ":source.bzl",
     "DEFAULT_HOST",
     "DEFAULT_PLATFORMS",
-    "check_url_template",
+    "check_tag",
     "download_location",
-    "highest_version",
-    "is_provider_binary",
+    "ignored_tag_error",
+    "missing_platform_error",
     "parse_source",
-    "published_platforms",
-    "registry_download_endpoint",
     "registry_download_url",
     "registry_shasum",
-    "registry_versions_endpoint",
     "repo_name",
-    "valid_cached_sha256s",
 )
 
 # The hub repo, always created: `@tf_providers//<namespace>/<name>` for every
 # resolved provider, and `@tf_providers//:pin` for the root module's lock.
 _HUB = "tf_providers"
-
-# (os/arch -> exe suffix). Keys must match the `sha256` map's platform keys.
-_EXE_SUFFIX = {
-    "linux_amd64": "",
-    "linux_arm64": "",
-    "linux_386": "",
-    "darwin_amd64": "",
-    "darwin_arm64": "",
-    "windows_amd64": ".exe",
-    "windows_386": ".exe",
-}
 
 def _parse_source_or_fail(source):
     parsed = parse_source(source)
@@ -96,134 +80,46 @@ def _split_platform_key(platform_key):
         fail("provider platform key must be \"<os>_<arch>\", got {}".format(repr(platform_key)))
     return parts[0], parts[1]
 
-def _format_dict(attr_name, entries):
-    """Format `entries` as a Starlark dict attribute for the generated BUILD.
+def _lock_error(lock_path, error):
+    """Format a lock error for `lock_path` with instructions to run `pin`."""
+    return "{}: {}\nRun `bazel run @tf_providers//:pin` to update the lock.".format(lock_path, error)
 
-    `entries` is a list of `(path, platform_key)` tuples. The dict maps each
-    file label to its platform key string so `label_keyed_string_dict` resolves
-    the keys to `File`s.
+def _locked_download(repository_ctx, registry_url, context):
+    """Resolve a locked provider platform's zip URL and SHA-256 from the registry.
+
+    The digest must match one of the lock's `zh:` hashes. Resolving in the
+    repository rule rather than the extension keeps provider digests out of
+    MODULE.bazel.lock, so lock-only updates leave MODULE.bazel.lock valid.
+
+    Returns `struct(url, sha256)`.
     """
-    lines = ["    {} = {{".format(attr_name)]
-    for binary_path, platform_key in entries:
-        lines.append("        \"{}\": \"{}\",".format(binary_path, platform_key))
-    lines.append("    },")
-    return "\n".join(lines)
-
-def _resolve_via_registry(repository_ctx, registry_url, pinned_sha256, context):
-    """Fetch the registry's download metadata, check `pinned_sha256` and return the zip URL."""
+    attr = repository_ctx.attr
     response_path = "registry_response.json"
-    result = repository_ctx.download(
-        url = registry_url,
-        output = response_path,
-        allow_fail = True,
-    )
+    result = repository_ctx.download(url = registry_url, output = response_path, allow_fail = True)
     if not result.success:
-        fail("Could not query the provider registry for {} at {}. A `url_template` on the tag avoids the registry.".format(
-            context,
-            registry_url,
+        # Locked providers declare a repository for every platform because lock
+        # hashes carry no platform names; an unpublished platform fails here
+        # when fetched.
+        fail(("Failed to query {context} from {url}. Either the registry is unreachable, " +
+              "or it publishes no `{platform}` package for this version.").format(
+            context = context,
+            url = registry_url,
+            platform = attr.platform,
         ))
     response = json.decode(repository_ctx.read(response_path))
     repository_ctx.delete(response_path)
-    resolved = registry_download_url(response, pinned_sha256, context)
-    if resolved.error:
-        fail(resolved.error)
-    return resolved.url
 
-def _download_json(ctx, url, output, context):
-    result = ctx.download(url = url, output = output, allow_fail = True)
-    if not result.success:
-        fail("Could not query the provider registry for {} at {}.".format(context, url))
-    return json.decode(ctx.read(output))
+    resolved = registry_shasum(response, context)
+    error = resolved.error or lock_vouches(resolved.sha256, attr.zh, context)
+    if not error:
+        located = registry_download_url(response, context)
+        error = located.error
+    if error:
+        fail(_lock_error(attr.lock_path, error))
+    return struct(url = located.url, sha256 = resolved.sha256)
 
-def _registry_downloads(ctx, namespace, name, version):
-    """Each published default platform's zip, as the registry describes it.
-
-    `ctx` is a `module_ctx` or a `repository_ctx`; the registry's responses
-    are written under `registry/`.
-
-    Returns `struct(downloads, error)`: `downloads` maps each platform key to
-    `struct(sha256, url)`. An unreachable registry still fails outright;
-    `error` is for answers that say the version can't be used.
-    """
-    context = "{}/{}@{}".format(namespace, name, version)
-    published = published_platforms(
-        _download_json(
-            ctx,
-            registry_versions_endpoint(namespace, name),
-            "registry/{}_{}_versions.json".format(namespace, name),
-            context,
-        ),
-        version,
-        context,
-    )
-    if published.error:
-        return struct(downloads = None, error = published.error)
-
-    downloads = {}
-    for platform_key in published.platforms:
-        os_name, arch = _split_platform_key(platform_key)
-        platform_context = "{} on {}".format(context, platform_key)
-        response = _download_json(
-            ctx,
-            registry_download_endpoint(namespace, name, version, os_name, arch),
-            "registry/{}_{}_{}_{}.json".format(namespace, name, version, platform_key),
-            platform_context,
-        )
-        resolved = registry_shasum(response, platform_context)
-        if resolved.error:
-            return struct(downloads = None, error = resolved.error)
-        located = registry_download_url(response, resolved.sha256, platform_context)
-        if located.error:
-            return struct(downloads = None, error = located.error)
-        downloads[platform_key] = struct(sha256 = resolved.sha256, url = located.url)
-    return struct(downloads = downloads, error = None)
-
-def _registry_sha256s(module_ctx, namespace, name, version, fact_key):
-    """Each published default platform's SHA256, from the lockfile's facts or the registry.
-
-    Returns `struct(sha256s, error)`, with `error` as for `_registry_downloads`.
-    """
-    cached = module_ctx.facts.get(fact_key)
-    if valid_cached_sha256s(cached):
-        return struct(sha256s = dict(cached), error = None)
-
-    resolved = _registry_downloads(module_ctx, namespace, name, version)
-    if resolved.error:
-        return struct(sha256s = None, error = resolved.error)
-    return struct(sha256s = {p: d.sha256 for p, d in resolved.downloads.items()}, error = None)
-
-def _locked_downloads(repository_ctx, namespace, name, version):
-    """A locked provider's zips: the registry's, each vouched for by a `zh:` hash in the lock.
-
-    Resolved by the repository rule rather than the extension, so nothing
-    about a locked version is recorded in MODULE.bazel.lock: the lock alone
-    pins it, and a bot that updates only the lock makes a complete change.
-
-    Returns `struct(sha256s, urls, error)`.
-    """
-    resolved = _registry_downloads(repository_ctx, namespace, name, version)
-    repository_ctx.delete("registry")
-    if resolved.error:
-        return struct(sha256s = None, urls = None, error = resolved.error)
-    vouched = lock_sha256s(
-        {p: d.sha256 for p, d in resolved.downloads.items()},
-        repository_ctx.attr.zh,
-        "{}/{}@{}".format(namespace, name, version),
-    )
-    if vouched.error:
-        return struct(sha256s = None, urls = None, error = vouched.error)
-    return struct(
-        sha256s = vouched.sha256s,
-        urls = {p: d.url for p, d in resolved.downloads.items()},
-        error = None,
-    )
-
-def _fail_lock(repository_ctx, error):
-    """Fail the fetch of a locked provider, pointing at the lock and `pin`."""
-    fail("{}: {}\nRun `bazel run @tf_providers//:pin` to update the lock.".format(
-        repository_ctx.attr.lock_path,
-        error,
-    ))
+# Subdirectory where the provider repository extracts the zip.
+_PACKAGE_DIR = "package"
 
 def _files_under(path, prefix):
     """Every file below the directory `path`, as paths relative to it joined onto `prefix`.
@@ -239,126 +135,46 @@ def _files_under(path, prefix):
     ])
 
 def _tf_provider_download_impl(repository_ctx):
-    source = repository_ctx.attr.source
-    version = repository_ctx.attr.version
-    sha256 = repository_ctx.attr.sha256
+    attr = repository_ctx.attr
+    source = attr.source
+    version = attr.version
+    platform = attr.platform
     parsed = _parse_source_or_fail(source)
     namespace, name = parsed.namespace, parsed.name
+    os_name, arch = _split_platform_key(platform)
 
-    # A lock entry that can't be used, or dependencies' tags that can't be
-    # settled on one version. Failing here rather than in the extension
-    # keeps `@tf_providers//:pin` runnable, so the lock can be regenerated,
-    # or the provider locked.
-    if repository_ctx.attr.error:
-        if repository_ctx.attr.lock_path:
-            _fail_lock(repository_ctx, repository_ctx.attr.error)
-        fail(repository_ctx.attr.error)
-
-    urls = {}
-    if repository_ctx.attr.zh:
-        locked = _locked_downloads(repository_ctx, namespace, name, version)
-        if locked.error:
-            _fail_lock(repository_ctx, locked.error)
-        sha256 = locked.sha256s
-        urls = locked.urls
-
-    if not sha256:
-        fail("tf_providers.provider `{}` must declare at least one platform in `sha256`".format(
-            repository_ctx.attr.name,
-        ))
-
-    address = "{}/{}/{}".format(DEFAULT_HOST, namespace, name)
-    entries = []
-    package_entries = []
-    for platform_key in sorted(sha256.keys()):
-        if platform_key not in _EXE_SUFFIX:
-            fail("tf_providers.provider `{}` declares unknown platform `{}`. Known: {}".format(
-                repository_ctx.attr.name,
-                platform_key,
-                sorted(_EXE_SUFFIX.keys()),
-            ))
-        os_name, arch = _split_platform_key(platform_key)
-        extract_dir = "plugins/{host}/{ns}/{name}/{version}/{platform}".format(
-            host = DEFAULT_HOST,
-            ns = namespace,
-            name = name,
-            version = version,
-            platform = platform_key,
+    location = download_location(namespace, name, version, os_name, arch, attr.url_template)
+    if location.error:
+        fail("tf_providers.provider `{}`: {}".format(source, location.error))
+    url = location.url
+    sha256 = attr.sha256
+    if location.registry_url:
+        resolved = _locked_download(
+            repository_ctx,
+            location.registry_url,
+            "{}@{} on {}".format(source, version, platform),
         )
-        location = download_location(
-            namespace,
-            name,
+        url = resolved.url
+        sha256 = resolved.sha256
+
+    repository_ctx.download_and_extract(
+        url = url,
+        sha256 = sha256,
+        type = "zip",
+        output = _PACKAGE_DIR,
+    )
+
+    # Vendor every extracted file, including LICENSE and README.md: `tofu`
+    # checks lock `h1:` hashes over the whole directory and locates the
+    # provider binary itself.
+    paths = _files_under(repository_ctx.path(_PACKAGE_DIR), _PACKAGE_DIR)
+    if not paths:
+        fail("Provider archive for `{}@{}` on `{}` unpacked no files ({}).".format(
+            source,
             version,
-            os_name,
-            arch,
-            repository_ctx.attr.url_template,
-        )
-        if location.error:
-            fail("tf_providers.provider `{}`: {}".format(source, location.error))
-        url = location.url
-        if platform_key in urls:
-            url = urls[platform_key]
-        elif location.registry_url:
-            url = _resolve_via_registry(
-                repository_ctx,
-                location.registry_url,
-                sha256[platform_key],
-                "{}@{} on {}".format(source, version, platform_key),
-            )
-
-        repository_ctx.download_and_extract(
-            url = url,
-            sha256 = sha256[platform_key],
-            type = "zip",
-            output = extract_dir,
-        )
-
-        # The zip holds the provider binary alongside files such as LICENSE
-        # and CHANGELOG.md; see `is_provider_binary` for the names accepted.
-        exe_suffix = _EXE_SUFFIX[platform_key]
-        binary_filename = None
-        for child in repository_ctx.path(extract_dir).readdir():
-            basename = child.basename
-            if is_provider_binary(basename, name, version, exe_suffix):
-                if binary_filename != None:
-                    fail(("Ambiguous provider binary for {}@{} on {}: both `{}` and " +
-                          "`{}` look like it. Refusing to guess.").format(
-                        source,
-                        version,
-                        platform_key,
-                        binary_filename,
-                        basename,
-                    ))
-                binary_filename = basename
-        if binary_filename == None:
-            fail("No provider binary (`terraform-provider-{}{}` or `terraform-provider-{}_v{}*{}`) found in {} after extracting {}".format(
-                name,
-                exe_suffix,
-                name,
-                version,
-                exe_suffix,
-                extract_dir,
-                url,
-            ))
-
-        binary_path = "{}/{}".format(extract_dir, binary_filename)
-        entries.append((binary_path, platform_key))
-
-        # The rest of the zip, such as LICENSE and README, is vendored too:
-        # tofu checks a lock's `h1:` hashes against the whole unpacked
-        # package, not just the binary.
-        for path in _files_under(repository_ctx.path(extract_dir), extract_dir):
-            if path != binary_path:
-                package_entries.append((path, platform_key))
-
-    # Extracted files live in nested directories; Bazel doesn't auto-expose
-    # them as source labels, so the `label_keyed_string_dict`s on
-    # `tf_provider` couldn't resolve them without an explicit
-    # `exports_files()`.
-    exports_lines = ["exports_files(["]
-    for path, _ in entries + package_entries:
-        exports_lines.append("    \"{}\",".format(path))
-    exports_lines.append("], visibility = [\"//visibility:private\"])")
+            platform,
+            url,
+        ))
 
     # An implementation detail of the hub: BUILD files name the provider as
     # `@tf_providers//<namespace>/<name>`, whose alias is the only thing
@@ -369,29 +185,28 @@ def _tf_provider_download_impl(repository_ctx):
         content = """\
 load("@rules_tofu//tf/private:provider.bzl", "tf_provider")
 
-{exports}
-
 tf_provider(
     name = "provider",
     address = "{address}",
     version = "{version}",
-{binaries}
-{package_files}{lock}
+    platform = "{platform}",
+    files = [
+{files}
+    ],{lock}
     visibility = ["@{hub}//:__subpackages__"],
 )
 """.format(
-            exports = "\n".join(exports_lines),
-            address = address,
+            address = "{}/{}/{}".format(DEFAULT_HOST, namespace, name),
             version = version,
-            binaries = _format_dict("binaries", entries),
-            package_files = _format_dict("package_files", package_entries),
-            lock = "\n    lock = \"{}\",".format(repository_ctx.attr.lock) if repository_ctx.attr.lock else "",
+            platform = platform,
+            files = "\n".join(["        \"{}\",".format(path) for path in paths]),
+            lock = "\n    lock = \"{}\",".format(attr.lock) if attr.lock else "",
             hub = _HUB,
         ),
         executable = False,
     )
 
-    # Every zip above was checked against a digest from the tag or the lock,
+    # The zip was verified against the tag's sha256 or the lock's zh: hashes,
     # so the attributes determine the contents.
     return reproducible(repository_ctx)
 
@@ -400,17 +215,19 @@ _tf_provider_download = repository_rule(
     attrs = {
         "source": attr.string(mandatory = True),
         "version": attr.string(mandatory = True),
-        "sha256": attr.string_dict(),
+        # `<os>_<arch>` platform key for this repository's package.
+        "platform": attr.string(mandatory = True),
+        # Set for a tagged provider: zip URL template and SHA-256 digest.
         "url_template": attr.string(),
+        "sha256": attr.string(),
         # Set for a provider pinned by `from_lock`: the label of the lock's
         # copy in the hub repo, which builds copy into each work tree.
         "lock": attr.string(),
         "lock_path": attr.string(),
         # Also for `from_lock`: the lock entry's `zh:` hashes. The registry's
-        # digests are then resolved when the repo is fetched, and each must
-        # be one of them; `sha256` is left empty.
+        # digest is resolved on fetch and checked against these; `sha256` is
+        # unused.
         "zh": attr.string_list(),
-        "error": attr.string(),
     },
 )
 
@@ -421,6 +238,21 @@ def _tf_providers_hub_impl(repository_ctx):
         repository_ctx.watch(lock)
         if lock.exists:
             content = repository_ctx.read(lock)
+
+    # One `config_setting` per platform for the hub aliases: a `select()` key
+    # cannot combine OS and CPU constraints directly.
+    settings = "".join([
+        """
+config_setting(
+    name = "{}",
+    constraint_values = [
+        "{}",
+        "{}",
+    ],
+)
+""".format(platform_key, os_constraint, cpu_constraint)
+        for platform_key, os_constraint, cpu_constraint, _ in PLATFORMS
+    ])
 
     repository_ctx.file("WORKSPACE", "")
     repository_ctx.file(".terraform.lock.hcl", content, executable = False)
@@ -440,26 +272,52 @@ tf_pin(
     platforms = {platforms},
     exclude_sources = {tagged},
 )
-""".format(
+{settings}""".format(
             lock_dir = repository_ctx.attr.lock_dir,
             platforms = repr(DEFAULT_PLATFORMS),
             tagged = repr(repository_ctx.attr.tagged),
             has_lock = repr(bool(repository_ctx.attr.lock)),
+            settings = settings,
         ),
         executable = False,
     )
 
-    # `@tf_providers//<namespace>/<name>`: the package's default target.
-    for package, repo in repository_ctx.attr.providers.items():
+    # `@tf_providers//<namespace>/<name>` selects among the provider's
+    # per-platform repositories; Bazel fetches only the chosen branch. Rules
+    # take `providers` with `cfg = "exec"`, selecting for the execution
+    # platform where `tofu` runs.
+    for source, platforms in repository_ctx.attr.providers.items():
+        namespace, name = source.split("/")
         repository_ctx.file(
-            package + "/BUILD.bazel",
+            source + "/BUILD.bazel",
             content = """\
 alias(
     name = "{name}",
-    actual = "@{repo}//:provider",
+    actual = select(
+        {{
+{branches}
+        }},
+        no_match_error = {no_match_error},
+    ),
     visibility = ["//visibility:public"],
 )
-""".format(name = package.split("/")[1], repo = repo),
+""".format(
+                name = name,
+                branches = "\n".join([
+                    "            \"//:{}\": \"@{}//:provider\",".format(p, repo_name(namespace, name, p))
+                    for p in platforms
+                ]),
+                no_match_error = repr(missing_platform_error(source, repository_ctx.attr.versions[source], platforms)),
+            ),
+            executable = False,
+        )
+
+    # Unusable providers get a hub package whose BUILD file fails to load when
+    # a target depends on it.
+    for source, error in repository_ctx.attr.errors.items():
+        repository_ctx.file(
+            source + "/BUILD.bazel",
+            content = "fail({})\n".format(repr("\n" + error)),
             executable = False,
         )
 
@@ -469,8 +327,14 @@ _tf_providers_hub = repository_rule(
         # The root module's `from_lock` file, if it uses one.
         "lock": attr.label(),
         "lock_dir": attr.string(),
-        # `<namespace>/<name>` -> the repo vendoring that provider.
-        "providers": attr.string_dict(),
+        # `<namespace>/<name>` -> `<os>_<arch>` platforms with declared
+        # download repositories.
+        "providers": attr.string_list_dict(),
+        # `<namespace>/<name>` -> version for each entry in `providers`.
+        "versions": attr.string_dict(),
+        # `<namespace>/<name>` -> load-time error message for unusable
+        # providers.
+        "errors": attr.string_dict(),
         # `<namespace>/<name>` of the root module's tags, which `pin` leaves
         # out of the lock.
         "tagged": attr.string_list(),
@@ -478,38 +342,38 @@ _tf_providers_hub = repository_rule(
 )
 
 _provider_tag = tag_class(
-    doc = "Pin a provider in `MODULE.bazel` when specifying custom SHA256 digests or a " +
-          "download mirror. Root-tagged providers are omitted from the lock by `pin`; a " +
-          "provider both root-tagged and present in the lock fails to fetch until `pin` " +
-          "rewrites the lock or the tag is removed.",
+    doc = "Pin a provider outside `registry.opentofu.org` (such as a fork, an in-house " +
+          "provider or a vendor build published elsewhere) by URL template and " +
+          "per-platform SHA-256 digests. Providers on `registry.opentofu.org` are pinned " +
+          "with `from_lock` instead. Only root-module tags are used; tags in dependencies " +
+          "are ignored. `pin` excludes tagged providers from the lock; a provider " +
+          "present in both a root tag and the lock fails when used until the tag is " +
+          "removed or `pin` rewrites the lock.",
     attrs = {
         "source": attr.string(
             mandatory = True,
-            doc = "Provider source on `registry.opentofu.org` as `<namespace>/<name>`, e.g. " +
-                  "`\"hashicorp/aws\"`. Referenced in BUILD files in lower case as " +
-                  "`@tf_providers//<namespace>/<name>`.",
+            doc = "Provider source as `<namespace>/<name>`, e.g. `\"acme/widgets\"`, matching " +
+                  "`required_providers`. OpenTofu still addresses the provider as " +
+                  "`registry.opentofu.org/<namespace>/<name>`. Referenced in BUILD files in " +
+                  "lower case as `@tf_providers//<namespace>/<name>`.",
         ),
         "version": attr.string(
             mandatory = True,
-            doc = "Exact provider version string, e.g. `\"5.70.0\"`.",
+            doc = "Exact provider version string, e.g. `\"1.4.0\"`.",
+        ),
+        # `check_tag` requires `url_template` and `sha256` on root tags.
+        # Leaving `mandatory` unset here lets ignored 0.5 tags in dependencies
+        # load without failing Bazel's tag check.
+        "url_template": attr.string(
+            doc = "Required. Download URL template for each platform's zip, using `{namespace}`, " +
+                  "`{name}`, `{version}`, `{os}` and `{arch}` placeholders, e.g. " +
+                  "`\"https://github.com/acme/terraform-provider-widgets/releases/download/v{version}/terraform-provider-{name}_{version}_{os}_{arch}.zip\"`.",
         ),
         "sha256": attr.string_dict(
-            doc = "Optional per-platform SHA256 digests of the provider zip, keyed by " +
-                  "`<os>_<arch>`: `linux_amd64`, `linux_arm64`, `linux_386`, `darwin_amd64`, " +
-                  "`darwin_arm64`, `windows_amd64` or `windows_386`. When set, every listed " +
-                  "platform is downloaded when the provider repository is fetched, so list " +
-                  "every platform you build on. Without `url_template`, a digest that differs " +
-                  "from `registry.opentofu.org` fails the fetch and reports the registry's " +
-                  "value. When unset, the registry's digests for whichever of `linux_amd64`, " +
-                  "`linux_arm64`, `darwin_amd64`, `darwin_arm64` and `windows_amd64` are " +
-                  "published are recorded in `MODULE.bazel.lock`.",
-        ),
-        "url_template": attr.string(
-            doc = "Optional mirror URL template for provider zips, using `{namespace}`, " +
-                  "`{name}`, `{version}`, `{os}` and `{arch}` placeholders, e.g. " +
-                  "`\"https://github.com/PostHog/terraform-provider-posthog/releases/download/v{version}/terraform-provider-{name}_{version}_{os}_{arch}.zip\"`. " +
-                  "Requires `sha256` and skips querying `registry.opentofu.org`, though the " +
-                  "provider is still addressed under `registry.opentofu.org`.",
+            doc = "Required. Map of `<os>_<arch>` platform key (`linux_amd64`, `linux_arm64`, " +
+                  "`darwin_amd64`, `darwin_arm64`, `windows_amd64`) to each zip's SHA-256 digest. " +
+                  "Building on an unlisted execution platform fails analysis naming the listed " +
+                  "platforms.",
         ),
     },
 )
@@ -525,7 +389,7 @@ _from_lock_tag = tag_class(
           "the five platforms `from_lock` resolves: `linux_amd64`, `linux_arm64`, " +
           "`darwin_amd64`, `darwin_arm64` and `windows_amd64`. Pass " +
           "`-- -platform=<os>_<arch>` to replace that list when a provider omits one of " +
-          "them. Locked providers record nothing in `MODULE.bazel.lock`. Only the root " +
+          "them. Providers record nothing in `MODULE.bazel.lock`. Only the root " +
           "module's `from_lock` is read, at most once; `from_lock` in dependencies is " +
           "ignored.",
     attrs = {
@@ -588,154 +452,77 @@ def _read_lock(module_ctx, mod):
     )
 
 def _tf_providers_extension_impl(module_ctx):
-    # Phase 1: Collect all provider tags into a flat list of structs,
-    # then group by normalised source, so `PostHog/posthog` and
-    # `posthog/posthog` are the same provider.
-    all_tags = []
-
     # The repos the root is expected to `use_repo`: just the hub. The
-    # per-provider repos behind it are private implementation details.
+    # per-platform provider repos are private to the hub.
     root_repos = []
     lock = None
+
+    # Root tags keyed by lower-case `<namespace>/<name>`, and dependency
+    # module names keyed by each provider source they tag.
+    tags = {}
+    ignored = {}
     for mod in module_ctx.modules:
-        # Only the root module's lock counts, as in OpenTofu, where a child
+        # Only the root module pins providers, as in OpenTofu, where a child
         # module's lock is ignored: the root decides versions and libraries
-        # only constrain them. A dependency's `from_lock`, left over from
-        # developing it as its own root module, is ignored rather than an error.
+        # only constrain them. `from_lock` and `provider` tags in dependencies
+        # come from developing them as root modules and are ignored.
         if mod.is_root:
             root_repos.append(_HUB)
             lock = _read_lock(module_ctx, mod)
         for tag in mod.tags.provider:
             parsed = _parse_source_or_fail(tag.source)
-            if tag.url_template:
-                error = check_url_template(tag.url_template)
-                if error:
-                    fail("tf_providers.provider `{}` in module `{}`: {}".format(tag.source, mod.name, error))
-            all_tags.append(struct(
-                source = "{}/{}".format(parsed.namespace, parsed.name),
-                version = tag.version,
-                sha256 = tag.sha256,
-                url_template = tag.url_template,
-                is_root = mod.is_root,
-                mod_name = mod.name,
-            ))
+            source = "{}/{}".format(parsed.namespace, parsed.name)
+            if not mod.is_root:
+                ignored.setdefault(source, []).append(mod.name)
+                continue
+            error = check_tag(tag.sha256, tag.url_template)
+            if error:
+                fail("tf_providers.provider `{}`: {}.".format(tag.source, error))
+            if source in tags:
+                fail("Root module declares provider `{}` more than once".format(source))
+            tags[source] = tag
 
-    # Digests the extension resolved from the registry, keyed by
-    # `<source>@<version>`, to record in MODULE.bazel.lock.
-    facts = {}
+    # Hub inputs per provider: declared platforms and version, or a load-time
+    # error.
+    platforms = {}
+    versions = {}
+    errors = {}
 
-    by_source = {}
-    for t in all_tags:
-        if t.source not in by_source:
-            by_source[t.source] = []
-        by_source[t.source].append(t)
-
-    # Providers pinned by the lock. Like a root tag, a lock entry wins over
-    # whatever dependencies ask for.
-    locked = {}
-    if lock:
-        for entry in lock.entries:
-            locked[entry.source] = entry
-            if entry.source not in by_source:
-                by_source[entry.source] = []
-
-    # Phase 2: Resolve each provider to one repository.
-    for source, tags in by_source.items():
-        namespace, name = source.split("/")
-
-        # Validate: at most one root declaration per provider.
-        root_tags = [t for t in tags if t.is_root]
-        if len(root_tags) > 1:
-            fail("Root module declares provider `{}` more than once".format(source))
-
-        entry = locked.get(source)
-        if entry:
-            # A root tag for a locked provider is a conflict the provider's
-            # repo reports when fetched, never a `fail()` here: `pin`, which
-            # writes the lock without the root's tagged providers, is the
-            # way to resolve it and must stay runnable (issue #85).
-            _lock_provider_repo(lock, entry, conflict = bool(root_tags))
-            continue
-
-        # Determine the winning version.
-        if root_tags:
-            # Root module wins unconditionally.
-            resolved_version = root_tags[0].version
+    # Providers pinned by the lock.
+    for entry in (lock.entries if lock else []):
+        # Report a lock/tag conflict from the provider's hub package when used,
+        # never via `fail()` here, so `@tf_providers//:pin` stays runnable to
+        # rewrite the lock without root-tagged providers (issue #85).
+        error = _lock_provider_repos(lock, entry, conflict = entry.source in tags)
+        if error:
+            errors[entry.source] = error
         else:
-            # The one version the tags agree on, else the highest.
-            highest = highest_version(source, tags)
-            if highest.error:
-                # Reported by the provider's repo when it is fetched, not
-                # here: a root module that pins with `from_lock` settles
-                # this by locking the provider, so `pin` must stay runnable,
-                # as for a lock entry that can't be used. The version is
-                # never read.
-                _tf_provider_download(
-                    name = repo_name(namespace, name),
-                    source = source,
-                    version = tags[0].version,
-                    error = highest.error,
-                )
-                continue
-            resolved_version = highest.version
+            platforms[entry.source] = DEFAULT_PLATFORMS
+            versions[entry.source] = entry.version
 
-        # Merge sha256 maps from all tags that declared the winning version.
-        merged_sha256 = {}
-        for t in tags:
-            if t.version != resolved_version:
-                continue
-            for platform, digest in t.sha256.items():
-                if platform in merged_sha256 and merged_sha256[platform] != digest:
-                    fail(
-                        ("Provider `{}` version `{}`: modules disagree on sha256 for " +
-                         "platform `{}` (got `{}` and `{}`)").format(
-                            source,
-                            resolved_version,
-                            platform,
-                            merged_sha256[platform],
-                            digest,
-                        ),
-                    )
-                merged_sha256[platform] = digest
+    # Root-tagged providers get one repository per `sha256` key; Bazel fetches
+    # only the platform a build selects.
+    for source, tag in tags.items():
+        if source in errors or source in platforms:
+            continue
+        namespace, name = source.split("/")
+        for platform, digest in tag.sha256.items():
+            _tf_provider_download(
+                name = repo_name(namespace, name, platform),
+                source = source,
+                version = tag.version,
+                platform = platform,
+                url_template = tag.url_template,
+                sha256 = digest,
+            )
+        platforms[source] = sorted(tag.sha256.keys())
+        versions[source] = tag.version
 
-        # The tags that declared the winning version must agree on url_template
-        # or leave it unset.
-        url_templates = {
-            t.url_template: t.mod_name
-            for t in tags
-            if t.version == resolved_version and t.url_template
-        }
-        if len(url_templates) > 1:
-            fail("Provider `{}` version `{}`: modules disagree on url_template ({})".format(
-                source,
-                resolved_version,
-                ", ".join(["`{}` from `{}`".format(u, m) for u, m in url_templates.items()]),
-            ))
-
-        # No module pinned the winning version: trust the registry's digests,
-        # recorded as facts so they're asked for once per lockfile.
-        if not merged_sha256:
-            if url_templates:
-                fail(("Provider `{}` version `{}` has a url_template but no sha256: pin the " +
-                      "sha256 of each platform's zip, since there's no registry to ask for them.").format(
-                    source,
-                    resolved_version,
-                ))
-            fact_key = "{}@{}".format(source, resolved_version)
-            resolved = _registry_sha256s(module_ctx, namespace, name, resolved_version, fact_key)
-            if resolved.error:
-                fail(resolved.error)
-            merged_sha256 = resolved.sha256s
-            facts[fact_key] = merged_sha256
-
-        # Phase 3: Create the repository.
-        _tf_provider_download(
-            name = repo_name(namespace, name),
-            source = source,
-            version = resolved_version,
-            sha256 = merged_sha256,
-            url_template = url_templates.keys()[0] if url_templates else "",
-        )
+    # Providers tagged only by dependencies get a hub package explaining that
+    # only the root module pins providers.
+    for source, modules in ignored.items():
+        if source not in errors and source not in platforms:
+            errors[source] = ignored_tag_error(source, modules)
 
     # Always created, so that BUILD files in any module can name providers as
     # `@tf_providers//<namespace>/<name>` however the root pins them.
@@ -743,72 +530,70 @@ def _tf_providers_extension_impl(module_ctx):
         name = _HUB,
         lock = lock.label if lock else None,
         lock_dir = lock.lock_dir if lock else "",
-        providers = {source: repo_name(*source.split("/")) for source in by_source},
-        tagged = sorted({t.source: True for t in all_tags if t.is_root}.keys()),
+        providers = platforms,
+        versions = versions,
+        errors = errors,
+        tagged = sorted(tags.keys()),
     )
 
     # `reproducible = True`: every download is gated by a sha256 pinned on a
-    # tag, recorded in `facts` or matched against the lock's `zh:` hashes. The
-    # repos are therefore a pure function of the module graph, the lock file
-    # and `facts`; recording the repo specs in MODULE.bazel.lock would pin
-    # nothing extra. Returning only this evaluation's facts drops entries for
-    # versions no longer used.
+    # tag or vouched for by the lock's `zh:` hashes. Repo specs are a pure
+    # function of root tags and the lock file, so MODULE.bazel.lock needs no
+    # copy of them.
     non_dev = module_ctx.root_module_has_non_dev_dependency
     return module_ctx.extension_metadata(
         root_module_direct_deps = root_repos if non_dev else [],
         root_module_direct_dev_deps = [] if non_dev else root_repos,
         reproducible = True,
-        facts = facts,
     )
 
-def _lock_provider_repo(lock, entry, conflict):
-    """Create the repo for a provider pinned by the lock.
+def _lock_provider_repos(lock, entry, conflict):
+    """Declare per-platform download repos for one lock entry, or return an error.
 
-    The repo, not the extension, asks the registry for the digests and checks
-    each against the lock's `zh:` hashes (see `_locked_downloads`), so a
-    locked provider records no facts: the lock is the whole pin. A lock entry
-    that can't be used yields a repo that fails when fetched, naming the
-    problem, rather than failing the extension: that would also take down
-    `@tf_providers//:pin`, the way to fix the lock. `conflict` is whether the
-    root module also tags the provider, which `pin` resolves by leaving it
-    out of the lock; that message takes precedence over the entry's own.
+    Declares a repo for every platform in `DEFAULT_PLATFORMS` because lock
+    hashes carry no platform names. Each repo resolves its digest from the
+    registry and checks it against `entry.zh` on fetch (`_locked_download`),
+    keeping provider digests out of MODULE.bazel.lock.
+
+    An unusable entry or a lock/tag conflict (`conflict` is True) declares no
+    repos and returns a hub package error instead of failing the extension, so
+    `//:pin` stays runnable. When `conflict` is True, the conflict message
+    replaces `entry.error`; the provider is unusable until the tag is removed
+    or `pin` rewrites the lock.
+
+    Returns the error, or None.
     """
     error = entry.error
     if conflict:
         error = ("{} is pinned both by a tf_providers.provider tag in the root module's MODULE.bazel " +
                  "and by this lock. Remove the tag, or regenerate the lock, which `pin` writes without " +
                  "the providers the root module tags.").format(entry.source)
-    _tf_provider_download(
-        name = repo_name(entry.namespace, entry.name),
-        source = entry.source,
-        version = entry.version,
-        lock = "@{}//:.terraform.lock.hcl".format(_HUB),
-        lock_path = lock.lock_path,
-        zh = [] if error else entry.zh,
-        error = error or "",
-    )
+    if error:
+        return _lock_error(lock.lock_path, error)
+    for platform in DEFAULT_PLATFORMS:
+        _tf_provider_download(
+            name = repo_name(entry.namespace, entry.name, platform),
+            source = entry.source,
+            version = entry.version,
+            platform = platform,
+            lock = "@{}//:.terraform.lock.hcl".format(_HUB),
+            lock_path = lock.lock_path,
+            zh = entry.zh,
+        )
+    return None
 
 tf_providers = module_extension(
     doc = """Downloads OpenTofu providers and exposes `@tf_providers`.
 
 BUILD files reference providers as `@tf_providers//<namespace>/<name>` in lower
-case and without a version. Only providers required by built targets are
-fetched, and `tofu init` runs offline against them.
+case and without a version. `tofu init` runs offline against them.
 
-Versions come from `.terraform.lock.hcl` via `from_lock` or from `provider` tags
-in `MODULE.bazel`, and the two can be mixed across providers. Archives come from
-`registry.opentofu.org` unless a tag sets `url_template`, and every download is
-verified against the lock's `zh:` hashes, a tag's `sha256`, or registry digests
-recorded in `MODULE.bazel.lock`.
-
-Each provider resolves to one version across the module graph. The root module's
-lock or tag wins; otherwise an agreed version or the highest plain numeric
-version is selected, comparing dot-separated digit components so `5.70` equals
-`5.70.0`. If dependencies request different versions and any is not plain
-numeric, such as `2.0.0-rc1` or `v1.2.3`, fetching that provider fails until
-the root module selects a version via a tag or `pin`. For the winning version,
-`sha256` maps are merged across modules, and conflicting digests or
-`url_template` values fail analysis.
+Only the root module pins providers. Providers on `registry.opentofu.org` are
+pinned by `.terraform.lock.hcl` via `from_lock`. Off-registry providers are
+pinned by `provider` tags setting `source`, `version`, `url_template` and
+`sha256`. `from_lock` and `provider` tags in dependencies are ignored, so the
+root module locks or tags every provider its dependencies use. Nothing about
+providers is recorded in `MODULE.bazel.lock`.
 
 `from_lock` parses the lock with a Go helper compiled by `rules_go`'s host Go
 SDK, honouring `GOPROXY`, `GONOSUMDB`, `GOPRIVATE`, `GONOPROXY` and `GOSUMDB`;

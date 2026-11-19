@@ -117,6 +117,8 @@ _tf_library = rule(
         ),
         "providers": attr.label_list(
             providers = [TfProviderInfo],
+            # Select for the execution platform, where `tofu` loads plugins.
+            cfg = "exec",
             doc = "`@tf_providers//<namespace>/<name>` targets required by `srcs`. Also " +
                   "installed in dependants' plugin trees for this library's files.",
         ),

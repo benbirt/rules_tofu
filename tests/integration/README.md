@@ -21,9 +21,9 @@ tests/integration/
 │   └── lock/                the workspace's `from_lock` lock and versions.tf
 ├── broken_module/           negative: duplicate root `tofu.version` tags
 ├── lock_dependency/         negative: ignored dependency `from_lock` and
-│                            unorderable non-root provider versions
+│                            `provider` tags
 ├── custom_toolchain/        root `opentofu_toolchain` precedence check
-├── lock_update/             positive: `pin`, bot lock bump, root tag conflict
+├── lock_update/             positive: `pin`, bot lock bump, root tags
 ├── module_dependency/       positive: `tf_library` calls across Bazel modules
 ├── tf_modules/              positive: `tf_modules` git, archive and registry
 └── run_directory/           positive: `tf_deploy` launchers and local state
@@ -54,15 +54,15 @@ own sub-workspace (`_WORKSPACE_FILES` in `BUILD.bazel`), and each row outside
 `lock_dependency/` is a two-module graph driven by `assert_bazel_fails.sh` as
 two separate `_CASES` targets. The root module has no lock, while its
 `lib_module` dependency calls `from_lock` on an unreadable file and tags
-`acme/unorderable` at `1.9.0` and `2.0.0-rc1`:
+`acme/tagged` without `url_template`:
 
 - `dependency_lock_ignored_test` builds `@lib_module//:lib` and checks that the
   dependency's `from_lock` is ignored, failing only because `@tf_providers` has
   no `hashicorp/null` package.
-- `unorderable_versions_test` builds `@lib_module//:unorderable` and checks
-  that the unorderable non-root tags fail when that provider is fetched rather
-  than during extension evaluation, leaving `@lib_module//:lib` to fail for its
-  own reason.
+- `dependency_tag_ignored_test` builds `@lib_module//:tagged` and checks that
+  `@tf_providers//acme/tagged` fails to load because the root module does not
+  pin it. Extension evaluation itself succeeds, so `@lib_module//:lib` still
+  fails for its own reason.
 
 `custom_toolchain/` registers a root `opentofu_toolchain` whose stand-in `tofu`
 exits non-zero with `"custom tofu toolchain selected"`. `assert_bazel_fails.sh`
@@ -72,9 +72,11 @@ toolchain wins over `rules_tofu`'s downloads both when a library is validated
 at build time and when `bazel run @rules_tofu//tofu` is run.
 
 `lock_update/` (`lock_update_test`, driven by `lock_update_test.sh`) keeps its
-lock in `infra/` and covers a workspace's first `@tf_providers//:pin`, a
+lock in `infra/` and covers a workspace's first `@tf_providers//:pin`, fetching
+only the execution platform's provider package under a non-host `--platforms`, a
 lock-only provider bump leaving `MODULE.bazel.lock` untouched under
-`--lockfile_mode=error`, and resolving a root `tf_providers.provider` tag
+`--lockfile_mode=error`, a root `tf_providers.provider` tag without
+`url_template` failing with migration instructions, and resolving a lock/tag
 conflict via `pin`. It also checks that `bazel mod tidy` succeeds and changes
 nothing in a copy holding only the files Dependabot's `bazel` updater fetches.
 See the header of `lock_update_test.sh` for the steps.
@@ -105,10 +107,10 @@ See the header of `module_dependency_test.sh` for the steps.
 `tf_modules/` (`tf_modules_test`, driven by `tf_modules_test.sh`) turns
 `fixtures/network` into a tagged git repository and `fixtures/dns` into an
 archive at test time alongside `cloudposse/label/null` from the OpenTofu
-registry. It covers offline planning, tree tidying, commit and registry facts,
-`from_lock` with `pin`, fetch-time error diagnostics, and adding a module
-without re-fetching existing ones; see the header of `tf_modules_test.sh` for
-the steps.
+registry. It covers `pin` for providers required only by fetched modules,
+offline planning, tree tidying, commit and registry facts, fetch-time error
+diagnostics, and adding a module without re-fetching existing ones; see the
+header of `tf_modules_test.sh` for the steps.
 
 `run_directory/` (`run_directory_test`, driven by `run_directory_test.sh`)
 exercises `tf_deploy` launchers under `bazel run` and direct execution from
@@ -197,6 +199,5 @@ backend, and a relative `backend "local"`). `run_directory_test` covers
 `backend "local"` outside `bazel-out` without `allow_ephemeral_state`.
 
 Still untested in Bazel-in-Bazel: a remote backend or `cloud` block reaching
-`tofu`, and hard `fail()` paths during `tf_providers` tag resolution (duplicate
-root tags, or modules disagreeing on `sha256` or `url_template` for a winning
-version).
+`tofu`, and hard `fail()` paths in `tf_providers` for a root tag that is
+declared twice.

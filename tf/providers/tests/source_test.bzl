@@ -8,16 +8,17 @@ downstream modules load.
 load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")
 load(
     "//tf/providers:source.bzl",
+    "DEFAULT_PLATFORMS",
+    "check_platforms",
+    "check_tag",
     "check_url_template",
     "download_location",
-    "highest_version",
-    "is_provider_binary",
+    "ignored_tag_error",
+    "missing_platform_error",
     "parse_source",
-    "published_platforms",
     "registry_download_url",
     "registry_shasum",
     "repo_name",
-    "valid_cached_sha256s",
 )
 
 def _parse_source_lowercases_test_impl(ctx):
@@ -28,7 +29,11 @@ def _parse_source_lowercases_test_impl(ctx):
     asserts.equals(env, None, parsed.error)
     asserts.equals(env, "posthog", parsed.namespace)
     asserts.equals(env, "posthog", parsed.name)
-    asserts.equals(env, "tf_providers_posthog_posthog", repo_name(parsed.namespace, parsed.name))
+    asserts.equals(
+        env,
+        "tf_providers_posthog_posthog_linux_amd64",
+        repo_name(parsed.namespace, parsed.name, "linux_amd64"),
+    )
     return unittest.end(env)
 
 _parse_source_lowercases_test = unittest.make(_parse_source_lowercases_test_impl)
@@ -44,7 +49,7 @@ def _parse_source_rejects_malformed_test_impl(ctx):
 
 _parse_source_rejects_malformed_test = unittest.make(_parse_source_rejects_malformed_test_impl)
 
-def _registry_by_default_test_impl(ctx):
+def _registry_for_locked_test_impl(ctx):
     env = unittest.begin(ctx)
 
     location = download_location("posthog", "posthog", "1.0.24", "darwin", "arm64")
@@ -67,12 +72,12 @@ def _registry_by_default_test_impl(ctx):
     )
     return unittest.end(env)
 
-_registry_by_default_test = unittest.make(_registry_by_default_test_impl)
+_registry_for_locked_test = unittest.make(_registry_for_locked_test_impl)
 
 def _url_template_wins_test_impl(ctx):
     env = unittest.begin(ctx)
 
-    # For any namespace, so a mirror can stand in for the registry.
+    # url_template applies to any namespace, including hashicorp/.
     location = download_location(
         "hashicorp",
         "aws",
@@ -111,70 +116,27 @@ _url_template_rejects_unknown_placeholders_test = unittest.make(_url_template_re
 _ZIP = "https://github.com/posthog/terraform-provider-posthog/releases/download/v1.0.24/terraform-provider-posthog_1.0.24_linux_amd64.zip"
 _SHA = "4afb3cb829dee5e97f98b51ebdb761b8cc4daf6d0a7f541f9f5a89e0ab86251d"
 
-def _registry_response_matching_pin_test_impl(ctx):
+def _registry_response_test_impl(ctx):
     env = unittest.begin(ctx)
 
-    resolved = registry_download_url({"download_url": _ZIP, "shasum": _SHA}, _SHA, "posthog/posthog@1.0.24 on linux_amd64")
+    resolved = registry_download_url({"download_url": _ZIP, "shasum": _SHA}, "posthog/posthog@1.0.24 on linux_amd64")
 
     asserts.equals(env, None, resolved.error)
     asserts.equals(env, _ZIP, resolved.url)
     return unittest.end(env)
 
-_registry_response_matching_pin_test = unittest.make(_registry_response_matching_pin_test_impl)
-
-def _registry_response_names_correct_pin_test_impl(ctx):
-    env = unittest.begin(ctx)
-
-    resolved = registry_download_url({"download_url": _ZIP, "shasum": _SHA}, "0" * 64, "posthog/posthog@1.0.24 on linux_amd64")
-
-    asserts.equals(env, None, resolved.url)
-    asserts.true(env, _SHA in resolved.error, "the error should name the registry's checksum: {}".format(resolved.error))
-    asserts.true(env, "linux_amd64" in resolved.error)
-    return unittest.end(env)
-
-_registry_response_names_correct_pin_test = unittest.make(_registry_response_names_correct_pin_test_impl)
+_registry_response_test = unittest.make(_registry_response_test_impl)
 
 def _registry_response_without_url_test_impl(ctx):
     env = unittest.begin(ctx)
 
-    resolved = registry_download_url({"errors": ["Not Found"]}, _SHA, "posthog/posthog@9.9.9 on linux_amd64")
+    resolved = registry_download_url({"errors": ["Not Found"]}, "posthog/posthog@9.9.9 on linux_amd64")
 
     asserts.equals(env, None, resolved.url)
     asserts.true(env, "no download_url" in resolved.error)
     return unittest.end(env)
 
 _registry_response_without_url_test = unittest.make(_registry_response_without_url_test_impl)
-
-def _published_platforms_test_impl(ctx):
-    env = unittest.begin(ctx)
-
-    response = {"versions": [
-        {"version": "1.0.23", "platforms": [{"os": "linux", "arch": "amd64"}]},
-        {"version": "1.0.24", "platforms": [
-            {"os": "windows", "arch": "amd64"},
-            {"os": "linux", "arch": "amd64"},
-            {"os": "freebsd", "arch": "amd64"},
-            {"os": "darwin", "arch": "arm64"},
-        ]},
-    ]}
-
-    # Only DEFAULT_PLATFORMS, in their order, whatever order the registry uses.
-    found = published_platforms(response, "1.0.24", "posthog/posthog")
-    asserts.equals(env, None, found.error)
-    asserts.equals(env, ["linux_amd64", "darwin_arm64", "windows_amd64"], found.platforms)
-
-    missing = published_platforms(response, "9.9.9", "posthog/posthog")
-    asserts.true(env, "no version 9.9.9" in missing.error, "got {}".format(missing.error))
-
-    none = published_platforms(
-        {"versions": [{"version": "1.0.0", "platforms": [{"os": "freebsd", "arch": "amd64"}]}]},
-        "1.0.0",
-        "x/y",
-    )
-    asserts.true(env, "freebsd_amd64" in none.error, "got {}".format(none.error))
-    return unittest.end(env)
-
-_published_platforms_test = unittest.make(_published_platforms_test_impl)
 
 def _registry_shasum_test_impl(ctx):
     env = unittest.begin(ctx)
@@ -186,123 +148,77 @@ def _registry_shasum_test_impl(ctx):
 
 _registry_shasum_test = unittest.make(_registry_shasum_test_impl)
 
-def _cached_facts_validated_test_impl(ctx):
+def _platforms_test_impl(ctx):
     env = unittest.begin(ctx)
 
-    asserts.true(env, valid_cached_sha256s({"linux_amd64": _SHA, "darwin_arm64": _SHA}))
-
-    # Anything a different version of the extension might have written is a miss.
-    for cached in [
-        None,
-        {},
-        [_SHA],
-        {"linux_amd64": _SHA.upper()},
-        {"linux_amd64": _SHA[:-1]},
-        {"freebsd_amd64": _SHA},
-        {"linux_amd64": {"sha256": _SHA}},
-    ]:
-        asserts.false(env, valid_cached_sha256s(cached), "accepted {}".format(cached))
-    return unittest.end(env)
-
-_cached_facts_validated_test = unittest.make(_cached_facts_validated_test_impl)
-
-def _provider_binary_names_test_impl(ctx):
-    env = unittest.begin(ctx)
-
-    # OpenTofu's builds, HashiCorp-style builds, with and without `_x5`.
-    for filename, exe in [
-        ("terraform-provider-aws", ""),
-        ("terraform-provider-aws.exe", ".exe"),
-        ("terraform-provider-aws_v6.45.0", ""),
-        ("terraform-provider-aws_v6.45.0_x5", ""),
-        ("terraform-provider-aws_v6.45.0_x5.exe", ".exe"),
-    ]:
-        asserts.true(env, is_provider_binary(filename, "aws", "6.45.0", exe), "rejected {}".format(filename))
-
-    for filename, exe in [
-        ("LICENSE", ""),
-        ("CHANGELOG.md", ""),
-        ("terraform-provider-aws", ".exe"),
-        ("terraform-provider-aws_v6.44.0", ""),
-        ("terraform-provider-awscc", ""),
-        ("terraform-provider-aws.sig", ""),
-    ]:
-        asserts.false(env, is_provider_binary(filename, "aws", "6.45.0", exe), "accepted {}".format(filename))
-    return unittest.end(env)
-
-_provider_binary_names_test = unittest.make(_provider_binary_names_test_impl)
-
-def _request(version, mod_name):
-    return struct(version = version, mod_name = mod_name)
-
-def _highest_version_test_impl(ctx):
-    env = unittest.begin(ctx)
-
-    # One request, or several that agree, is the answer whatever it looks
-    # like: nothing is ordered, so a prerelease is fine.
-    for version in ["5.70.0", "1.2.0-rc1", "not a version"]:
-        for requests in [[_request(version, "a")], [_request(version, "a"), _request(version, "b")]]:
-            resolved = highest_version("acme/thing", requests)
-            asserts.equals(env, None, resolved.error)
-            asserts.equals(env, version, resolved.version)
-
-    # Differing numeric versions: the highest, compared as numbers.
-    for versions, want in [
-        (["5.9.0", "5.70.0"], "5.70.0"),
-        (["5.70.0", "5.9.0"], "5.70.0"),
-        (["1.10.0", "1.9.9", "1.2.3"], "1.10.0"),
-        (["2", "1.99.99"], "2"),
-        (["3.0.1", "3.0", "3"], "3.0.1"),
-        # Equal once padded: the first named stays.
-        (["5.70", "5.70.0"], "5.70"),
-        (["5.70.0", "5.70"], "5.70.0"),
-    ]:
-        resolved = highest_version("acme/thing", [_request(v, "m" + v) for v in versions])
-        asserts.equals(env, None, resolved.error, "for {}".format(versions))
-        asserts.equals(env, want, resolved.version, "for {}".format(versions))
-
-    return unittest.end(env)
-
-_highest_version_test = unittest.make(_highest_version_test_impl)
-
-def _highest_version_unorderable_test_impl(ctx):
-    env = unittest.begin(ctx)
-
-    # A prerelease among differing versions can't be ordered. The error names
-    # the provider, each requested version with its distinct requesting
-    # modules and how to resolve the conflict.
-    resolved = highest_version("acme/thing", [
-        _request("1.9.0", "net"),
-        _request("2.0.0-rc1", "dns"),
-        _request("1.9.0", "app"),
-        _request("2.0.0-rc1", "dns"),
-    ])
-    asserts.equals(env, None, resolved.version)
+    # PLATFORMS in //toolchain:versions.bzl is shared by tofu and providers.
     asserts.equals(
         env,
-        "Provider `acme/thing` is tagged with different versions by modules the root module " +
-        "depends on: `1.9.0` (from `net`, `app`), `2.0.0-rc1` (from `dns`). rules_tofu can only " +
-        "order plain numeric versions, and `2.0.0-rc1` is not one. Choose a version in the root " +
-        "module: tag the provider in its MODULE.bazel, or, if it pins providers with " +
-        "`tf_providers.from_lock`, lock this one with `bazel run @tf_providers//:pin`.",
-        resolved.error,
+        ["linux_amd64", "linux_arm64", "darwin_amd64", "darwin_arm64", "windows_amd64"],
+        DEFAULT_PLATFORMS,
     )
+    asserts.equals(env, None, check_platforms([]))
+    asserts.equals(env, None, check_platforms(DEFAULT_PLATFORMS))
 
-    # Whichever comes first.
-    resolved = highest_version("acme/thing", [_request("2.0.0-rc1", "dns"), _request("1.9.0", "net")])
-    asserts.equals(env, None, resolved.version)
-    asserts.true(env, "`2.0.0-rc1` (from `dns`), `1.9.0` (from `net`)" in resolved.error, resolved.error)
-    asserts.true(env, "`2.0.0-rc1` is not one" in resolved.error, resolved.error)
-
-    # So is anything else that isn't dot-separated digits.
-    for bad in ["v1.2.3", "1.2.x", "1..2", "", "1.2.3+build"]:
-        resolved = highest_version("acme/thing", [_request("1.0.0", "a"), _request(bad, "b")])
-        asserts.equals(env, None, resolved.version, "for {}".format(repr(bad)))
-        asserts.true(env, "`{}` is not one".format(bad) in resolved.error, "for {}: {}".format(repr(bad), resolved.error))
-
+    # 32-bit platforms are no longer supported and fail like any unknown key.
+    error = check_platforms(["linux_amd64", "windows_386", "linux_386"])
+    asserts.true(env, "unsupported platforms `linux_386`, `windows_386` in `sha256`;" in error, error)
+    asserts.true(env, error.endswith("supported platforms are `linux_amd64`, `linux_arm64`, `darwin_amd64`, `darwin_arm64`, `windows_amd64`"), error)
+    asserts.true(env, "unsupported platform `plan9_amd64` in" in check_platforms(["plan9_amd64"]))
     return unittest.end(env)
 
-_highest_version_unorderable_test = unittest.make(_highest_version_unorderable_test_impl)
+_platforms_test = unittest.make(_platforms_test_impl)
+
+def _missing_platform_test_impl(ctx):
+    env = unittest.begin(ctx)
+
+    # Partial platform map (from a tag's sha256): suggest adding the digest.
+    partial = missing_platform_error("hashicorp/aws", "6.45.0", ["linux_amd64", "darwin_arm64"])
+    asserts.true(env, partial.startswith("Provider `hashicorp/aws@6.45.0` has packages only for `linux_amd64`, `darwin_arm64`, not for"), partial)
+    asserts.true(env, partial.endswith("Add the execution platform's zip digest to `sha256` on its `tf_providers.provider` tag in MODULE.bazel."), partial)
+
+    # All supported platforms present: no sha256 entry can add another.
+    full = missing_platform_error("hashicorp/null", "3.2.4", DEFAULT_PLATFORMS)
+    asserts.true(env, full.endswith("not for this build's execution platform."), full)
+    return unittest.end(env)
+
+_missing_platform_test = unittest.make(_missing_platform_test_impl)
+
+_TEMPLATE = "https://example.com/{name}_{version}_{os}_{arch}.zip"
+
+def _check_tag_test_impl(ctx):
+    env = unittest.begin(ctx)
+
+    asserts.equals(env, None, check_tag({"linux_amd64": _SHA, "darwin_arm64": _SHA}, _TEMPLATE))
+
+    # A 0.5 registry-provider tag without url_template (with or without sha256)
+    # points to from_lock and pin.
+    for sha256 in [{}, {"linux_amd64": _SHA}]:
+        registry = check_tag(sha256, "")
+        asserts.true(env, registry.startswith("missing `url_template`."), registry)
+        asserts.true(env, "tf_providers.from_lock(lock_file = \"//:.terraform.lock.hcl\")" in registry, registry)
+        asserts.true(env, "bazel run @tf_providers//:pin" in registry, registry)
+
+    asserts.true(env, check_tag({}, _TEMPLATE).startswith("missing `sha256`"))
+    asserts.true(env, "unknown placeholder `{platform}`" in check_tag({"linux_amd64": _SHA}, "https://x/{platform}"))
+    asserts.true(env, "unsupported platform `linux_386`" in check_tag({"linux_386": _SHA}, _TEMPLATE))
+    asserts.true(env, "`sha256[\"linux_amd64\"]` must be" in check_tag({"linux_amd64": "sha256:" + _SHA}, _TEMPLATE))
+    return unittest.end(env)
+
+_check_tag_test = unittest.make(_check_tag_test_impl)
+
+def _ignored_tag_test_impl(ctx):
+    env = unittest.begin(ctx)
+
+    one = ignored_tag_error("acme/widgets", ["lib"])
+    asserts.true(env, one.startswith("Provider `acme/widgets` is tagged with `tf_providers.provider` by `lib`, but only the root module pins providers."), one)
+    asserts.true(env, "bazel run @tf_providers//:pin" in one, one)
+
+    two = ignored_tag_error("acme/widgets", ["lib", "net"])
+    asserts.true(env, "by `lib`, `net`, but" in two, two)
+    return unittest.end(env)
+
+_ignored_tag_test = unittest.make(_ignored_tag_test_impl)
 
 def source_test_suite(name):
     """Declares the `source.bzl` unit tests.
@@ -312,18 +228,16 @@ def source_test_suite(name):
     """
     unittest.suite(
         name,
+        _platforms_test,
+        _missing_platform_test,
         _parse_source_lowercases_test,
         _parse_source_rejects_malformed_test,
-        _registry_by_default_test,
+        _registry_for_locked_test,
         _url_template_wins_test,
         _url_template_rejects_unknown_placeholders_test,
-        _registry_response_matching_pin_test,
-        _registry_response_names_correct_pin_test,
+        _registry_response_test,
         _registry_response_without_url_test,
-        _published_platforms_test,
         _registry_shasum_test,
-        _cached_facts_validated_test,
-        _provider_binary_names_test,
-        _highest_version_test,
-        _highest_version_unorderable_test,
+        _check_tag_test,
+        _ignored_tag_test,
     )

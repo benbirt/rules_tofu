@@ -11,8 +11,6 @@ TofuInfo = provider(
     fields = {
         "binary": "File: the `tofu` executable.",
         "version": "string: OpenTofu version string, e.g. `\"1.12.0\"`.",
-        "platform_key": "string: `<os>_<arch>` key, e.g. `\"linux_amd64\"`, used to select " +
-                        "matching provider packages in each target's plugin tree.",
     },
 )
 
@@ -20,7 +18,6 @@ def _opentofu_toolchain_impl(ctx):
     tofu_info = TofuInfo(
         binary = ctx.file.binary,
         version = ctx.attr.version,
-        platform_key = ctx.attr.platform_key,
     )
     return [
         platform_common.ToolchainInfo(tofu = tofu_info),
@@ -38,11 +35,6 @@ opentofu_toolchain = rule(
             mandatory = True,
             doc = "OpenTofu version string, e.g. `\"1.12.0\"`. Recorded on `TofuInfo` and not " +
                   "checked by `rules_tofu`.",
-        ),
-        "platform_key": attr.string(
-            mandatory = True,
-            doc = "`<os>_<arch>` key, e.g. `\"linux_amd64\"`, used to select matching provider " +
-                  "packages in each target's plugin tree.",
         ),
     },
     doc = """Wraps an OpenTofu executable as a `rules_tofu` toolchain.

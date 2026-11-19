@@ -1,12 +1,16 @@
-"""Module declaration for the nested Bazel invocation asserting that a
-dependency's `tf_providers.from_lock` is ignored.
+"""Module declaration for the nested Bazel invocations asserting that a
+dependency's `tf_providers.from_lock` and `tf_providers.provider` tags are
+ignored.
 
 `lib_module` stands in for a Bazel module developed with its own lock and then
 depended on. Only the root module's lock counts, as in OpenTofu, so its lock
 (deliberately unreadable) is never read, and the `@tf_providers` hub it names
 in `use_repo` exists even though this root declares no providers. The root
 doesn't supply `hashicorp/null`, which `lib_module`'s library needs, so
-building that library fails naming the missing provider.
+building that library fails naming the missing provider. `lib_module` also
+tags `acme/tagged` without this root pinning it, so building
+`@lib_module//:tagged` fails reporting that only the root module pins
+providers.
 """
 
 module(

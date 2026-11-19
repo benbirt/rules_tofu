@@ -1,51 +1,41 @@
 """`tf_provider` rule.
 
-A `tf_provider` target wraps the per-platform packages and optional lock file
-of one OpenTofu provider version, such as `hashicorp/aws` at `5.70.0`.
+A `tf_provider` target wraps one platform's unpacked package and optional lock
+file for an OpenTofu provider version, such as `hashicorp/aws` at `5.70.0` for
+`linux_amd64`.
 
 Instantiated by the `tf_providers` module extension (see
 `//tf/providers:extensions.bzl`); users do not call `tf_provider` directly.
 Providers are pinned via `tf_providers.from_lock` or `tf_providers.provider` in
 `MODULE.bazel` and referenced as `@tf_providers//<namespace>/<name>` in the
 `providers` attribute of `tf_library`, `tf_deploy` or `tf_test`. Each generated
-`tf_provider` target is visible only to its `@tf_providers` alias.
+`tf_provider` target is visible only to `@tf_providers`, whose alias selects
+the execution platform's package.
 """
 
 load(":providers.bzl", "TfProviderInfo")
 
 visibility(["public"])
 
-def _tf_provider_impl(ctx):
-    binaries = {}
-    for tgt, platform_key in ctx.attr.binaries.items():
-        files = tgt.files.to_list()
-        if len(files) != 1:
-            fail("tf_provider `{}` binary for {} must be a single file, got {}".format(
-                ctx.label,
-                platform_key,
-                [f.path for f in files],
-            ))
-        binaries[platform_key] = files[0]
+# Subdirectory where the provider repository extracts the zip.
+_PACKAGE_PREFIX = "package/"
 
-    # Each file sits at `plugins/<address>/<version>/<os>_<arch>/<path>` in
-    # the provider's repo; the plugin tree wants `<path>`.
-    package_files = {}
-    for tgt, platform_key in ctx.attr.package_files.items():
-        prefix = "plugins/{}/{}/{}/".format(ctx.attr.address, ctx.attr.version, platform_key)
-        for f in tgt.files.to_list():
-            if not f.owner.name.startswith(prefix):
-                fail("tf_provider `{}`: {} is not under {}".format(ctx.label, f.path, prefix))
-            package_files.setdefault(platform_key, []).append(
-                struct(path = f.owner.name[len(prefix):], file = f),
-            )
+def _tf_provider_impl(ctx):
+    # Strip `package/` so `path` is relative to `<os>_<arch>/` in the plugin
+    # tree.
+    files = []
+    for f in ctx.files.files:
+        if not f.owner.name.startswith(_PACKAGE_PREFIX):
+            fail("tf_provider `{}`: {} is not under {}".format(ctx.label, f.path, _PACKAGE_PREFIX))
+        files.append(struct(path = f.owner.name[len(_PACKAGE_PREFIX):], file = f))
 
     return [
-        DefaultInfo(files = depset(direct = binaries.values())),
+        DefaultInfo(files = depset(ctx.files.files)),
         TfProviderInfo(
             address = ctx.attr.address,
             version = ctx.attr.version,
-            binaries = binaries,
-            package_files = package_files,
+            platform = ctx.attr.platform,
+            files = files,
             lock = ctx.file.lock,
         ),
     ]
@@ -61,20 +51,16 @@ tf_provider = rule(
             mandatory = True,
             doc = "Provider version, e.g. \"5.70.0\".",
         ),
-        "binaries": attr.label_keyed_string_dict(
+        "platform": attr.string(
+            mandatory = True,
+            doc = "`<os>_<arch>` platform key for this package, e.g. \"linux_amd64\".",
+        ),
+        "files": attr.label_list(
             mandatory = True,
             allow_files = True,
-            doc = "Map of single-file provider binary label to `<os>_<arch>` platform key. " +
-                  "Extracted at `plugins/<address>/<version>/<os>_<arch>/<filename>` in the " +
-                  "provider repository; `materialize_plugin_tree` symlinks each binary under " +
-                  "`<os>_<arch>/` by its `basename`.",
-        ),
-        "package_files": attr.label_keyed_string_dict(
-            allow_files = True,
-            doc = "Map of the remaining files from each platform's unpacked zip, such as " +
-                  "`LICENSE` and `README.md`, to `<os>_<arch>` platform key. Each file's " +
-                  "target name must start with `plugins/<address>/<version>/<os>_<arch>/`, " +
-                  "which is stripped to give its path inside `<os>_<arch>/`.",
+            doc = "All files from the platform's unpacked zip, including the provider binary, " +
+                  "`LICENSE` and `README.md`. Each target name must begin with `package/`, which " +
+                  "is stripped to form the path under `<os>_<arch>/` in the plugin tree.",
         ),
         "lock": attr.label(
             allow_single_file = True,
@@ -84,5 +70,5 @@ tf_provider = rule(
         ),
     },
     provides = [TfProviderInfo],
-    doc = "Wraps the per-platform packages and optional lock file of one OpenTofu provider version.",
+    doc = "Wraps one platform's unpacked package and optional lock file for an OpenTofu provider version.",
 )

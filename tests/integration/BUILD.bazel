@@ -86,7 +86,9 @@ _CASES = [
     ("test_helper_missing", "broken_workspace", "//cases/test_helper_missing:test", "is not in the work tree; add the tf_library"),
     ("malformed_var_file", "broken_workspace", "//cases/malformed_var_file:deploy", "parse:"),
     ("conflicting_providers", "broken_workspace", "//cases/conflicting_providers:lib", "conflicting versions"),
-    ("registry_sha256_mismatch", "broken_workspace", "//cases/registry_sha256_mismatch:lib", "but the registry reports"),
+    ("conflicting_provider_platforms", "broken_workspace", "//cases/conflicting_providers:platforms", "for two execution platforms: `linux_amd64` and `linux_arm64`"),
+    ("conflicting_provider_platforms_distinct", "broken_workspace", "//cases/conflicting_providers:platforms_distinct", "for two execution platforms: `linux_amd64` and `linux_arm64` (`registry.opentofu.org/hashicorp/aws` and `registry.opentofu.org/hashicorp/random`)"),
+    ("missing_platform", "broken_workspace", "//cases/missing_platform:lib", "Provider `acme/windows-only@1.0.0` has packages only for `windows_amd64`, not for"),
     ("provider_repo_private", "broken_workspace", "//cases/provider_repo_private:lib", "Visibility error"),
     ("stale_lock", "broken_workspace", "//cases/stale_lock:lib", "bazel run @tf_providers//:pin"),
     # Dependency-order failures (issue #143; see
@@ -103,10 +105,11 @@ _CASES = [
     ("duplicate_root_version", "broken_module", "//cases/duplicate_root_version:lib", "declares tofu.version more than once"),
     # A dependency's from_lock is ignored, so the root must supply its providers.
     ("dependency_lock_ignored", "lock_dependency", "@lib_module//:lib", "BUILD file not found in directory 'hashicorp/null'"),
-    # Dependencies' tags that can't be settled on one version fail the
-    # provider when it is used, not the extension: the case above still fails
-    # for its own reason, in the same module graph.
-    ("unorderable_versions", "lock_dependency", "@lib_module//:unorderable", "rules_tofu can only order plain numeric versions"),
+    # A dependency's provider tag is ignored too, whatever attributes it sets.
+    # Only targets using that provider fail (naming the module that tagged it),
+    # not the extension, so dependency_lock_ignored above still fails for its
+    # own reason in the same module graph.
+    ("dependency_tag_ignored", "lock_dependency", "@lib_module//:tagged", "by `lib_module`, but only the root module pins providers"),
     # A toolchain the root module registers is the one selected, ahead of
     # rules_tofu's downloads. Its stand-in `tofu` fails with this message.
     ("custom_toolchain", "custom_toolchain", "//:lib", "custom tofu toolchain selected"),
@@ -197,8 +200,9 @@ bazel_integration_test(
 # Provider lock workflow: a workspace's first pin, a Dependabot/Renovate
 # update (versions.tf and infra/.terraform.lock.hcl only) that must leave
 # MODULE.bazel.lock untouched, `bazel mod tidy` with only the files
-# Dependabot's bazel updater fetches, and a root tag for the locked provider
-# that fails the build while leaving pin runnable. See lock_update_test.sh.
+# Dependabot's bazel updater fetches, fetching only the execution platform's
+# provider repo, a 0.5-style root tag without url_template, and resolving a
+# lock/tag conflict via pin. See lock_update_test.sh.
 sh_binary(
     name = "lock_update_driver",
     srcs = ["lock_update_test.sh"],

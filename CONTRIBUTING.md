@@ -46,9 +46,10 @@ bazel test //...
    `bazel run @tf_providers//:pin`. Do not accept `.terraform.lock.hcl` in
    `srcs` or `data`, and do not relax the analysis-time check in `materialize`
    (`tf/private/work_tree.bzl`) that rejects it in any work-tree directory.
-   Every provider download must be gated on a SHA-256 digest: the `sha256` on
-   its `tf_providers.provider` tag, the registry digest recorded as a fact in
-   `MODULE.bazel.lock`, or one of the lock file's `zh:` hashes.
+   Providers on `registry.opentofu.org` are pinned by that lock alone. Root
+   `tf_providers.provider` tags are only for off-registry providers, and tags
+   in dependencies are ignored. Every provider download must be gated on a
+   SHA-256 digest: one of the lock file's `zh:` hashes, or the tag's `sha256`.
 2. Building validates. `bazel build` on any `tf_library`, `tf_deploy` or
    `tf_test` target runs `tofu init -backend=false` and `tofu validate` (with
    the test directory for `tf_test`). Do not bypass or defer this. Every

@@ -143,6 +143,8 @@ tf_deploy_rule = rule(
         ),
         "providers": attr.label_list(
             providers = [TfProviderInfo],
+            # Select for the execution platform, where `tofu` loads plugins.
+            cfg = "exec",
             doc = "`@tf_providers//<namespace>/<name>` targets required by `srcs`. Providers " +
                   "from `deps` are also installed in the plugin tree.",
         ),

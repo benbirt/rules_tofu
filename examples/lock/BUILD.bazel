@@ -7,5 +7,13 @@ load("@rules_tofu//tf:defs.bzl", "tf_library")
 tf_library(
     name = "versions",
     srcs = ["versions.tf"],
-    providers = ["@tf_providers//hashicorp/null"],
+    providers = [
+        "@tf_providers//cloudposse/utils",
+        "@tf_providers//hashicorp/aws",
+        "@tf_providers//hashicorp/external",
+        "@tf_providers//hashicorp/google",
+        "@tf_providers//hashicorp/local",
+        "@tf_providers//hashicorp/null",
+        "@tf_providers//posthog/posthog",
+    ],
 )

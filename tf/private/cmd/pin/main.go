@@ -156,11 +156,10 @@ func run(workspace, lockDir, tofu, bazel string, defaultPlatforms, excludedSourc
 		if !excludedAny {
 			return errors.New("no tf_library, tf_deploy or tf_test in the workspace declares required_providers to lock")
 		}
-		// Every requirement is on a provider the root module tags: the lock
-		// has nothing to pin, and a stale entry left in it would conflict
-		// with the tag because the extension fails that provider's fetch
-		// until the lock no longer names it. Write tofu's header with no
-		// providers.
+		// Every required provider is pinned by a root tag, so the lock has
+		// nothing to pin. Leaving a stale entry in place would conflict with
+		// the tag and make that provider's @tf_providers package fail to load.
+		// Write tofu's header with no providers.
 		if err := os.WriteFile(dst, []byte(emptyLock), 0o644); err != nil {
 			return err
 		}
@@ -326,11 +325,10 @@ const queryPartialExitCode = 3
 // that tf_modules fetched lists only the directories it serves, so its
 // examples are not among them.
 //
-// The query runs with --keep_going because deps() also follows each rule's
-// providers into @tf_providers, which cannot load before providers are locked:
-// before the first pin @tf_providers//<ns>/<name> has no package, and an
-// unusable lock entry makes its provider's repo fail when fetched. Neither has
-// .tf files to find, and pin is how both are fixed.
+// The query runs with --keep_going because deps() follows providers into
+// @tf_providers: an unpinned provider has no @tf_providers//<ns>/<name>
+// package yet, and an unusable lock entry or lock/tag conflict generates a
+// package that fails to load. Neither holds .tf files, and pin fixes both.
 func queryConfigFiles(bazel, workspace string, log io.Writer) (map[string][]string, error) {
 	targets, err := query(bazel, workspace, configQuery, log)
 	if err != nil {

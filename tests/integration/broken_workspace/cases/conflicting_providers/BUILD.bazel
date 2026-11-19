@@ -1,32 +1,25 @@
 load("@rules_tofu//tf:defs.bzl", "tf_library")
 load("@rules_tofu//tf/private:provider.bzl", "tf_provider")
 
-# Stand-in provider binaries, one per supported exec platform. Analysing :lib
-# checks the first provider for an exec-platform binary before reaching the
-# second provider where the version conflict is caught. Every host platform
-# must therefore be present here, or the build fails first with a
-# missing-platform error. The placeholder files' contents are irrelevant
-# because analysis fails before any action runs.
-_BINARIES = {
-    "binary_linux_amd64": "linux_amd64",
-    "binary_linux_arm64": "linux_arm64",
-    "binary_darwin_amd64": "darwin_amd64",
-    "binary_darwin_arm64": "darwin_arm64",
-}
+# Stand-in provider packages under `package/<file>`, matching the layout
+# generated in provider download repositories. File contents are unused because
+# analysis fails before any action runs.
 
 # Two tf_provider targets with the same address at different versions must
 # fail the aggregate provider check when :lib depends on both.
 tf_provider(
     name = "prov1",
     address = "registry.opentofu.org/hashicorp/aws",
-    binaries = _BINARIES,
+    files = ["package/terraform-provider-aws"],
+    platform = "linux_amd64",
     version = "5.70.0",
 )
 
 tf_provider(
     name = "prov2",
     address = "registry.opentofu.org/hashicorp/aws",
-    binaries = _BINARIES,
+    files = ["package/terraform-provider-aws"],
+    platform = "linux_amd64",
     version = "5.80.0",
 )
 
@@ -36,5 +29,45 @@ tf_library(
     providers = [
         ":prov1",
         ":prov2",
+    ],
+)
+
+# Same provider and version for two execution platforms, as happens when a
+# target and one of its deps resolve different execution platforms. One plugin
+# tree serves a single `tofu` binary, so :platforms fails naming both.
+tf_provider(
+    name = "prov1_arm64",
+    address = "registry.opentofu.org/hashicorp/aws",
+    files = ["package/terraform-provider-aws"],
+    platform = "linux_arm64",
+    version = "5.70.0",
+)
+
+tf_library(
+    name = "platforms",
+    srcs = ["main.tf"],
+    providers = [
+        ":prov1",
+        ":prov1_arm64",
+    ],
+)
+
+# Distinct provider addresses for two execution platforms also fail, naming
+# both addresses: the platform check spans the whole plugin tree, not each
+# address separately.
+tf_provider(
+    name = "random_arm64",
+    address = "registry.opentofu.org/hashicorp/random",
+    files = ["package/terraform-provider-aws"],
+    platform = "linux_arm64",
+    version = "3.9.1",
+)
+
+tf_library(
+    name = "platforms_distinct",
+    srcs = ["main.tf"],
+    providers = [
+        ":prov1",
+        ":random_arm64",
     ],
 )

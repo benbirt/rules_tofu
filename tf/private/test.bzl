@@ -253,6 +253,8 @@ _tf_test = rule(
         ),
         "providers": attr.label_list(
             providers = [TfProviderInfo],
+            # Select for the execution platform, where `tofu` loads plugins.
+            cfg = "exec",
             doc = "Providers needed beyond those of `module` and `deps`, as " +
                   "`@tf_providers//<namespace>/<name>`. `mock_provider` still requires the " +
                   "provider package for its schema.",

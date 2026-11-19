@@ -5,9 +5,10 @@ The file itself is parsed by `lockjson` (//tf/private/cmd/lockjson, built by
 entry's address is checked and split there with OpenTofu's registry-address
 library, the way `tofu` reads a lock. These pure functions decide what
 rules_tofu makes of the entries, so //tf/providers/tests can exercise them
-without a module graph. Errors are returned, not raised: the extension
-decides which ones abort evaluation and which become a repository that fails
-only when fetched, keeping `@tf_providers//:pin` runnable to rewrite the lock.
+without a module graph. Errors are returned, not raised: whole-file errors
+abort extension evaluation, while unusable entries become
+`@tf_providers//<namespace>/<name>` packages that fail to load when used,
+keeping `@tf_providers//:pin` runnable to rewrite the lock.
 """
 
 load(":source.bzl", "DEFAULT_HOST", "is_sha256")
@@ -74,33 +75,21 @@ def lock_entries(providers):
         ))
     return struct(entries = entries, error = None)
 
-def lock_sha256s(registry_sha256s, zh, context):
-    """Keep the registry's digests that the lock vouches for.
+def lock_vouches(sha256, zh, context):
+    """Verify that the lock's `zh:` hashes contain a zip's SHA-256 digest.
 
-    The registry says where each zip is and what its SHA256 is; the lock's
-    `zh:` hashes are what the user or a bot recorded when they last locked.
-    Each platform is accepted only if both agree. Lock files list the `zh:`
-    hash of every platform the provider publishes, whichever platforms they
-    were locked for, so any disagreement means the lock and the registry
-    describe different builds.
+    Lock entries list the `zh:` hash of every published platform zip regardless
+    of which `-platform` flags wrote the lock, so a digest absent from `zh`
+    means the registry and the lock describe different builds.
 
     Args:
-        registry_sha256s: `{platform: sha256}` from the registry.
-        zh: The lock entry's `zh:` hashes.
-        context: `<source>@<version>`, for messages.
+        sha256: SHA-256 digest reported by the registry.
+        zh: `zh:` digests from the lock entry.
+        context: `<source>@<version> on <platform>` for error messages.
 
     Returns:
-        `struct(sha256s, error)`; `error` is None on success.
+        An error string, or None if `sha256` is in `zh`.
     """
-    locked = {h: True for h in zh}
-    mismatched = sorted([p for p, digest in registry_sha256s.items() if digest not in locked])
-    if mismatched:
-        return struct(
-            sha256s = None,
-            error = ("the registry's zip for {} on {} matches none of the lock's `zh:` hashes. " +
-                     "The lock describes different builds; regenerate it.").format(
-                context,
-                ", ".join(mismatched),
-            ),
-        )
-    return struct(sha256s = dict(registry_sha256s), error = None)
+    if sha256 in zh:
+        return None
+    return "the registry's SHA-256 digest for {} matches none of the lock's `zh:` hashes".format(context)
