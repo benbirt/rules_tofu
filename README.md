@@ -645,24 +645,6 @@ format_multirun(
 )
 ```
 
-- `rules_lint` 2.9.1 passes only `.tf` and `.tfvars` files to the tool, so
-  `.tofu`, `.tftest.hcl` and `.tofutest.hcl` files are neither formatted nor
-  checked. The `tofu fmt` commands above cover them.
-- `rules_lint` calls `format_test` "not recommended". For a check under
-  `bazel test` anyway, use only the `workspace` form; `format_test(srcs = ...)`
-  passed with an unformatted file in `rules_lint` 2.9.1:
-
-  ```python
-  load("@aspect_rules_lint//format:defs.bzl", "format_test")
-
-  format_test(
-      name = "format_test",
-      no_sandbox = True,
-      terraform = "@rules_tofu//tofu",
-      workspace = "//:MODULE.bazel",
-  )
-  ```
-
 ## The `tofu` binary
 
 Bazel downloads the OpenTofu release for the execution platform, verifies its

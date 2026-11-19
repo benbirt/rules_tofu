@@ -446,8 +446,7 @@ Then `bazel shutdown` so the new startup flags take effect.
   scoping to `srcs`. `tf_library` and `tf_test` generate `:name` alone;
   `tf_deploy` adds only `.plan`, `.apply` and `.destroy`. CI's `lint` job runs
   `tofu fmt -check` on `examples` and `e2e/smoke`.
-  `module_dependency_<version>_test` runs the README's formatting commands, and
-  `fmt_test_removed` checks that a leftover `fmt_test` fails.
+  `module_dependency_<version>_test` runs the README's formatting commands.
 - Check targets in dependency order (`README.md`, "How it works";
   `CONTRIBUTING.md`, invariant 2; issue #143; `dependency_invalid*`,
   `test_*_invalid` and `launcher_*` cases):
