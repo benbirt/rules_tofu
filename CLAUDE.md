@@ -187,15 +187,17 @@ Then `bazel shutdown` so the new startup flags take effect.
     Don't bring back a filter on the directories a library serves: it left a
     declared submodule that nothing called unlocked, which then failed to
     load.
-  - Combine a directory's constraints by provider source in `requirements`,
-    never by local name. Merging by local name assumes a single module:
-    `bazel query` returns files rather than targets, and two targets in one
-    package may share a local name (issue #99).
-  - Generate a fresh scratch configuration with one child module per directory
-    and only `required_providers`, then run `tofu providers lock` there while
-    excluding root-tagged providers via `--exclude-source`. Extracting only
+  - Combine constraints by provider source (`combine`), both within a directory
+    in `requirements` and across directories, never by local name. Merging by
+    local name assumes a single module: `bazel query` returns files rather than
+    targets, and two targets in one package may share a local name (issue #99).
+  - Write a fresh scratch `main.tf.json` (`writeScratch`) containing one root
+    `required_providers` block for all non-excluded providers
+    (`--exclude-source`), and run `tofu providers lock` there. Extracting only
     `required_providers` avoids loading resources or module calls out of
-    context, and `tofu` combines child-module constraints natively. Running in
+    context. Don't bring back a child module per directory or `tofu get` (issue
+    #151): since issue #99 `pin` combines by source under synthetic local names
+    (`localNames`), so child-module nesting carries no information. Running in
     a fresh directory works around `tofu providers lock` having no `-upgrade`
     flag and otherwise keeping existing versions. When `--exclude-source`
     leaves no providers, write an empty header-only lock so moving a provider

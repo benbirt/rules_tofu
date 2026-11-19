@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
-	"sort"
 	"strings"
 	"testing"
 
@@ -23,6 +22,8 @@ func writeFile(t *testing.T, path, content string) {
 		t.Fatal(err)
 	}
 }
+
+const nullSource = "registry.opentofu.org/hashicorp/null"
 
 const nullFloor = `terraform {
   required_providers {
@@ -61,14 +62,6 @@ func sourceFile(label, path string) string {
 	return fmt.Sprintf(`{"type":"SOURCE_FILE","sourceFile":{"name":%q,"location":"%s:1:1","visibilityLabel":["//visibility:private"]}}`, label, path)
 }
 
-func TestModuleNames(t *testing.T) {
-	got := moduleNames([]module{{Dir: "examples/lock/greeting"}, {Dir: "1st"}, {Dir: "examples/lock.greeting"}})
-	want := []string{"examples_lock_greeting", "m_1st", "examples_lock_greeting_2"}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("moduleNames = %q, want %q", got, want)
-	}
-}
-
 // fakeBazel writes a bazel stand-in whose query prints the given
 // main-repository source files of ws.
 func fakeBazel(t *testing.T, ws string, labels ...string) string {
@@ -93,9 +86,10 @@ func fakeBazelOutput(t *testing.T, targets ...string) string {
 	return path
 }
 
-// fakeTofu writes a tofu stand-in that logs its arguments, copies the root
-// module it is pointed at into the lock (so tests can see the scratch
-// configuration), and fails `providers lock` when FAKE_TOFU_FAIL is set.
+// fakeTofu writes a tofu stand-in that logs its arguments and exits 2 for any
+// command other than `providers lock`. It fails when FAKE_TOFU_FAIL is set,
+// and otherwise copies main.tf.json from -chdir= into .terraform.lock.hcl so
+// tests can see the scratch configuration.
 func fakeTofu(t *testing.T) (path, logPath string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -104,14 +98,9 @@ func fakeTofu(t *testing.T) (path, logPath string) {
 	writeFile(t, path, `#!/bin/sh
 echo "$@" >> "`+logPath+`"
 chdir=${1#-chdir=}
-case "$2 $3" in
-  "providers lock")
-    [ -n "$FAKE_TOFU_FAIL" ] && { echo "no available releases match" >&2; exit 1; }
-    cat "$chdir/main.tf.json" > "$chdir/.terraform.lock.hcl"
-    for m in "$chdir"/modules/*/main.tf.json; do [ -f "$m" ] && cat "$m" >> "$chdir/.terraform.lock.hcl"; done
-    ;;
-esac
-exit 0
+[ "$2 $3" = "providers lock" ] || exit 2
+[ -n "$FAKE_TOFU_FAIL" ] && { echo "no available releases match" >&2; exit 1; }
+cat "$chdir/main.tf.json" > "$chdir/.terraform.lock.hcl"
 `)
 	if err := os.Chmod(path, 0o755); err != nil {
 		t.Fatal(err)
@@ -119,22 +108,22 @@ exit 0
 	return path, logPath
 }
 
-// lockedModules reads the fake lock back: the scratch root module, then each
-// child module's required_providers.
-func lockedModules(t *testing.T, lock []byte) (root map[string]any, children []map[string]any) {
+// lockedProviders decodes the scratch main.tf.json that fakeTofu copied into
+// the lock, returning required_providers as local name to Requirement. It
+// fails the test if the configuration contains anything else.
+func lockedProviders(t *testing.T, lock []byte) map[string]tfconfig.Requirement {
 	t.Helper()
+	var doc struct {
+		Terraform struct {
+			RequiredProviders map[string]tfconfig.Requirement `json:"required_providers"`
+		} `json:"terraform"`
+	}
 	dec := json.NewDecoder(strings.NewReader(string(lock)))
-	if err := dec.Decode(&root); err != nil {
-		t.Fatal(err)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&doc); err != nil {
+		t.Fatalf("scratch configuration %s: %v", lock, err)
 	}
-	for dec.More() {
-		var doc map[string]any
-		if err := dec.Decode(&doc); err != nil {
-			t.Fatal(err)
-		}
-		children = append(children, doc["terraform"].(map[string]any)["required_providers"].(map[string]any))
-	}
-	return root, children
+	return doc.Terraform.RequiredProviders
 }
 
 func TestRun_LocksAgainstEveryRule(t *testing.T) {
@@ -165,24 +154,14 @@ func TestRun_LocksAgainstEveryRule(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	root, children := lockedModules(t, lock)
-	calls := root["module"].(map[string]any)
-	if len(calls) != 2 || calls["infra"].(map[string]any)["source"] != "./modules/infra" ||
-		calls["infra_net"].(map[string]any)["source"] != "./modules/infra_net" {
-		t.Errorf("module calls = %v", calls)
-	}
-	var versions []string
-	for _, reqs := range children {
-		versions = append(versions, reqs["null"].(map[string]any)["version"].(string))
-	}
-	if !reflect.DeepEqual(versions, []string{"3.2.4", ">= 3.0"}) {
-		t.Errorf("locked against %q, want the versions.tf pin and the library floor", versions)
+	got := lockedProviders(t, lock)
+	if want := map[string]tfconfig.Requirement{"null": {Source: nullSource, Version: "3.2.4, >= 3.0"}}; !reflect.DeepEqual(got, want) {
+		t.Errorf("locked against %v, want %v: the versions.tf pin and the library floor", got, want)
 	}
 
 	tofuCalls, _ := os.ReadFile(logPath)
 	lines := strings.Split(strings.TrimSpace(string(tofuCalls)), "\n")
-	if len(lines) != 2 || !strings.HasSuffix(lines[0], " get") ||
-		!strings.HasSuffix(lines[1], "providers lock -platform=linux_amd64 -platform=darwin_arm64") {
+	if len(lines) != 1 || !strings.HasSuffix(lines[0], "providers lock -platform=linux_amd64 -platform=darwin_arm64") {
 		t.Errorf("tofu calls = %q", lines)
 	}
 	if !strings.Contains(log.String(), "from the required_providers of 2 directories") {
@@ -205,8 +184,9 @@ func TestRun_NoVersionsTF(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, children := lockedModules(t, lock); len(children) != 2 {
-		t.Errorf("expected a module per library, got %d", len(children))
+	got := lockedProviders(t, lock)
+	if want := map[string]tfconfig.Requirement{"null": {Source: nullSource, Version: ">= 3.0"}}; !reflect.DeepEqual(got, want) {
+		t.Errorf("locked against %v, want %v", got, want)
 	}
 	tofuCalls, _ := os.ReadFile(logPath)
 	if !strings.Contains(string(tofuCalls), "providers lock -platform=windows_amd64\n") {
@@ -292,8 +272,9 @@ func TestRun_PartialQuery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, children := lockedModules(t, lock); len(children) != 1 || children[0]["null"] == nil {
-		t.Errorf("expected the lock to cover hashicorp/null, got %v", children)
+	got := lockedProviders(t, lock)
+	if want := map[string]tfconfig.Requirement{"null": {Source: nullSource, Version: "3.2.4"}}; !reflect.DeepEqual(got, want) {
+		t.Errorf("locked against %v, want %v", got, want)
 	}
 	if !strings.Contains(log.String(), "couldn't load everything") {
 		t.Errorf("expected a note about the partial query, got\n%s", log.String())
@@ -323,11 +304,12 @@ func TestRun_ExcludesTaggedProviders(t *testing.T) {
 		t.Fatalf("run: %v\n%s", err, log.String())
 	}
 	lock, _ := os.ReadFile(filepath.Join(ws, ".terraform.lock.hcl"))
-	if strings.Contains(strings.ToLower(string(lock)), "posthog") || !strings.Contains(string(lock), "hashicorp/null") {
-		t.Errorf("expected only hashicorp/null to be locked, got:\n%s", lock)
+	got := lockedProviders(t, lock)
+	if want := map[string]tfconfig.Requirement{"null": {Source: nullSource, Version: ">= 3.0"}}; !reflect.DeepEqual(got, want) {
+		t.Errorf("locked against %v, want only hashicorp/null: %v", got, want)
 	}
-	if strings.Contains(string(lock), "tagged") {
-		t.Errorf("a directory left with no requirements shouldn't become a module:\n%s", lock)
+	if !strings.Contains(log.String(), "from the required_providers of 1 directory\n") {
+		t.Errorf("a directory left with no requirements shouldn't be counted:\n%s", log.String())
 	}
 }
 
@@ -419,34 +401,16 @@ terraform {
 	if err != nil {
 		t.Fatal(err)
 	}
-	root, children := lockedModules(t, lock)
-	locked := map[string]bool{}
-	for _, c := range children {
-		for name := range c {
-			locked[name] = true
-		}
+	got := lockedProviders(t, lock)
+	want := map[string]tfconfig.Requirement{"null": {Source: nullSource, Version: ">= 3.0, >= 3.1"}}
+	for _, name := range []string{"time", "tls", "dns", "local", "external", "http"} {
+		want[name] = tfconfig.Requirement{Source: "registry.opentofu.org/hashicorp/" + name}
 	}
-	want := map[string]bool{"null": true, "time": true, "tls": true, "dns": true, "local": true, "external": true, "http": true}
-	if !reflect.DeepEqual(locked, want) {
-		t.Errorf("locked %v, want %v", locked, want)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("locked against %v, want %v", got, want)
 	}
-	var dirs []string
-	for name := range root["module"].(map[string]any) {
-		dirs = append(dirs, name)
-	}
-	sort.Strings(dirs)
-	wantDirs := []string{
-		"app",
-		"m__rules_tofu__tf_modules_tf_modules_other__",
-		"m__rules_tofu__tf_modules_tf_modules_other__tools",
-		"m__rules_tofu__tf_modules_tf_modules_vpc__shared",
-		"m__rules_tofu__tf_modules_tf_modules_vpc__vpc",
-		"m__rules_tofu__tf_modules_tf_modules_vpc__vpc_modules_sub",
-		"m__rules_tofu__tf_modules_tf_modules_vpc__vpc_peering",
-		"m__rules_tofu__tf_modules_tf_modules_vpc__vpc_uncalled",
-	}
-	if !reflect.DeepEqual(dirs, wantDirs) {
-		t.Errorf("locked against %q, want %q", dirs, wantDirs)
+	if !strings.Contains(log.String(), "from the required_providers of 8 directories\n") {
+		t.Errorf("log = %q", log.String())
 	}
 }
 
@@ -621,18 +585,14 @@ func TestRun_TwoTargetsOneDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, children := lockedModules(t, lock)
-	want := []map[string]any{
-		{
-			"aws":   map[string]any{"source": "registry.opentofu.org/acme/aws", "version": "1.2.3"},
-			"aws-2": map[string]any{"source": "registry.opentofu.org/hashicorp/aws", "version": "~> 5.0"},
-		},
-		{
-			"null": map[string]any{"source": "registry.opentofu.org/hashicorp/null", "version": ">= 3.2.3, ~> 3.2"},
-		},
+	got := lockedProviders(t, lock)
+	want := map[string]tfconfig.Requirement{
+		"aws":   {Source: "registry.opentofu.org/acme/aws", Version: "1.2.3"},
+		"aws-2": {Source: "registry.opentofu.org/hashicorp/aws", Version: "~> 5.0"},
+		"null":  {Source: nullSource, Version: ">= 3.2.3, ~> 3.2"},
 	}
-	if !reflect.DeepEqual(children, want) {
-		t.Errorf("locked against %v, want %v", children, want)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("locked against %v, want %v", got, want)
 	}
 
 	// The summary printed when tofu can't meet the constraints shows the
@@ -644,5 +604,35 @@ func TestRun_TwoTargetsOneDirectory(t *testing.T) {
 	}
 	if want := "stacks  >= 3.2.3, ~> 3.2"; !strings.Contains(log.String(), want) {
 		t.Errorf("log lacks %q:\n%s", want, log.String())
+	}
+}
+
+// Across directories, requirements combine by canonical provider source
+// regardless of local name. Duplicate version strings appear once. An entry
+// without a version adds no constraint and still counts toward the directory
+// total.
+func TestRun_CombinesDirectories(t *testing.T) {
+	ws := t.TempDir()
+	requiring(t, filepath.Join(ws, "a/main.tf"), `null = { source = "hashicorp/null", version = "3.2.3" }`)
+	requiring(t, filepath.Join(ws, "b/main.tf"), `nothing = { source = "HashiCorp/null" }`)
+	requiring(t, filepath.Join(ws, "c/main.tf"), `null = { source = "hashicorp/null", version = ">= 3.0" }`)
+	requiring(t, filepath.Join(ws, "d/main.tf"), `null = { source = "registry.opentofu.org/hashicorp/null", version = ">= 3.0" }`)
+	bazel := fakeBazel(t, ws, "//a:main.tf", "//b:main.tf", "//c:main.tf", "//d:main.tf")
+	tofu, _ := fakeTofu(t)
+
+	var log strings.Builder
+	if err := run(ws, "", tofu, bazel, []string{"linux_amd64"}, nil, nil, &log); err != nil {
+		t.Fatalf("run: %v\n%s", err, log.String())
+	}
+	lock, err := os.ReadFile(filepath.Join(ws, ".terraform.lock.hcl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := lockedProviders(t, lock)
+	if want := map[string]tfconfig.Requirement{"null": {Source: nullSource, Version: "3.2.3, >= 3.0"}}; !reflect.DeepEqual(got, want) {
+		t.Errorf("locked against %v, want %v", got, want)
+	}
+	if !strings.Contains(log.String(), "from the required_providers of 4 directories\n") {
+		t.Errorf("log = %q", log.String())
 	}
 }
