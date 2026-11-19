@@ -4,7 +4,6 @@ load("@rules_tofu//tf:defs.bzl", "tf_library")
 tf_library(
     name = "lib",
     srcs = ["main.tf"],
-    fmt_test = False,
     providers = ["@tf_providers//hashicorp/null"],
     visibility = ["//visibility:public"],
 )
@@ -14,7 +13,6 @@ tf_library(
 tf_library(
     name = "unorderable",
     srcs = ["main.tf"],
-    fmt_test = False,
     providers = ["@tf_providers//acme/unorderable"],
     visibility = ["//visibility:public"],
 )

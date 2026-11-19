@@ -102,7 +102,7 @@ def _tofu_hub_impl(repository_ctx):
     lines = ["package(default_visibility = [\"//visibility:public\"])", ""]
 
     # tofu runs only on the execution platform across validation, launchers,
-    # tests, fmt and pin, and provider binaries are selected for that platform
+    # tests and pin, and provider binaries are selected for that platform
     # too. Set exec_compatible_with alone: setting target_compatible_with makes
     # tf_* targets fail toolchain resolution when --platforms differs from the
     # host (issue #105).

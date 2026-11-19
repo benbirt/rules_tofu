@@ -1,7 +1,6 @@
 """The tf_deploy macro and its underlying rule."""
 
 load("//toolchain:toolchain.bzl", "TOOLCHAIN_TYPE")
-load(":fmt.bzl", _tf_fmt = "tf_fmt", _tf_fmt_check = "tf_fmt_check_test")
 load(":init_action.bzl", "RUNNER_BIN", _tf_init_validate = "tf_init_validate")
 load(":providers.bzl", "TfDeployInfo", "TfLibraryInfo", "TfProviderInfo")
 load(":runner.bzl", _tf_runner = "tf_runner")
@@ -175,7 +174,7 @@ tf_deploy_rule = rule(
     doc = "Underlying rule for `tf_deploy`. Use the macro.",
 )
 
-def tf_deploy(name, srcs = None, deps = None, vars = None, var_files = None, data = None, providers = None, allow_ephemeral_state = False, fmt_test = True, **kwargs):
+def tf_deploy(name, srcs = None, deps = None, vars = None, var_files = None, data = None, providers = None, allow_ephemeral_state = False, **kwargs):
     """A root OpenTofu configuration, with targets to plan, apply and destroy it.
 
     The deploy's own package is its root module and must contain at least one
@@ -194,12 +193,6 @@ def tf_deploy(name, srcs = None, deps = None, vars = None, var_files = None, dat
         without reading `tfplan`. Prompts unless `-- -auto-approve` is passed.
       - `:<name>.destroy`: `bazel run` target that runs `tofu destroy`. Prompts
         unless `-- -auto-approve` is passed.
-      - `:<name>.fmt`: `bazel run` target, emitted when `srcs` is non-empty,
-        that reformats main-repository `.tf` and `.tofu` source files in `srcs`
-        in place.
-      - `:<name>.fmt_check`: `bazel test` target, emitted when `srcs` is
-        non-empty and `fmt_test = True`, that checks formatting of `.tf` and
-        `.tofu` files in `srcs`, including generated and external files.
 
     Each launcher, such as `bazel-bin/<pkg>/<name>.apply.sh`, can also be
     invoked directly in place from any working directory; do not copy or symlink
@@ -239,8 +232,6 @@ def tf_deploy(name, srcs = None, deps = None, vars = None, var_files = None, dat
           to absolute paths outside `bazel-out`. `:<name>.plan` is never gated.
           Defaults to `False`. See
           [State and backends](https://github.com/benbirt/rules_tofu#state-and-backends).
-      fmt_test: Emit `:<name>.fmt_check` when `True` and `srcs` is non-empty;
-          defaults to `True`.
       **kwargs: Forwarded to the underlying rules. `visibility`, `tags` and
           `testonly` apply to all generated targets; other rule attributes
           apply to `:<name>`.
@@ -282,12 +273,3 @@ def tf_deploy(name, srcs = None, deps = None, vars = None, var_files = None, dat
         command = "destroy",
         **common_kwargs
     )
-
-    if srcs:
-        _tf_fmt(name = name + ".fmt", srcs = srcs, **common_kwargs)
-        if fmt_test:
-            _tf_fmt_check(
-                name = name + ".fmt_check",
-                srcs = srcs,
-                **common_kwargs
-            )

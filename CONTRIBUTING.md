@@ -69,8 +69,8 @@ bazel test //...
    and `.destroy` scripts find their runfiles tree and state directory relative
    to `$0`, so they work both under `bazel run` and when run directly. Neither
    the launchers nor the runner may read `BUILD_WORKSPACE_DIRECTORY` or the
-   checkout; only `:<name>.fmt` and `@tf_providers//:pin`, which write to the
-   checkout, require `bazel run`. `tofu` runs in
+   checkout; only `@tf_providers//:pin` writes to the checkout and requires
+   `bazel run`. `tofu` runs in
    `<name>.rules_tofu-state/work/<pkg>`, never in runfiles or `<name>.work/`,
    and resolves `backend` blocks itself without runner rewrites.
    `@rules_tofu//tofu` is the only launcher that reads
@@ -98,9 +98,6 @@ bazel test //tests/integration/...
 USE_BAZEL_VERSION=8.5.0 bazel test //tests/integration/...
 git checkout -- MODULE.bazel.lock
 
-# A single target's format check (`bazel test //...` runs them all):
-bazel test //examples/hello:greet_lib.fmt_check
-
 # `tofu test` targets (offline, network blocked):
 bazel test //examples/hello/tests:all
 
@@ -117,8 +114,10 @@ On the pinned Bazel version, CI runs builds, tests and example plans with
 
 ## Formatting and lint
 
-CI's `lint` job runs `gofmt -l .`, `buildifier -mode=check -r .` and
-`buildifier -lint=warn -r .` as separate steps, plus `bazel mod tidy` to check
+CI's `lint` job runs `gofmt -l .`, `buildifier -mode=check -r .`,
+`buildifier -lint=warn -r .` and
+`bazel run //tofu -- fmt -check -diff -recursive examples e2e/smoke` as
+separate steps, plus `bazel mod tidy` to check
 that `MODULE.bazel` is unchanged. Locally, `-mode` defaults to `fix`, so one
 `buildifier` invocation both formats Starlark files in place and prints lint
 warnings:
@@ -126,8 +125,14 @@ warnings:
 ```sh
 gofmt -w .
 bazel run @buildifier_prebuilt//:buildifier -- -lint=warn -r .
+bazel run //tofu -- fmt -recursive examples e2e/smoke
 bazel mod tidy
 ```
+
+The rules generate no format targets, so no test checks configuration
+formatting. That `//tofu` step runs the pinned binary and is the only check. It
+names `examples` and `e2e/smoke` and leaves out `tests/integration` because
+negative-case fixtures there may be malformed on purpose.
 
 When adding a nested Bazel module under `e2e/` or `tests/integration/`:
 
@@ -156,10 +161,10 @@ writes the five platform digests into
 hand.
 
 Test an entry that is not the default with its generated per-version
-integration tests (dots replaced by underscores):
+integration test (dots replaced by underscores):
 
 ```sh
-bazel test //tests/integration:module_dependency_1_12_1_test //tests/integration:fmt_1_12_1_test
+bazel test //tests/integration:module_dependency_1_12_1_test
 ```
 
 With `--default`, the examples, `e2e/smoke` and the remaining integration tests

@@ -6,7 +6,6 @@ load("@rules_tofu//tf:defs.bzl", "tf_library")
 tf_library(
     name = "missing",
     srcs = ["main.tf"],
-    fmt_test = False,
 )
 
 # implied.tf has only resource "random_pet" "name" {}, with no
@@ -16,5 +15,4 @@ tf_library(
 tf_library(
     name = "implied",
     srcs = ["implied.tf"],
-    fmt_test = False,
 )

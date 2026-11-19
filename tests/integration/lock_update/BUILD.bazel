@@ -4,7 +4,6 @@ load("@rules_tofu//tf:defs.bzl", "tf_library")
 tf_library(
     name = "versions",
     srcs = ["versions.tf"],
-    fmt_test = False,
     providers = ["@tf_providers//hashicorp/null"],
 )
 
@@ -16,7 +15,6 @@ tf_library(
 tf_library(
     name = "floor",
     srcs = ["floor.tf"],
-    fmt_test = False,
     providers = ["@tf_providers//hashicorp/null"],
     deps = ["@bundle_module//bundle"],
 )

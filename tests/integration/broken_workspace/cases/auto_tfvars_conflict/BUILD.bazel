@@ -3,7 +3,6 @@ load("@rules_tofu//tf:defs.bzl", "tf_deploy", "tf_library")
 tf_library(
     name = "lib",
     srcs = ["main.tf"],
-    fmt_test = False,
 )
 
 # `rules_tofu.auto.tfvars.json` is the name of the file the rule generates
@@ -13,7 +12,6 @@ tf_library(
 # auto_tfvars_in_data), so only the collision check stands in its way.
 tf_deploy(
     name = "deploy",
-    fmt_test = False,
     var_files = ["rules_tofu.auto.tfvars.json"],
     vars = {"foo": "bar"},
     deps = [":lib"],

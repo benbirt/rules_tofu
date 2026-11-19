@@ -30,7 +30,6 @@ tf_deploy(
 tf_test(
     name = "app_test",
     srcs = ["tests/dns.tofutest.hcl"],
-    fmt_test = False,
     module = ":app",
     deps = ["@dns_module//:dns"],
 )

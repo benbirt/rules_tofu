@@ -9,7 +9,6 @@ load("@rules_tofu//tf:defs.bzl", "tf_deploy", "tf_library", "tf_test")
 tf_library(
     name = "dependant",
     srcs = ["main.tf"],
-    fmt_test = False,
     deps = ["//cases/dependency_invalid/dep"],
 )
 
@@ -19,7 +18,6 @@ tf_deploy(
     name = "deploy",
     srcs = ["main.tf"],
     allow_ephemeral_state = True,
-    fmt_test = False,
     deps = ["//cases/dependency_invalid/dep"],
 )
 
@@ -33,14 +31,12 @@ tf_library(
 tf_library(
     name = "sound",
     srcs = ["sound.tf"],
-    fmt_test = False,
 )
 
 # Valid module under test, broken helper in deps.
 tf_test(
     name = "test_helper",
     srcs = ["sound.tftest.hcl"],
-    fmt_test = False,
     module = ":sound",
     deps = ["//cases/dependency_invalid/dep"],
 )
@@ -50,6 +46,5 @@ tf_test(
 # required.
 tf_library(
     name = "manifest_dependant",
-    fmt_test = False,
     deps = ["//cases/dependency_invalid/undeclared"],
 )

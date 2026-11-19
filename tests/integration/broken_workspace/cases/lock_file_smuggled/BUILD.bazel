@@ -8,5 +8,4 @@ tf_library(
         ".terraform.lock.hcl",
         "main.tf",
     ],
-    fmt_test = False,
 )

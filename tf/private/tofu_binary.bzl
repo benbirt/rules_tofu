@@ -6,7 +6,7 @@ this rule.
 """
 
 load("//toolchain:toolchain.bzl", "TOOLCHAIN_TYPE")
-load(":work_tree.bzl", "runfiles_path")
+load(":work_tree.bzl", "runfiles_path", "shell_quote")
 
 # The launcher runs the toolchain's `tofu` with the given arguments. It stages
 # nothing, runs no `tofu init`, adds no flags and leaves the environment
@@ -51,9 +51,6 @@ fi
 exec "$tofu" "$@"
 """
 
-def _shell_quote(s):
-    return "'" + s.replace("'", "'\\''") + "'"
-
 def _tofu_binary_impl(ctx):
     tofu = ctx.toolchains[TOOLCHAIN_TYPE].tofu
     out = ctx.actions.declare_file(ctx.label.name + ".sh")
@@ -61,7 +58,7 @@ def _tofu_binary_impl(ctx):
         output = out,
         is_executable = True,
         content = _LAUNCHER.format(
-            tofu = _shell_quote(runfiles_path(ctx.workspace_name or "_main", tofu.binary)),
+            tofu = shell_quote(runfiles_path(ctx.workspace_name or "_main", tofu.binary)),
         ),
     )
     return [DefaultInfo(

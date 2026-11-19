@@ -3,7 +3,6 @@ load("@rules_tofu//tf:defs.bzl", "tf_library", "tf_test")
 tf_library(
     name = "lib",
     srcs = ["main.tf"],
-    fmt_test = False,
 )
 
 # A run block loads `./helper`, which no tf_library in deps provides. The
@@ -12,6 +11,5 @@ tf_library(
 tf_test(
     name = "test",
     srcs = ["tests/t.tftest.hcl"],
-    fmt_test = False,
     module = ":lib",
 )

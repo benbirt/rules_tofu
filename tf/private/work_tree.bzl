@@ -86,8 +86,8 @@ def check_no_config_in_data(ctx, files, srcs_take_configuration = True):
     """Fail if any of `files`, a rule's data, is a configuration file.
 
     `data` holds what `file()` and `templatefile()` read. A configuration
-    file there would be code that nothing checks: only `srcs` are held to the
-    rule's `providers` and `deps`, and formatted. tofu passes over a file
+    file there would be code that nothing checks: only `srcs` are checked
+    against the rule's `providers` and `deps`. `tofu` passes over a file
     whose name starts with a dot, so such a file is data whatever its
     extension.
 
@@ -119,6 +119,10 @@ def runfiles_path(workspace_name, f):
     if sp.startswith("../"):
         return sp[3:]
     return workspace_name + "/" + sp
+
+def shell_quote(s):
+    """Return `s` single-quoted as one shell word for generated scripts."""
+    return "'" + s.replace("'", "'\\''") + "'"
 
 def check_has_configuration(ctx, entries):
     """Fail a deploy whose root module holds no configuration file.

@@ -31,8 +31,6 @@ alias(
 tf_test(
     name = "greet_alias_test",
     srcs = ["greet.tftest.hcl"],
-    # greet_test already checks greet.tftest.hcl's formatting.
-    fmt_test = False,
     module = ":greet_alias",
     deps = ["//examples/hello/tests/subject"],
 )
