@@ -98,9 +98,10 @@ func parseInvocations(data []byte) []invocation {
 	return invs
 }
 
-// fakeTofuScript is the stand-in for tofu: it logs its working directory,
-// arguments and the environment variables the runner is meant to control,
-// then runs extra as shell commands and exits 0.
+// fakeTofuScript returns a stand-in tofu script that logs its working
+// directory, arguments and controlled environment variables, runs extra as
+// shell commands, writes $TOFU_BACKEND_RECORD (when set on init) to
+// $TF_DATA_DIR/terraform.tfstate, and exits 0.
 func fakeTofuScript(extra string) string {
 	return "#!/bin/sh\n" +
 		"{ printf 'cwd=%s\\n' \"$(pwd)\"; for a in \"$@\"; do printf 'arg=%s\\n' \"$a\"; done; " +
@@ -108,6 +109,9 @@ func fakeTofuScript(extra string) string {
 		"printf 'env=TF_PLUGIN_CACHE_DIR=%s\\n' \"${TF_PLUGIN_CACHE_DIR-<unset>}\"; " +
 		"printf -- '---\\n'; } >> \"$TOFU_LOG\"\n" +
 		extra +
+		"if [ \"$1\" = init ] && [ -n \"${TOFU_BACKEND_RECORD-}\" ]; then\n" +
+		"  mkdir -p \"$TF_DATA_DIR\" && printf '%s' \"$TOFU_BACKEND_RECORD\" > \"$TF_DATA_DIR/terraform.tfstate\"\n" +
+		"fi\n" +
 		"exit 0\n"
 }
 
@@ -356,253 +360,80 @@ func TestRunner_ExtraArgsPassedToDestroy(t *testing.T) {
 	}
 }
 
-// TestRunner_StateFlags_Apply verifies that the apply invocation receives
-// -state= and -state-out= flags when no backend block is present. The
-// ephemeral-state opt-in is required to reach apply at all in that shape.
-func TestRunner_StateFlags_Apply(t *testing.T) {
-	cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
-	cmd.Args = append(cmd.Args, "--command=apply", "--allow-ephemeral-state")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
-	}
-	invs := invocations()
-	if len(invs) != 2 {
-		t.Fatalf("expected 2 tofu invocations (init, apply), got %d: %+v", len(invs), invs)
-	}
-	apply := invs[1]
-	if !apply.hasArg("apply") {
-		t.Errorf("second invocation should be 'apply', got args: %v", apply.args)
-	}
-	if !apply.hasArgWithPrefix("-state=") {
-		t.Errorf("apply invocation missing -state=, got args: %v", apply.args)
-	}
-	if !apply.hasArgWithPrefix("-state-out=") {
-		t.Errorf("apply invocation missing -state-out=, got args: %v", apply.args)
-	}
-}
-
-// TestRunner_StateFlags_Destroy verifies that the destroy invocation receives
-// -state= and -state-out= flags when no backend block is present. The
-// ephemeral-state opt-in is required to reach destroy at all in that shape.
-func TestRunner_StateFlags_Destroy(t *testing.T) {
-	cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
-	cmd.Args = append(cmd.Args, "--command=destroy", "--allow-ephemeral-state")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
-	}
-	invs := invocations()
-	if len(invs) != 2 {
-		t.Fatalf("expected 2 tofu invocations (init, destroy), got %d: %+v", len(invs), invs)
-	}
-	destroy := invs[1]
-	if !destroy.hasArg("destroy") {
-		t.Errorf("second invocation should be 'destroy', got args: %v", destroy.args)
-	}
-	if !destroy.hasArgWithPrefix("-state=") {
-		t.Errorf("destroy invocation missing -state=, got args: %v", destroy.args)
-	}
-	if !destroy.hasArgWithPrefix("-state-out=") {
-		t.Errorf("destroy invocation missing -state-out=, got args: %v", destroy.args)
-	}
-}
-
-// backendTFContent writes content to backend_override.tf in the work tree's
-// package directory.
-func backendTFContent(t *testing.T, cmd *exec.Cmd, content string) {
+// backendRecord marshals a .terraform/terraform.tfstate backend record in
+// OpenTofu 1.12's format.
+func backendRecord(t *testing.T, typ string, config map[string]any) string {
 	t.Helper()
-	tfPath := filepath.Join(argValue(t, cmd, "--work-tree"), argValue(t, cmd, "--package-dir"), "backend_override.tf")
-	if err := os.WriteFile(tfPath, []byte(content), 0o644); err != nil {
+	data, err := json.Marshal(map[string]any{
+		"version": 3,
+		"backend": map[string]any{"type": typ, "config": config, "hash": 1},
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
+	return string(data)
 }
 
-// backendJSONContent writes content to backend_override.tf.json in the work
-// tree's package directory.
-func backendJSONContent(t *testing.T, cmd *exec.Cmd, content string) {
+// setBackendRecord configures the fake tofu's init to write record to
+// .terraform/terraform.tfstate. When unset, init writes no record, matching a
+// deploy with no backend or cloud block.
+func setBackendRecord(cmd *exec.Cmd, record string) {
+	cmd.Env = append(cmd.Env, "TOFU_BACKEND_RECORD="+record)
+}
+
+// recordPath returns the backend record path in the run directory for mypkg.
+func recordPath(t *testing.T, cmd *exec.Cmd) string {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(argValue(t, cmd, "--work-tree"), argValue(t, cmd, "--package-dir"), "backend_override.tf.json"), []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	return filepath.Join(runDir(t, cmd), "mypkg", ".terraform", "terraform.tfstate")
 }
 
-// TestRunner_BackendBlock_OmitsStateFlags verifies that when a terraform{}
-// backend "..." {} block is present, the runner does not pass -state= or
-// -state-out= to tofu.
-func TestRunner_BackendBlock_OmitsStateFlags(t *testing.T) {
-	cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
-	backendTFContent(t, cmd, `
-terraform {
-  backend "s3" {}
-}
-`)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
-	}
-	invs := invocations()
-	if len(invs) != 2 {
-		t.Fatalf("expected 2 tofu invocations (init, plan), got %d: %+v", len(invs), invs)
-	}
-	plan := invs[1]
-	if plan.hasArgWithPrefix("-state=") {
-		t.Errorf("plan invocation should not have -state= when backend block present, got args: %v", plan.args)
-	}
-	if plan.hasArgWithPrefix("-state-out=") {
-		t.Errorf("plan invocation should not have -state-out= when backend block present, got args: %v", plan.args)
-	}
-}
-
-// TestRunner_CloudBlock_OmitsStateFlags verifies that when a terraform{}
-// cloud {} block is present, the runner does not pass -state= or -state-out=
-// to tofu. cloud {} is HCP Terraform's alternative to a backend block.
-func TestRunner_CloudBlock_OmitsStateFlags(t *testing.T) {
-	cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
-	backendTFContent(t, cmd, `
-terraform {
-  cloud {}
-}
-`)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
-	}
-	invs := invocations()
-	if len(invs) != 2 {
-		t.Fatalf("expected 2 tofu invocations (init, plan), got %d: %+v", len(invs), invs)
-	}
-	plan := invs[1]
-	if plan.hasArgWithPrefix("-state=") {
-		t.Errorf("plan invocation should not have -state= when cloud block present, got args: %v", plan.args)
-	}
-	if plan.hasArgWithPrefix("-state-out=") {
-		t.Errorf("plan invocation should not have -state-out= when cloud block present, got args: %v", plan.args)
-	}
-}
-
-// writePkgFile writes a file with the given basename and content into the
-// package directory of the work tree.
-func writePkgFile(t *testing.T, cmd *exec.Cmd, name, content string) {
-	t.Helper()
-	var workTree string
-	for _, arg := range cmd.Args {
-		if strings.HasPrefix(arg, "--work-tree=") {
-			workTree = strings.TrimPrefix(arg, "--work-tree=")
+// Neither init nor plan, apply or destroy receives -state, -state-out or
+// -backend-config flags, whether or not a backend is recorded.
+func TestRunner_NoStateFlags(t *testing.T) {
+	for _, withBackend := range []bool{false, true} {
+		for _, command := range []string{"plan", "apply", "destroy"} {
+			t.Run(fmt.Sprintf("%s/backend=%v", command, withBackend), func(t *testing.T) {
+				cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
+				if withBackend {
+					setBackendRecord(cmd, backendRecord(t, "s3", map[string]any{"bucket": "b"}))
+				}
+				if out, err := withCommand(cmd, command, "--allow-ephemeral-state").CombinedOutput(); err != nil {
+					t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
+				}
+				invs := invocations()
+				if len(invs) != 2 || !invs[0].hasArg("init") || !invs[1].hasArg(command) {
+					t.Fatalf("expected init then %s, got %+v", command, invs)
+				}
+				for _, inv := range invs {
+					if inv.hasArgWithPrefix("-state") || inv.hasArgWithPrefix("-backend-config") {
+						t.Errorf("%s args = %v, want no -state, -state-out or -backend-config", inv.args[0], inv.args)
+					}
+				}
+			})
 		}
 	}
-	if workTree == "" {
-		t.Fatal("could not find --work-tree flag in runner cmd args")
-	}
-	path := filepath.Join(workTree, "mypkg", name)
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
 }
 
-// TestRunner_BackendBlock_JSON_OmitsStateFlags verifies that a backend block
-// declared in .tf.json syntax is recognised, so the runner omits -state= and
-// -state-out= just as for native .tf syntax.
-func TestRunner_BackendBlock_JSON_OmitsStateFlags(t *testing.T) {
-	cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
-	writePkgFile(t, cmd, "backend.tf.json", `{"terraform": {"backend": {"s3": {}}}}`)
+// tofu init receives -var-file flags in declaration order alongside the
+// command so OpenTofu can evaluate variables in backend and cloud blocks.
+func TestRunner_Init_VarFiles(t *testing.T) {
+	cmd, addVarFile, invocations := setup(t, map[string]any{"region": "us-east-1"})
+	first := addVarFile(map[string]any{"env": "prod"})
+	second := addVarFile(map[string]any{"state_root": "/var/lib/tofu"})
+	cmd.Args = append(cmd.Args, "--var-file="+first, "--var-file="+second)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
 	}
-	invs := invocations()
-	if len(invs) != 2 {
-		t.Fatalf("expected 2 tofu invocations (init, plan), got %d: %+v", len(invs), invs)
-	}
-	plan := invs[1]
-	if plan.hasArgWithPrefix("-state=") {
-		t.Errorf("plan invocation should not have -state= when .tf.json backend block present, got args: %v", plan.args)
-	}
-	if plan.hasArgWithPrefix("-state-out=") {
-		t.Errorf("plan invocation should not have -state-out= when .tf.json backend block present, got args: %v", plan.args)
-	}
-}
-
-// TestRunner_BackendBlock_Tofu_OmitsStateFlags verifies that backend blocks in
-// OpenTofu-only .tofu and .tofu.json files are recognised.
-func TestRunner_BackendBlock_Tofu_OmitsStateFlags(t *testing.T) {
-	for name, content := range map[string]string{
-		"backend.tofu":      "terraform {\n  backend \"s3\" {}\n}\n",
-		"backend.tofu.json": `{"terraform": {"backend": {"s3": {}}}}`,
-	} {
-		t.Run(name, func(t *testing.T) {
-			cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
-			writePkgFile(t, cmd, name, content)
-			if out, err := cmd.CombinedOutput(); err != nil {
-				t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
+	for _, inv := range invocations() {
+		var got []string
+		for _, a := range inv.args {
+			if strings.HasPrefix(a, "-var-file=") {
+				got = append(got, a)
 			}
-			invs := invocations()
-			if len(invs) != 2 {
-				t.Fatalf("expected 2 tofu invocations (init, plan), got %d: %+v", len(invs), invs)
-			}
-			if plan := invs[1]; plan.hasArgWithPrefix("-state=") || plan.hasArgWithPrefix("-state-out=") {
-				t.Errorf("plan invocation should not have local state flags when %s declares a backend, got args: %v", name, plan.args)
-			}
-		})
-	}
-}
-
-// TestRunner_BackendBlock_ShadowedByTofu_KeepsStateFlags verifies that a backend
-// block in a .tf file doesn't count when a .tofu file of the same name, which
-// tofu reads instead, declares none.
-func TestRunner_BackendBlock_ShadowedByTofu_KeepsStateFlags(t *testing.T) {
-	cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
-	writePkgFile(t, cmd, "backend.tf", "terraform {\n  backend \"s3\" {}\n}\n")
-	writePkgFile(t, cmd, "backend.tofu", `terraform { required_version = ">= 1.8" }`)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
-	}
-	invs := invocations()
-	if len(invs) != 2 {
-		t.Fatalf("expected 2 tofu invocations (init, plan), got %d: %+v", len(invs), invs)
-	}
-	if plan := invs[1]; !plan.hasArgWithPrefix("-state=") || !plan.hasArgWithPrefix("-state-out=") {
-		t.Errorf("plan invocation should have local state flags when backend.tofu shadows backend.tf, got args: %v", plan.args)
-	}
-}
-
-// TestRunner_NoBackendBlock_JSON_KeepsStateFlags verifies that a .tf.json file
-// with a terraform block but no backend/cloud block does not suppress the local
-// -state= / -state-out= flags.
-func TestRunner_NoBackendBlock_JSON_KeepsStateFlags(t *testing.T) {
-	cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
-	writePkgFile(t, cmd, "main.tf.json", `{"terraform": {"required_version": ">= 1.0"}}`)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
-	}
-	invs := invocations()
-	if len(invs) != 2 {
-		t.Fatalf("expected 2 tofu invocations (init, plan), got %d: %+v", len(invs), invs)
-	}
-	plan := invs[1]
-	if !plan.hasArgWithPrefix("-state=") {
-		t.Errorf("plan invocation should have -state= when .tf.json has no backend block, got args: %v", plan.args)
-	}
-	if !plan.hasArgWithPrefix("-state-out=") {
-		t.Errorf("plan invocation should have -state-out= when .tf.json has no backend block, got args: %v", plan.args)
-	}
-}
-
-// TestRunner_MalformedJSON_KeepsStateFlags verifies that an unparseable .tf.json
-// file is treated as backend-less: the runner keeps the local -state= /
-// -state-out= flags and does not crash. Build-time validate guarantees
-// well-formed files at runtime, so this is a defensive backstop only.
-func TestRunner_MalformedJSON_KeepsStateFlags(t *testing.T) {
-	cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
-	writePkgFile(t, cmd, "broken.tf.json", `{"terraform": {`)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("runner failed unexpectedly with malformed .tf.json present: %v\n%s", err, out)
-	}
-	invs := invocations()
-	if len(invs) != 2 {
-		t.Fatalf("expected 2 tofu invocations (init, plan), got %d: %+v", len(invs), invs)
-	}
-	plan := invs[1]
-	if !plan.hasArgWithPrefix("-state=") {
-		t.Errorf("plan invocation should have -state= when .tf.json is malformed, got args: %v", plan.args)
-	}
-	if !plan.hasArgWithPrefix("-state-out=") {
-		t.Errorf("plan invocation should have -state-out= when .tf.json is malformed, got args: %v", plan.args)
+		}
+		if want := []string{"-var-file=" + first, "-var-file=" + second}; !reflect.DeepEqual(got, want) {
+			t.Errorf("%s var files = %v, want %v", inv.args[0], got, want)
+		}
 	}
 }
 
@@ -677,56 +508,6 @@ func writeJSON(t *testing.T, path string, v any) {
 	}
 }
 
-// TestRunner_BackendInSiblingDir verifies that a backend block in a sibling
-// directory of the package directory does not suppress -state= and -state-out=.
-//
-// OpenTofu reads backend configuration only from the root module, the
-// directory where `tofu init` runs. Files from transitive tf_library deps land
-// at their own workspace-relative paths as child modules, so their backend
-// blocks do not apply to the root module. detectBackend scans only the package
-// directory.
-func TestRunner_BackendInSiblingDir(t *testing.T) {
-	cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
-
-	var workTree string
-	for _, arg := range cmd.Args {
-		if strings.HasPrefix(arg, "--work-tree=") {
-			workTree = strings.TrimPrefix(arg, "--work-tree=")
-		}
-	}
-	if workTree == "" {
-		t.Fatal("could not find --work-tree flag in runner cmd args")
-	}
-
-	siblingDir := filepath.Join(workTree, "somelib")
-	if err := os.MkdirAll(siblingDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	siblingBackend := filepath.Join(siblingDir, "backend.tf")
-	if err := os.WriteFile(siblingBackend, []byte(`
-terraform {
-  backend "s3" {}
-}
-`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
-	}
-	invs := invocations()
-	if len(invs) != 2 {
-		t.Fatalf("expected 2 tofu invocations (init, plan), got %d: %+v", len(invs), invs)
-	}
-	plan := invs[1]
-	if !plan.hasArgWithPrefix("-state=") {
-		t.Errorf("plan invocation should have -state= when backend is only in sibling dir, got args: %v", plan.args)
-	}
-	if !plan.hasArgWithPrefix("-state-out=") {
-		t.Errorf("plan invocation should have -state-out= when backend is only in sibling dir, got args: %v", plan.args)
-	}
-}
-
 // argValue returns the value of the named --flag=value entry in the runner's
 // args, failing the test if the flag is absent.
 func argValue(t *testing.T, cmd *exec.Cmd, flagName string) string {
@@ -755,167 +536,162 @@ func envValue(t *testing.T, cmd *exec.Cmd, name string) string {
 	return ""
 }
 
-// assertRefusedEphemeralState asserts that the runner refused a mutating
-// command: it exited non-zero, named the opt-in attribute and the state
-// directory, ran no tofu process at all and did not create the state directory.
-func assertRefusedEphemeralState(t *testing.T, cmd *exec.Cmd) {
+// assertRefused runs cmd and checks that it exits non-zero containing every
+// substring in wants after running tofu init and no further tofu command.
+func assertRefused(t *testing.T, cmd *exec.Cmd, wants ...string) {
 	t.Helper()
 	logPath := envValue(t, cmd, "TOFU_LOG")
-	stateDir := argValue(t, cmd, "--state-dir")
-
+	if err := os.Remove(logPath); err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
 	out, err := cmd.CombinedOutput()
 	if err == nil {
-		t.Fatalf("expected runner to refuse local state, but it succeeded:\n%s", out)
+		t.Fatalf("expected the runner to refuse, but it succeeded:\n%s", out)
 	}
-	msg := string(out)
-	if !strings.Contains(msg, "allow_ephemeral_state") {
-		t.Errorf("expected refusal to name allow_ephemeral_state, got: %s", msg)
-	}
-	if !strings.Contains(msg, stateDir) {
-		t.Errorf("expected refusal to name the state path %s, got: %s", stateDir, msg)
-	}
-
-	// The gate must fail before any tofu process starts, so the fake tofu's
-	// log must be absent or empty. invocations() cannot be used here because
-	// it calls t.Fatal on a missing log file.
-	if info, err := os.Stat(logPath); err == nil {
-		if info.Size() > 0 {
-			data, readErr := os.ReadFile(logPath)
-			if readErr != nil {
-				t.Fatalf("read tofu invocation log: %v", readErr)
-			}
-			t.Errorf("expected no tofu invocations, got: %+v", parseInvocations(data))
+	for _, want := range wants {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("expected the refusal to contain %q, got: %s", want, out)
 		}
-	} else if !os.IsNotExist(err) {
-		t.Fatalf("stat tofu invocation log: %v", err)
 	}
-
-	if _, err := os.Stat(stateDir); err == nil {
-		t.Errorf("state dir %s should not have been created", stateDir)
-	} else if !os.IsNotExist(err) {
-		t.Fatalf("stat state dir: %v", err)
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read tofu invocation log: %v", err)
+	}
+	if invs := parseInvocations(data); len(invs) != 1 || !invs[0].hasArg("init") {
+		t.Errorf("expected init and nothing after it, got: %+v", invs)
 	}
 }
 
-// TestRunner_EphemeralState_ApplyRefused verifies that apply against a deploy
-// with no backend block and no opt-in is refused outright: no tofu runs and the
-// state directory is not created.
-func TestRunner_EphemeralState_ApplyRefused(t *testing.T) {
-	cmd, _, _ := setup(t, map[string]any{"region": "us-east-1"})
-	cmd.Args = append(cmd.Args, "--command=apply")
-	assertRefusedEphemeralState(t, cmd)
+// assertRefusedEphemeralState checks the refusal for a deploy with no backend
+// or cloud block, verifying that it names the run-directory state path and
+// allow_ephemeral_state = True.
+func assertRefusedEphemeralState(t *testing.T, cmd *exec.Cmd) {
+	t.Helper()
+	assertRefused(t, cmd,
+		"declares no state backend",
+		"terraform.tfstate",
+		filepath.Join(runDir(t, cmd), "mypkg"),
+		"allow_ephemeral_state = True",
+	)
 }
 
-// TestRunner_EphemeralState_DestroyRefused verifies that destroy is gated the
-// same way as apply.
-func TestRunner_EphemeralState_DestroyRefused(t *testing.T) {
-	cmd, _, _ := setup(t, map[string]any{"region": "us-east-1"})
-	cmd.Args = append(cmd.Args, "--command=destroy")
-	assertRefusedEphemeralState(t, cmd)
-}
-
-// TestRunner_EphemeralState_PlanUngated verifies that plan is deliberately not
-// gated: planning against empty local state destroys nothing, so it runs and
-// still receives the local -state= / -state-out= flags.
-func TestRunner_EphemeralState_PlanUngated(t *testing.T) {
+// When tofu init writes no backend record, apply and destroy are refused
+// unless --allow-ephemeral-state is set, while plan runs ungated.
+func TestRunner_EphemeralState_NoBackend(t *testing.T) {
 	cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
-	if out, err := cmd.CombinedOutput(); err != nil {
+	for _, command := range []string{"apply", "destroy"} {
+		assertRefusedEphemeralState(t, withCommand(cmd, command))
+	}
+	if out, err := withCommand(cmd, "plan").CombinedOutput(); err != nil {
 		t.Fatalf("plan should not be gated, but the runner failed: %v\n%s", err, out)
 	}
-	invs := invocations()
-	if len(invs) != 2 {
-		t.Fatalf("expected 2 tofu invocations (init, plan), got %d: %+v", len(invs), invs)
-	}
-	plan := invs[1]
-	if !plan.hasArg("plan") {
-		t.Errorf("second invocation should be 'plan', got args: %v", plan.args)
-	}
-	if !plan.hasArgWithPrefix("-state=") {
-		t.Errorf("plan invocation missing -state=, got args: %v", plan.args)
-	}
-	if !plan.hasArgWithPrefix("-state-out=") {
-		t.Errorf("plan invocation missing -state-out=, got args: %v", plan.args)
+	for _, command := range []string{"apply", "destroy"} {
+		if out, err := withCommand(cmd, command, "--allow-ephemeral-state").CombinedOutput(); err != nil {
+			t.Fatalf("%s failed unexpectedly with --allow-ephemeral-state: %v\n%s", command, err, out)
+		}
+		invs := invocations()
+		if last := invs[len(invs)-1]; !last.hasArg(command) {
+			t.Errorf("expected %s to run with --allow-ephemeral-state, last invocation: %v", command, last.args)
+		}
 	}
 }
 
-// TestRunner_EphemeralState_ApplyAllowed verifies that --allow-ephemeral-state
-// allows apply to run with no backend block and keeps the local state flags.
-func TestRunner_EphemeralState_ApplyAllowed(t *testing.T) {
-	cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
-	cmd.Args = append(cmd.Args, "--command=apply", "--allow-ephemeral-state")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("runner failed unexpectedly with --allow-ephemeral-state: %v\n%s", err, out)
-	}
-	invs := invocations()
-	if len(invs) != 2 {
-		t.Fatalf("expected 2 tofu invocations (init, apply), got %d: %+v", len(invs), invs)
-	}
-	if !invs[0].hasArg("init") {
-		t.Errorf("first invocation should be 'init', got args: %v", invs[0].args)
-	}
-	apply := invs[1]
-	if !apply.hasArg("apply") {
-		t.Errorf("second invocation should be 'apply', got args: %v", apply.args)
-	}
-	if !apply.hasArgWithPrefix("-state=") {
-		t.Errorf("apply invocation missing -state=, got args: %v", apply.args)
-	}
-	if !apply.hasArgWithPrefix("-state-out=") {
-		t.Errorf("apply invocation missing -state-out=, got args: %v", apply.args)
+// A backend record with a null, missing or empty backend is treated as having
+// no backend; OpenTofu writes such a record when migrating off a backend.
+func TestRunner_EphemeralState_EmptyRecord(t *testing.T) {
+	for name, record := range map[string]string{
+		"null":    `{"version": 3, "backend": null}`,
+		"absent":  `{"version": 3}`,
+		"no type": `{"version": 3, "backend": {"type": "", "config": null}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			cmd, _, _ := setup(t, map[string]any{"region": "us-east-1"})
+			setBackendRecord(cmd, record)
+			assertRefusedEphemeralState(t, withCommand(cmd, "apply"))
+		})
 	}
 }
 
-// TestRunner_EphemeralState_DestroyAllowed verifies the opt-in applies to
-// destroy as well as apply.
-func TestRunner_EphemeralState_DestroyAllowed(t *testing.T) {
-	cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
-	cmd.Args = append(cmd.Args, "--command=destroy", "--allow-ephemeral-state")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("runner failed unexpectedly with --allow-ephemeral-state: %v\n%s", err, out)
-	}
-	invs := invocations()
-	if len(invs) != 2 {
-		t.Fatalf("expected 2 tofu invocations (init, destroy), got %d: %+v", len(invs), invs)
-	}
-	destroy := invs[1]
-	if !destroy.hasArg("destroy") {
-		t.Errorf("second invocation should be 'destroy', got args: %v", destroy.args)
-	}
-	if !destroy.hasArgWithPrefix("-state=") {
-		t.Errorf("destroy invocation missing -state=, got args: %v", destroy.args)
-	}
-	if !destroy.hasArgWithPrefix("-state-out=") {
-		t.Errorf("destroy invocation missing -state-out=, got args: %v", destroy.args)
+// Any recorded backend type other than "local", including "cloud" for a cloud
+// block, allows apply and destroy without --allow-ephemeral-state.
+func TestRunner_EphemeralState_RemoteBackendAllowed(t *testing.T) {
+	for typ, config := range map[string]map[string]any{
+		"s3":    {"bucket": "my-tofu-state", "key": "prod"},
+		"cloud": {"hostname": "app.example.com", "organization": "acme", "workspaces": map[string]any{"name": "prod"}},
+	} {
+		t.Run(typ, func(t *testing.T) {
+			cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
+			setBackendRecord(cmd, backendRecord(t, typ, config))
+			for _, command := range []string{"apply", "destroy"} {
+				if out, err := withCommand(cmd, command).CombinedOutput(); err != nil {
+					t.Fatalf("%s failed unexpectedly with a %s backend recorded: %v\n%s", command, typ, err, out)
+				}
+				invs := invocations()
+				if last := invs[len(invs)-1]; !last.hasArg(command) {
+					t.Errorf("expected %s to run, last invocation: %v", command, last.args)
+				}
+			}
+		})
 	}
 }
 
-// TestRunner_EphemeralState_BackendApplyAllowed verifies that the gate keys off
-// backend detection rather than the opt-in flag: with a backend block present,
-// apply runs without the flag and the local state flags stay omitted.
-func TestRunner_EphemeralState_BackendApplyAllowed(t *testing.T) {
-	cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
-	backendTFContent(t, cmd, `
-terraform {
-  backend "s3" {}
-}
+// Removing the previous run's backend record before tofu init ensures a
+// deploy whose backend block was deleted is checked against the new init run
+// rather than the stale record.
+func TestRunner_EphemeralState_StaleRecordRemoved(t *testing.T) {
+	cmd, _, _ := setup(t, map[string]any{"region": "us-east-1"})
+	record := recordPath(t, cmd)
+	if err := os.MkdirAll(filepath.Dir(record), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(record, []byte(backendRecord(t, "s3", map[string]any{"bucket": "b"})), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// The fake tofu's init fails if the record is still there when it runs.
+	setFakeTofu(t, cmd, `if [ "$1" = init ] && [ -e "$TF_DATA_DIR/terraform.tfstate" ] && [ -z "${TOFU_BACKEND_RECORD-}" ]; then echo "stale record" >&2; exit 1; fi
 `)
-	cmd.Args = append(cmd.Args, "--command=apply")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("runner failed unexpectedly with a backend block present: %v\n%s", err, out)
+	assertRefusedEphemeralState(t, withCommand(cmd, "apply"))
+	if _, err := os.Lstat(record); !os.IsNotExist(err) {
+		t.Errorf("the previous run's backend record should be gone, got err=%v", err)
 	}
-	invs := invocations()
-	if len(invs) != 2 {
-		t.Fatalf("expected 2 tofu invocations (init, apply), got %d: %+v", len(invs), invs)
+}
+
+// A malformed backend record refuses apply unless --allow-ephemeral-state
+// bypasses the check.
+func TestRunner_EphemeralState_UnreadableRecord(t *testing.T) {
+	for name, record := range map[string]string{
+		"not json":           `{"version": 3, "backend": {`,
+		"local, bad setting": `{"version": 3, "backend": {"type": "local", "config": {"path": 7}}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			cmd, _, _ := setup(t, map[string]any{"region": "us-east-1"})
+			setBackendRecord(cmd, record)
+			assertRefused(t, withCommand(cmd, "apply"), "can't tell where")
+			if out, err := withCommand(cmd, "apply", "--allow-ephemeral-state").CombinedOutput(); err != nil {
+				t.Fatalf("apply failed unexpectedly with --allow-ephemeral-state: %v\n%s", err, out)
+			}
+		})
 	}
-	apply := invs[1]
-	if !apply.hasArg("apply") {
-		t.Errorf("second invocation should be 'apply', got args: %v", apply.args)
+}
+
+// When tofu init fails and terraform.tfstate in the run directory is non-zero
+// in size, the runner logs a conditional migration hint naming that file and
+// tofu init -migrate-state, covering -input=false blocking OpenTofu's prompt.
+func TestRunner_InitFailure_NamesLocalState(t *testing.T) {
+	const hint = "tofu init -migrate-state"
+	cmd, _, _ := setup(t, map[string]any{"region": "us-east-1"})
+	setFakeTofu(t, cmd, "exit 1\n")
+	out, err := withCommand(cmd, "plan").CombinedOutput()
+	if err == nil || strings.Contains(string(out), hint) {
+		t.Fatalf("expected init to fail without the migration hint, got err=%v:\n%s", err, out)
 	}
-	if apply.hasArgWithPrefix("-state=") {
-		t.Errorf("apply invocation should not have -state= when backend block present, got args: %v", apply.args)
+	state := filepath.Join(runDir(t, cmd), "mypkg", "terraform.tfstate")
+	if err := os.WriteFile(state, []byte(`{"version": 4}`), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	if apply.hasArgWithPrefix("-state-out=") {
-		t.Errorf("apply invocation should not have -state-out= when backend block present, got args: %v", apply.args)
+	out, err = withCommand(cmd, "plan").CombinedOutput()
+	if err == nil || !strings.Contains(string(out), hint) || !strings.Contains(string(out), state) {
+		t.Errorf("expected init to fail naming %s and %q, got err=%v:\n%s", state, hint, err, out)
 	}
 }
 
@@ -1244,16 +1020,28 @@ func TestRunner_Test_StateDirNotRequired(t *testing.T) {
 	}
 }
 
-// init runs with -reconfigure in plan, apply and destroy, so an edited backend
-// block isn't refused on the strength of the `.terraform/` an earlier run left
-// in the run directory.
-func TestRunner_Init_Reconfigure(t *testing.T) {
+// Each run removes the previous .terraform/terraform.tfstate before tofu init
+// so edited backend blocks take effect without passing -reconfigure, which
+// OpenTofu rejects when a cloud block is present.
+func TestRunner_Init_FreshBackend(t *testing.T) {
 	cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
+	setBackendRecord(cmd, backendRecord(t, "s3", map[string]any{"bucket": "old"}))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
 	}
-	if init := invocations()[0]; !init.hasArg("init") || !init.hasArg("-reconfigure") {
-		t.Errorf("init args = %v, want -reconfigure", init.args)
+	if got, err := os.ReadFile(recordPath(t, cmd)); err != nil || !strings.Contains(string(got), "old") {
+		t.Fatalf("the fake tofu should have recorded the backend: %q, %v", got, err)
+	}
+	// The second init must find no record.
+	setFakeTofu(t, cmd, `if [ "$1" = init ] && [ -e "$TF_DATA_DIR/terraform.tfstate" ]; then echo "record left in place" >&2; exit 1; fi
+`)
+	if out, err := withCommand(cmd, "plan").CombinedOutput(); err != nil {
+		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
+	}
+	for _, inv := range invocations() {
+		if inv.hasArg("init") && (inv.hasArg("-reconfigure") || inv.hasArg("-migrate-state") || inv.hasArg("-backend=false")) {
+			t.Errorf("init args = %v, want no -reconfigure, -migrate-state or -backend=false", inv.args)
+		}
 	}
 }
 
@@ -1276,8 +1064,8 @@ func TestRunner_Env_DataDirAndNoPluginCache(t *testing.T) {
 	}
 }
 
-// The same holds in test mode, where init keeps -backend=false and gains no
-// -reconfigure, and TF_DATA_DIR is the copy's `.terraform`.
+// The same holds in test mode, where init passes -backend=false without
+// -reconfigure and sets TF_DATA_DIR to the copy's .terraform.
 func TestRunner_Test_EnvAndInitFlags(t *testing.T) {
 	cmd, _, scratch, _, invocations := setupTest(t)
 	cmd.Env = append(cmd.Env, "TF_DATA_DIR=/bogus/data", "TF_PLUGIN_CACHE_DIR=/bogus/cache")
@@ -1477,16 +1265,15 @@ func TestRunner_RunDir_RelativeFlags(t *testing.T) {
 
 // The run directory follows the work tree from one run to the next: a file
 // that left the work tree loses its link, a new one gains a link, and what
-// tofu wrote there is kept so the command after sees it. Here that is the
-// state of a `backend "local"` with a relative path (issue #86).
+// tofu wrote there is kept so the command after sees it. Here that is
+// terraform.tfstate from a deploy with no backend block; relative local
+// backend paths are preserved the same way (issue #86).
 func TestRunner_RunDir_FollowsWorkTreeAndKeepsState(t *testing.T) {
 	cmd, _, _ := setup(t, map[string]any{"region": "us-east-1"})
-	backendTFContent(t, cmd, "terraform {\n  backend \"local\" {\n    path = \"state/dev.tfstate\"\n  }\n}\n")
-	// apply writes the state where tofu would for that block; destroy fails
-	// unless it finds it.
+	// apply writes terraform.tfstate in cwd; destroy fails unless it stays.
 	setFakeTofu(t, cmd, `case "$1" in
-  apply) mkdir -p state && echo applied > state/dev.tfstate ;;
-  destroy) [ "$(cat state/dev.tfstate)" = applied ] || { echo "no state" >&2; exit 1; } ;;
+  apply) echo applied > terraform.tfstate ;;
+  destroy) [ "$(cat terraform.tfstate)" = applied ] || { echo "no state" >&2; exit 1; } ;;
 esac
 `)
 	gone := writeWorkTreeFile(t, cmd, "mypkg/gone.tf", "# gone\n")
@@ -1507,7 +1294,7 @@ esac
 		t.Errorf("the link to a file no longer in the work tree should be gone, got err=%v", err)
 	}
 	assertLink(t, filepath.Join(cwd, "added.tf"), added)
-	if got, err := os.ReadFile(filepath.Join(cwd, "state", "dev.tfstate")); err != nil || string(got) != "applied\n" {
+	if got, err := os.ReadFile(filepath.Join(cwd, "terraform.tfstate")); err != nil || string(got) != "applied\n" {
 		t.Errorf("state in the run directory = %q, %v; want it kept", got, err)
 	}
 	assertWorkTreeUntouched(t, cmd)
@@ -1580,113 +1367,65 @@ func TestRunner_RunDir_DataDirAcrossRuns(t *testing.T) {
 	}
 }
 
-// assertRefusedLocalBackend asserts that the runner refused a mutating
-// command because of a `backend "local"` block that doesn't provably keep
-// state outside Bazel's output tree: it exited non-zero, named the block, the
-// reason, the run directory and the opt-in, ran no tofu process and created
-// no state dir.
-func assertRefusedLocalBackend(t *testing.T, cmd *exec.Cmd, block, reason string) {
+// assertRefusedLocalBackend checks the refusal for a local backend that does
+// not keep state outside Bazel's output tree, verifying that it names reason,
+// the run directory and allow_ephemeral_state = True.
+func assertRefusedLocalBackend(t *testing.T, cmd *exec.Cmd, reason string) {
 	t.Helper()
-	out, err := cmd.CombinedOutput()
-	if err == nil {
-		t.Fatalf("expected the runner to refuse the local backend, but it succeeded:\n%s", out)
-	}
-	msg := string(out)
-	for _, want := range []string{
-		`backend "local" block at ` + block,
+	assertRefused(t, cmd,
+		`backend "local" does not keep state outside Bazel's output tree`,
 		reason,
 		filepath.Join(runDir(t, cmd), "mypkg"),
 		"allow_ephemeral_state = True",
-	} {
-		if !strings.Contains(msg, want) {
-			t.Errorf("expected the refusal to contain %q, got: %s", want, msg)
-		}
-	}
-	if _, err := os.Stat(envValue(t, cmd, "TOFU_LOG")); !os.IsNotExist(err) {
-		t.Errorf("expected no tofu invocations, got err=%v", err)
-	}
-	stateDir := argValue(t, cmd, "--state-dir")
-	if _, err := os.Stat(stateDir); !os.IsNotExist(err) {
-		t.Errorf("state dir %s should not have been created, got err=%v", stateDir, err)
-	}
+	)
 }
 
-// assertLocalBackendLeftToTofu asserts that the last two invocations are init
-// and the given command, and that neither overrides the backend block: no
-// -backend-config for init, no -state flags for the command.
-func assertLocalBackendLeftToTofu(t *testing.T, invs []invocation, command string) {
-	t.Helper()
-	if len(invs) < 2 {
-		t.Fatalf("expected init and %s, got %+v", command, invs)
-	}
-	init, run := invs[len(invs)-2], invs[len(invs)-1]
-	if !init.hasArg("init") || !run.hasArg(command) {
-		t.Fatalf("expected init then %s, got %v then %v", command, init.args, run.args)
-	}
-	if init.hasArgWithPrefix("-backend-config") {
-		t.Errorf("init args = %v, want no -backend-config: the block is tofu's to resolve", init.args)
-	}
-	if run.hasArgWithPrefix("-state=") || run.hasArgWithPrefix("-state-out=") {
-		t.Errorf("%s args = %v, want no -state flags with a backend block present", command, run.args)
-	}
-}
-
-// One rule decides whether a `backend "local"` needs allow_ephemeral_state for
-// apply and destroy: its state is durable only when path and workspace_dir are
-// both literal absolute paths that do not lead into Bazel's output tree. Any
-// unset attribute, relative path, non-literal expression or path into the
-// output tree, directly or through a symlink and whether it exists yet or not,
-// is ephemeral. Ephemeral state is refused without the opt-in, naming the
-// block and the attribute, and allowed with it. plan always runs, and the
-// runner never overrides the block in HCL or JSON.
+// A local backend's state is durable for apply and destroy only when both
+// path and workspace_dir resolve to absolute paths outside Bazel's output
+// tree after following symlinks, even when the target path does not exist yet.
+// Null or empty attributes (which use OpenTofu's relative defaults), relative
+// paths and paths inside the output tree are refused unless
+// --allow-ephemeral-state is set. plan is never gated.
 func TestRunner_LocalBackend_Gate(t *testing.T) {
-	type file struct {
-		json    bool
-		content string
-	}
-	hclBlock := func(attrs string) file {
-		return file{false, "terraform {\n  backend \"local\" {\n" + attrs + "  }\n}\n"}
-	}
 	cases := []struct {
 		name string
-		// config builds the backend file from a directory outside the output
-		// tree, the output tree and a symlink that leads into it.
-		config func(outside, outputRoot, link string) file
+		// config builds the recorded local backend config given a directory
+		// outside outputRoot, outputRoot itself and a symlink into outputRoot.
+		config func(outside, outputRoot, link string) map[string]any
 		// reason is why the state is ephemeral; empty when it is durable.
 		reason string
 	}{
-		{"both absolute", func(o, _, _ string) file {
-			return hclBlock(fmt.Sprintf("    path          = %q\n    workspace_dir = %q\n", o+"/prod.tfstate", o+"/workspaces"))
+		{"both absolute", func(o, _, _ string) map[string]any {
+			return map[string]any{"path": o + "/prod.tfstate", "workspace_dir": o + "/workspaces"}
 		}, ""},
-		{"both absolute, json", func(o, _, _ string) file {
-			return file{true, fmt.Sprintf(`{"terraform": {"backend": {"local": {"path": %q, "workspace_dir": %q}}}}`, o+"/prod.tfstate", o+"/workspaces")}
-		}, ""},
-		{"empty block", func(_, _, _ string) file { return hclBlock("") },
-			"its `path` is not set, and tofu's default for it (\"terraform.tfstate\") is relative"},
-		{"relative path", func(_, _, _ string) file { return hclBlock("    path = \"state/dev.tfstate\"\n") },
-			"its `path` (\"state/dev.tfstate\") is relative"},
-		{"workspace_dir unset", func(o, _, _ string) file {
-			return hclBlock(fmt.Sprintf("    path = %q\n", o+"/prod.tfstate"))
+		{"empty block", func(_, _, _ string) map[string]any {
+			return map[string]any{"path": nil, "workspace_dir": nil}
+		}, "its `path` is not set, and tofu's default for it (\"terraform.tfstate\") is relative"},
+		{"empty path", func(o, _, _ string) map[string]any {
+			return map[string]any{"path": "", "workspace_dir": o + "/workspaces"}
+		}, "its `path` is not set, and tofu's default for it (\"terraform.tfstate\") is relative"},
+		{"relative path", func(o, _, _ string) map[string]any {
+			return map[string]any{"path": "state/dev.tfstate", "workspace_dir": o + "/workspaces"}
+		}, "its `path` (\"state/dev.tfstate\") is relative"},
+		{"workspace_dir unset", func(o, _, _ string) map[string]any {
+			return map[string]any{"path": o + "/prod.tfstate", "workspace_dir": nil}
 		}, "its `workspace_dir` is not set, and tofu's default for it (\"terraform.tfstate.d\") is relative"},
-		{"relative workspace_dir", func(o, _, _ string) file {
-			return hclBlock(fmt.Sprintf("    path          = %q\n    workspace_dir = \"ws\"\n", o+"/prod.tfstate"))
+		{"empty workspace_dir", func(o, _, _ string) map[string]any {
+			return map[string]any{"path": o + "/prod.tfstate", "workspace_dir": ""}
+		}, "its `workspace_dir` is not set, and tofu's default for it (\"terraform.tfstate.d\") is relative"},
+		{"relative workspace_dir", func(o, _, _ string) map[string]any {
+			return map[string]any{"path": o + "/prod.tfstate", "workspace_dir": "ws"}
 		}, "its `workspace_dir` (\"ws\") is relative"},
-		{"expression", func(o, _, _ string) file {
-			return hclBlock(fmt.Sprintf("    path          = \"${path.module}/dev.tfstate\"\n    workspace_dir = %q\n", o+"/workspaces"))
-		}, "its `path` is not a literal string"},
-		{"expression, json", func(o, _, _ string) file {
-			return file{true, fmt.Sprintf(`{"terraform": {"backend": {"local": {"path": "${path.module}/dev.tfstate", "workspace_dir": %q}}}}`, o+"/workspaces")}
-		}, "its `path` is not a literal string"},
-		{"inside the output tree", func(o, root, _ string) file {
-			return hclBlock(fmt.Sprintf("    path          = %q\n    workspace_dir = %q\n", root+"/cfg/bin/pkg/prod.tfstate", o+"/workspaces"))
-		}, "is inside Bazel's output tree"},
-		{"workspace_dir inside the output tree", func(o, root, _ string) file {
-			return hclBlock(fmt.Sprintf("    path          = %q\n    workspace_dir = %q\n", o+"/prod.tfstate", root+"/ws"))
-		}, "its `workspace_dir` (\"" + "%ROOT%" + "/ws\") is inside Bazel's output tree"},
+		{"inside the output tree", func(o, root, _ string) map[string]any {
+			return map[string]any{"path": root + "/cfg/bin/pkg/prod.tfstate", "workspace_dir": o + "/workspaces"}
+		}, "its `path` (\"%ROOT%/cfg/bin/pkg/prod.tfstate\") is inside Bazel's output tree"},
+		{"workspace_dir inside the output tree", func(o, root, _ string) map[string]any {
+			return map[string]any{"path": o + "/prod.tfstate", "workspace_dir": root + "/ws"}
+		}, "its `workspace_dir` (\"%ROOT%/ws\") is inside Bazel's output tree"},
 		// As through the `bazel-bin` link in a checkout, to a state file and a
 		// directory that don't exist yet.
-		{"through a symlink into the output tree", func(o, _, link string) file {
-			return hclBlock(fmt.Sprintf("    path          = %q\n    workspace_dir = %q\n", link+"/not/yet/prod.tfstate", o+"/workspaces"))
+		{"through a symlink into the output tree", func(o, _, link string) map[string]any {
+			return map[string]any{"path": link + "/not/yet/prod.tfstate", "workspace_dir": o + "/workspaces"}
 		}, "is inside Bazel's output tree"},
 	}
 	for _, tc := range cases {
@@ -1702,36 +1441,29 @@ func TestRunner_LocalBackend_Gate(t *testing.T) {
 			if err := os.Symlink(filepath.Join(outputRoot, "cfg", "bin"), link); err != nil {
 				t.Fatal(err)
 			}
-			f := tc.config(outside, outputRoot, link)
-			block := "backend_override.tf:2"
-			if f.json {
-				backendJSONContent(t, cmd, f.content)
-				block = "backend_override.tf.json:1"
-			} else {
-				backendTFContent(t, cmd, f.content)
-			}
+			setBackendRecord(cmd, backendRecord(t, "local", tc.config(outside, outputRoot, link)))
 			reason := strings.ReplaceAll(tc.reason, "%ROOT%", outputRoot)
 
 			// plan is never gated; apply and destroy run without the opt-in
 			// when the state is durable, and with it otherwise.
-			if tc.reason != "" {
-				for _, command := range []string{"apply", "destroy"} {
-					assertRefusedLocalBackend(t, withCommand(cmd, command), block, reason)
-				}
-			}
 			var flags []string
 			if tc.reason != "" {
+				for _, command := range []string{"apply", "destroy"} {
+					assertRefusedLocalBackend(t, withCommand(cmd, command), reason)
+				}
 				flags = []string{"--allow-ephemeral-state"}
 			}
 			if out, err := withCommand(cmd, "plan").CombinedOutput(); err != nil {
 				t.Fatalf("plan failed unexpectedly: %v\n%s", err, out)
 			}
-			assertLocalBackendLeftToTofu(t, invocations(), "plan")
 			for _, command := range []string{"apply", "destroy"} {
 				if out, err := withCommand(cmd, command, flags...).CombinedOutput(); err != nil {
 					t.Fatalf("%s failed unexpectedly: %v\n%s", command, err, out)
 				}
-				assertLocalBackendLeftToTofu(t, invocations(), command)
+				invs := invocations()
+				if last := invs[len(invs)-1]; !last.hasArg(command) {
+					t.Errorf("expected %s to run, last invocation: %v", command, last.args)
+				}
 			}
 		})
 	}

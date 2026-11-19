@@ -120,7 +120,7 @@ _RUN_CASES = [
     # (case_name, workspace_path, target inside that workspace, stderr fragment)
     ("ephemeral_state_refused", "broken_workspace", "//cases/ephemeral_state_refused:deploy.apply", "allow_ephemeral_state"),
     # A `backend "local"` with a relative path keeps state under bazel-bin too.
-    ("local_backend_refused", "broken_workspace", "//cases/local_backend_refused:deploy.apply", "does not provably keep state outside"),
+    ("local_backend_refused", "broken_workspace", "//cases/local_backend_refused:deploy.apply", "does not keep state outside"),
     # Launcher runfiles include the deploy's stamps, so bazel run fails in the
     # build before reaching the runner when the deploy, a library in deps or
     # the var_files check fails (issue #143).
@@ -216,12 +216,13 @@ bazel_integration_test(
     workspace_path = "lock_update",
 )
 
-# Cross-module module_source dependencies: a root module calls a tf_library
-# from another Bazel module by its module_source, which calls one from a third,
-# then builds, plans, and runs tf_test offline. Runs on every tofu version
-# rules_tofu pins because the module manifest is tofu's internal format and
-# tf_test passes flags that older OpenTofu releases lack. See
-# module_dependency_test.sh.
+# Cross-module module_source dependencies: //app calls a tf_library in another
+# Bazel module by module_source, which calls one in a third. The driver builds,
+# plans and runs tf_test offline, then exercises apply with no backend block
+# and with a backend "local". Runs for every version in KNOWN_VERSIONS because
+# the module manifest and the .terraform/terraform.tfstate backend record are
+# internal OpenTofu formats, and tf_test uses flags added in OpenTofu 1.12.
+# See module_dependency_test.sh.
 sh_binary(
     name = "module_dependency_driver",
     srcs = ["module_dependency_test.sh"],
