@@ -565,6 +565,13 @@ Then `bazel shutdown` so the new startup flags take effect.
   - Reject an empty `vars` key or one containing `=` at analysis in `var_flags`
     (`vars_name_with_equals`). `tofu` splits `-var` at the first `=` and would
     assign to the prefix before `=`.
+  - When `--var` is passed, check in `TofuValidate` via
+    `tofu show -json -module=.` after `tofu validate` that the root module
+    declares every name (`checkVarsDeclared`; `vars_undeclared`).
+    `tofu validate` accepts an undeclared `-var` while `tofu plan` rejects it.
+    Asking `tofu` leaves configuration parsing to OpenTofu rather than
+    `runner`. Don't check `var_files` keys because `tofu` only warns about
+    undeclared names in a var file.
 - Read a `tf_test`'s root module directory from `TfLibraryInfo.package_dir` or
   `TfDeployInfo.package_dir`, never `ctx.attr.module.label`. That allows tests
   to live in a `tests/` sub-package and works when `module` is an `alias`

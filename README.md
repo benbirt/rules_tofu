@@ -547,10 +547,10 @@ including `any`, OpenTofu parses the value as an expression. Write
 its own quotes, such as `"\"hello\""`.
 
 `bazel build` fails if variable keys overlap across `vars` and `var_files` or
-between `var_files` on a `tf_deploy`. `tofu validate` checks `var_files`
-syntax, not variable types or whether the root module declares each `-var`
-name. A wrong type or an undeclared name in `vars` fails at `plan` rather than
-`bazel build`. `tofu test` also accepts undeclared `-var` names.
+between `var_files` on a `tf_deploy`. Setting a name in `vars` that the root
+module does not declare also fails `bazel build`. Because `tofu validate` does
+not check variable values, a wrong type in `vars` fails at `plan` rather than
+`bazel build`.
 
 Launchers pass `vars` sorted by name and then `var_files` in listed order to
 both `tofu init` and the command so `backend` and `cloud` blocks can use

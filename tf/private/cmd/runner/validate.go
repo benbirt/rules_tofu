@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,12 +9,14 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // runValidate implements --command=validate for the TofuValidate build action
 // of tf_library, tf_deploy and tf_test. It stages the work tree in a temporary
 // directory removed on exit (see stage), runs `tofu init` and `tofu validate`
-// there, and writes --stamp. Both commands receive the -var and -var-file
+// there, checks that the root module declares every --var name, and writes
+// --stamp. Both `tofu init` and `tofu validate` receive the -var and -var-file
 // flags. `tofu validate` also receives extraArgs.
 func runValidate(extraArgs []string) error {
 	if *stamp == "" {
@@ -73,7 +76,44 @@ func runValidate(extraArgs []string) error {
 		fetchedModuleAdvice()
 		return fmt.Errorf("tofu validate: %w", err)
 	}
+	if err := checkVarsDeclared(s); err != nil {
+		return err
+	}
 	return os.WriteFile(*stamp, nil, 0o644)
+}
+
+// checkVarsDeclared checks via `tofu show -json -module=.` that the root
+// module declares every variable named by --var. When no --var flags are
+// passed, it does nothing. `tofu validate` accepts an undeclared -var that
+// `tofu plan`, `apply` and `destroy` reject. Querying tofu leaves
+// configuration parsing to OpenTofu.
+func checkVarsDeclared(s *staged) error {
+	if len(*vars) == 0 {
+		return nil
+	}
+	var out bytes.Buffer
+	if err := runTofuTo(&out, s.env, s.cwd, "show", "-json", "-module=."); err != nil {
+		return fmt.Errorf("tofu show -module: %w", err)
+	}
+	var config struct {
+		RootModule struct {
+			Variables map[string]json.RawMessage `json:"variables"`
+		} `json:"root_module"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &config); err != nil {
+		return fmt.Errorf("tofu show -module: %w", err)
+	}
+	var undeclared []string
+	for _, v := range *vars {
+		name, _, _ := strings.Cut(v, "=")
+		if _, ok := config.RootModule.Variables[name]; !ok {
+			undeclared = append(undeclared, name)
+		}
+	}
+	if len(undeclared) > 0 {
+		return fmt.Errorf("`vars` sets %s, which the root module does not declare as a variable", strings.Join(undeclared, ", "))
+	}
+	return nil
 }
 
 // fetchedModuleAdvice logs remediation advice when validation fails for a

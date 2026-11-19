@@ -67,8 +67,9 @@
 // copies any errored_test.tfstate into it.
 //
 // For validate, runner copies --work-tree into a temporary directory removed
-// on exit, initialises with -backend=false, runs `tofu validate` there and
-// writes --stamp (see validate.go).
+// on exit, initialises with -backend=false, runs `tofu validate` there, checks
+// that the root module declares any --var names, and writes --stamp (see
+// validate.go).
 //
 // When a tofu subprocess exits non-zero, runner exits with that code unless
 // errored_test.tfstate supersedes it with exit code 1. Unrecognised or

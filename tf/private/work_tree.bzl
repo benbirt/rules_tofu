@@ -70,10 +70,9 @@ def check_no_auto_tfvars(ctx, files):
     """
     for f in files:
         if _loaded_by_itself(f.basename):
-            fail(("`{}`: `{}` in `data` is a variables file that OpenTofu loads by itself, where " +
-                  "nothing checks it against `vars` and `var_files`. Set the values with `vars`, or " +
-                  "list the file in the `var_files` of a `tf_deploy` or `tf_test` (README, " +
-                  "\"Restrictions\").").format(
+            fail(("`{}`: `{}` in `data` is a variables file that OpenTofu auto-loads without " +
+                  "duplicate-key checks. Set the values with `vars`, or list the file in the " +
+                  "`var_files` of a `tf_deploy` or `tf_test` (README, \"Restrictions\").").format(
                 ctx.label,
                 f.short_path,
             ))

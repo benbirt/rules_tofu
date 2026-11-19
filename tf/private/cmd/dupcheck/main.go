@@ -60,11 +60,8 @@ func run(varsKeys, varFiles, varFileLabels []string, stamp string) error {
 
 	seen := make(map[string]string, len(varsKeys))
 	for _, k := range varsKeys {
-		if other, dup := seen[k]; dup {
-			return fmt.Errorf(
-				"variable %q is declared twice in %s — this should be unreachable for a Starlark dict",
-				k, other,
-			)
+		if _, dup := seen[k]; dup {
+			return fmt.Errorf("duplicate --vars-key %q", k)
 		}
 		seen[k] = "vars"
 	}
@@ -78,8 +75,8 @@ func run(varsKeys, varFiles, varFileLabels []string, stamp string) error {
 		for _, k := range keys {
 			if other, dup := seen[k]; dup {
 				return fmt.Errorf(
-					"variable %q is declared in both %s and %s — "+
-						"keys in var_files must not overlap with vars or each other",
+					"variable %q is declared in both %s and %s. "+
+						"Variable keys must not overlap across vars and var_files.",
 					k, other, label,
 				)
 			}

@@ -1596,7 +1596,7 @@ func setupValidate(t *testing.T) (cmd *exec.Cmd, dir, stamp string, invocations 
 	}
 
 	logPath := filepath.Join(dir, "tofu-invocations.log")
-	script := fakeTofuScript("echo \"progress of $1\"\nif [ \"$1\" = \"${FAKE_FAIL:-}\" ]; then echo \"$1 broke\" >&2; exit 3; fi\n")
+	script := fakeTofuScript("if [ \"$1\" = show ]; then if [ -z \"${FAKE_SHOW-}\" ]; then FAKE_SHOW='{\"root_module\":{\"variables\":{\"name\":{}}}}'; fi; printf '%s' \"$FAKE_SHOW\"; exit 0; fi\necho \"progress of $1\"\nif [ \"$1\" = \"${FAKE_FAIL:-}\" ]; then echo \"$1 broke\" >&2; exit 3; fi\n")
 	if err := os.WriteFile(filepath.Join(dir, "tofu.sh"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1649,8 +1649,9 @@ func setupValidate(t *testing.T) (cmd *exec.Cmd, dir, stamp string, invocations 
 
 // `--command=validate` resolves paths relative to its working directory and
 // stages a copy of the work tree under TMPDIR. It runs `tofu init` with stdout
-// discarded and `tofu validate` with stdout kept, writes --stamp, removes the
-// scratch directory and leaves the input work tree untouched.
+// discarded, `tofu validate` with stdout kept and `tofu show -json -module=.`
+// to check --var names, then writes --stamp, removes the scratch directory and
+// leaves the input work tree untouched.
 func TestRunner_Validate_InitsValidatesAndStamps(t *testing.T) {
 	cmd, dir, stamp, invocations := setupValidate(t)
 	cmd.Args = append(cmd.Args, "--lock-file=lock/.terraform.lock.hcl", "--test-dir=tests", "--var-file=sources/main.tf", "--var=name=a b", "--", "-json")
@@ -1662,10 +1663,13 @@ func TestRunner_Validate_InitsValidatesAndStamps(t *testing.T) {
 		t.Errorf("output = %q, want validate's stdout and not init's", out)
 	}
 	invs := invocations()
-	if len(invs) != 2 {
-		t.Fatalf("got %d tofu invocations, want init then validate: %+v", len(invs), invs)
+	if len(invs) != 3 {
+		t.Fatalf("got %d tofu invocations, want init, validate and show: %+v", len(invs), invs)
 	}
-	init, validate := invs[0], invs[1]
+	init, validate, show := invs[0], invs[1], invs[2]
+	if want := []string{"show", "-json", "-module=."}; !reflect.DeepEqual(show.args, want) || show.cwd != validate.cwd {
+		t.Errorf("show ran %q in %q, want %q in %q", show.args, show.cwd, want, validate.cwd)
+	}
 	if init.cwd != validate.cwd || filepath.Base(init.cwd) != "mypkg" || strings.HasPrefix(init.cwd, filepath.Join(dir, "work")) {
 		t.Errorf("cwd = %q and %q, want one staged mypkg outside the work tree", init.cwd, validate.cwd)
 	}
@@ -1820,5 +1824,36 @@ func TestRunner_Validate_StampRequired(t *testing.T) {
 	out, err := cmd.CombinedOutput()
 	if err == nil || !strings.Contains(string(out), "--stamp is required") {
 		t.Errorf("err=%v out=%q, want --stamp is required", err, out)
+	}
+}
+
+// A --var naming a variable that the root module does not declare fails
+// validation and writes no stamp. `tofu validate` itself accepts it.
+func TestRunner_Validate_UndeclaredVar(t *testing.T) {
+	cmd, _, stamp, _ := setupValidate(t)
+	cmd.Args = append(cmd.Args, "--var=name=a", "--var=region=b", "--var=zone=c")
+	cmd.Env = append(cmd.Env, `FAKE_SHOW={"root_module":{"variables":{"name":{},"other":{}}}}`)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("runner passed with undeclared --var names:\n%s", out)
+	}
+	if want := "`vars` sets region, zone, which the root module does not declare as a variable"; !strings.Contains(string(out), want) {
+		t.Errorf("output = %q, want it to contain %q", out, want)
+	}
+	if _, err := os.Stat(stamp); !os.IsNotExist(err) {
+		t.Errorf("stamp written despite the failure: err=%v", err)
+	}
+}
+
+// Without --var, validation does not ask tofu for the module's variables.
+func TestRunner_Validate_NoVarsNoShow(t *testing.T) {
+	cmd, _, _, invocations := setupValidate(t)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
+	}
+	for _, inv := range invocations() {
+		if inv.hasArg("show") {
+			t.Errorf("tofu show ran without --var: %v", inv.args)
+		}
 	}
 }

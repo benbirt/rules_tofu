@@ -29,3 +29,11 @@ tf_deploy(
     vars = {"a=b": "c"},
     deps = [":lib"],
 )
+
+# A `vars` key that the root module does not declare must fail TofuValidate.
+# `tofu validate` accepts undeclared `-var` flags that `tofu plan` rejects.
+tf_deploy(
+    name = "undeclared",
+    vars = {"nope": "c"},
+    deps = [":lib"],
+)
