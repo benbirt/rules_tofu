@@ -56,7 +56,6 @@ def _tf_deploy_impl(ctx):
         ctx,
         outputs,
         [d[TfLibraryInfo] for d in ctx.attr.deps],
-        providers_depset,
         _strict_deps(direct_providers, [d[TfLibraryInfo] for d in ctx.attr.deps]),
         ctx.files.srcs,
         ctx.files.data,

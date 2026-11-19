@@ -62,7 +62,6 @@ def _tf_library_impl(ctx):
         ctx,
         work_tree_outputs,
         [d[TfLibraryInfo] for d in ctx.attr.deps],
-        providers_depset,
         _strict_deps(direct_providers, [d[TfLibraryInfo] for d in ctx.attr.deps]),
         ctx.files.srcs,
         ctx.files.data,
@@ -203,11 +202,11 @@ def tf_library(name, srcs = None, deps = None, data = None, providers = None, mo
         may target directories in the work tree that hold no configuration
         files.
       - A module call cycle.
-      - A `required_providers` entry missing from `providers` or `deps`, or
-        outside `registry.opentofu.org`. Built-in providers such as
-        `terraform.io/builtin/terraform` are exempt.
       - A non-built-in `required_providers` entry in `srcs` missing from this
-        target's `providers`, even when `deps` supply it.
+        target's `providers`, even when `deps` supply it. An entry outside
+        `registry.opentofu.org` always fails because `rules_tofu` cannot vendor
+        it. Built-in providers such as `terraform.io/builtin/terraform` are
+        exempt.
       - A non-local `module` call in `srcs` to a library not in direct `deps`,
         except self-calls to `//<subdir>`.
       - A `./` or `../` call in `srcs` to a directory with no files from
