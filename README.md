@@ -552,11 +552,8 @@ module does not declare also fails `bazel build`. Because `tofu validate` does
 not check variable values, a wrong type in `vars` fails at `plan` rather than
 `bazel build`.
 
-Launchers pass `vars` sorted by name and then `var_files` in listed order to
-both `tofu init` and the command so `backend` and `cloud` blocks can use
-variables. Arguments after `--` follow them on `plan`, `apply` and `destroy`
-only. A later flag overrides an earlier one, as in
-`bazel run :prod.plan -- -var region=eu-west-1`.
+Override any variable on a `.plan`, `.apply` or `.destroy` target by passing
+the flag after `--`, as in `bazel run :prod.plan -- -var region=eu-west-1`.
 
 ## State and backends
 
