@@ -445,9 +445,11 @@ Then `bazel shutdown` so the new startup flags take effect.
   `@rules_tofu//tofu` formats a tree by itself, and the rules added only
   scoping to `srcs`. `tf_library` and `tf_test` generate `:name` alone;
   `tf_deploy` adds only `.plan`, `.apply` and `.destroy`. CI's `lint` job runs
-  `tofu fmt -check` on `examples` and `e2e/smoke`.
-  `module_dependency_<version>_test` runs the README's formatting commands, and
-  `fmt_test_removed` checks that a leftover `fmt_test` fails.
+  `//tools/format:format.check` across tracked `.tf` and `.tfvars` files, plus
+  `tofu fmt -check` on `examples` and `e2e/smoke` for the file kinds
+  `rules_lint` skips. `module_dependency_<version>_test` runs the README's
+  formatting commands, and `fmt_test_removed` checks that a leftover `fmt_test`
+  fails.
 - Check targets in dependency order (`README.md`, "How it works";
   `CONTRIBUTING.md`, invariant 2; issue #143; `dependency_invalid*`,
   `test_*_invalid` and `launcher_*` cases):
@@ -697,6 +699,11 @@ Then `bazel shutdown` so the new startup flags take effect.
 - Regenerate `--deleted_packages` in `.bazelrc` via
   `bazel run @rules_bazel_integration_test//tools:update_deleted_packages`
   whenever nested packages change; don't edit those lines by hand.
+- Run formatters through `//tools/format` and `//tools/format:format.check`
+  (`CONTRIBUTING.md`, "Formatting and lint"), never
+  `bazel run @buildifier_prebuilt//:buildifier -- -r .`: `bazel run` starts
+  `buildifier` in its runfiles directory rather than the workspace, so `.`
+  holds no source files and checks nothing.
 
 ## Branch / PR conventions
 

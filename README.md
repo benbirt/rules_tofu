@@ -645,6 +645,9 @@ format_multirun(
 )
 ```
 
+This repository's [`tools/format/BUILD.bazel`](tools/format/BUILD.bazel) is a
+working example.
+
 - `rules_lint` 2.9.1 passes only `.tf` and `.tfvars` files to the tool, so
   `.tofu`, `.tftest.hcl` and `.tofutest.hcl` files are neither formatted nor
   checked. The `tofu fmt` commands above cover them.

@@ -148,7 +148,10 @@ _TAGS = [
 # where nested_bazel.sh checks the nested Bazel really is it.
 _ENV = {"RUNNING_BAZEL_VERSION": RUNNING_BAZEL_VERSION}
 
-_COMMANDS = [("build", _CASES), ("run", _RUN_CASES)]
+_COMMANDS = [
+    ("build", _CASES),
+    ("run", _RUN_CASES),
+]
 
 # The cases sharing `broken_workspace`, as one test; see the module docstring.
 # `bazel test :broken_workspace_test --test_env=ONLY_CASES=<name>,<name>`

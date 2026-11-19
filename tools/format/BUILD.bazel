@@ -1,0 +1,14 @@
+# Formats git-tracked Go, Starlark, .tf and .tfvars files via rules_lint:
+# `bazel run //tools/format` rewrites files; `:format.check` checks them.
+# Dev-only: this package references dev dependencies (aspect_rules_lint,
+# buildifier_prebuilt) and is excluded from the release tarball by
+# release_prep.sh.
+
+load("@aspect_rules_lint//format:defs.bzl", "format_multirun")
+
+format_multirun(
+    name = "format",
+    go = "@go_default_sdk//:bin/gofmt",
+    starlark = "@buildifier_prebuilt//:buildifier",
+    terraform = "//tofu",
+)

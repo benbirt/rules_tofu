@@ -16,8 +16,8 @@ load(
     _own_dirs = "own_dirs",
     _plugin_tree_root = "plugin_tree_root",
     _provider_lock = "provider_lock",
-    _strict_deps = "strict_deps",
     _runfiles_path = "runfiles_path",
+    _strict_deps = "strict_deps",
     _work_tree_path = "work_tree_path",
     _work_tree_root = "work_tree_root",
 )

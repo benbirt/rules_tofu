@@ -36,7 +36,8 @@ go_sdk.download(version = "1.26.3")
 
 # The host Go SDK, which compiles the tools that
 # tf_providers.from_lock and tf_modules.module run (see tf/private/host_tools.bzl).
-use_repo(go_sdk, "go_host_compatible_sdk_label")
+# go_default_sdk supplies gofmt to //tools/format.
+use_repo(go_sdk, "go_default_sdk", "go_host_compatible_sdk_label")
 
 host_tools = use_repo_rule("//tf/private:host_tools.bzl", "host_tools")
 
@@ -134,6 +135,7 @@ bazel_dep(name = "bazel_skylib", version = "1.9.2", dev_dependency = True)
 bazel_dep(name = "rules_bazel_integration_test", version = "0.37.1", dev_dependency = True)
 bazel_dep(name = "rules_shell", version = "0.6.1", dev_dependency = True)
 bazel_dep(name = "buildifier_prebuilt", version = "8.5.1.2", dev_dependency = True)
+bazel_dep(name = "aspect_rules_lint", version = "2.9.1", dev_dependency = True)
 
 # The Bazel those tests run inside themselves is the version of the Bazel
 # running them: the pinned one, or USE_BAZEL_VERSION's. The .bzl file is not
