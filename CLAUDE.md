@@ -539,11 +539,39 @@ Then `bazel shutdown` so the new startup flags take effect.
 - Reject auto-loaded variable files (`terraform.tfvars[.json]`,
   `*.auto.tfvars[.json]`) in every rule's `data` (`check_no_auto_tfvars`;
   `auto_tfvars_in_data`). Any library directory is a root when validated or
-  tested by `tf_test`, where auto-loaded files bypass duplicate-key checks and
-  can override `vars` (issue #93). Keep `_EXCLUDED` in `tf_modules`, which
-  strips those files from upstream modules, in step.
-- Pass `var_files` explicitly with `-var-file`, rejecting only the reserved
-  `rules_tofu.auto.tfvars.json` (`auto_tfvars_conflict`).
+  tested by `tf_test`, where auto-loaded files bypass duplicate-key checks
+  (issue #93). Keep `_EXCLUDED` in `tf_modules`, which strips those files from
+  upstream modules, in step.
+- Pass `vars` as `-var` and `var_files` as `-var-file` (issue #150;
+  `README.md`, "Variables and data files"; `variableArgs`, `var_flags`;
+  `run_directory_test` step 5):
+  - Order the flags as the deploy's `-var` sorted by name, the deploy's
+    `-var-file`, a `tf_test`'s `-var-file`, then trailing arguments after `--`.
+    Test `var_files` and arguments after `--` then override the deploy because
+    later flags win in OpenTofu.
+  - Pass `-var` and `-var-file` to `tofu init` and `tofu validate` as well as
+    to the command. Forward trailing arguments after `--` to the command only.
+    `TofuValidate` then checks `var_files` syntax on `tf_test`, where
+    `dupcheck` does not run (`malformed_test_var_file`).
+  - Don't generate a variables file from `vars`. OpenTofu named the old
+    `rules_tofu.auto.tfvars.json` in diagnostics. Its precedence and reserved
+    filename were `rules_tofu` details users had to learn.
+  - Keep `vars` an `attr.string_dict` whose values pass verbatim after
+    `-var=<name>=`. Don't encode Starlark values into HCL in the rules.
+    OpenTofu parses each value by the variable's declared type.
+  - Quote every interpolated value in generated launchers with `shell_quote`
+    (`runner.bzl`, `test.bzl`). Values in `vars` may contain spaces, quotes,
+    `$` and newlines.
+  - Reject an empty `vars` key or one containing `=` at analysis in `var_flags`
+    (`vars_name_with_equals`). `tofu` splits `-var` at the first `=` and would
+    assign to the prefix before `=`.
+  - When `--var` is passed, check in `TofuValidate` via
+    `tofu show -json -module=.` after `tofu validate` that the root module
+    declares every name (`checkVarsDeclared`; `vars_undeclared`).
+    `tofu validate` accepts an undeclared `-var` while `tofu plan` rejects it.
+    Asking `tofu` leaves configuration parsing to OpenTofu rather than
+    `runner`. Don't check `var_files` keys because `tofu` only warns about
+    undeclared names in a var file.
 - Read a `tf_test`'s root module directory from `TfLibraryInfo.package_dir` or
   `TfDeployInfo.package_dir`, never `ctx.attr.module.label`. That allows tests
   to live in a `tests/` sub-package and works when `module` is an `alias`
@@ -656,10 +684,8 @@ Then `bazel shutdown` so the new startup flags take effect.
     backends; without a `backend` or `cloud` block it writes
     `terraform.tfstate` in the run directory, so `tofu workspace` works there
     too. There is no run-directory lock (`README.md`, "Restrictions").
-  - Pass `-var-file` flags to `tofu init` as well as to the command because
-    `backend` and `cloud` blocks may reference variables. `vars` reach
-    `tofu init` via `rules_tofu.auto.tfvars.json`; if issue #150 removes that
-    file, pass `vars` to `tofu init` as `-var`.
+  - Pass `-var` and `-var-file` to `tofu init` as well as to the command
+    because `backend` and `cloud` blocks may reference variables.
 - Keep deploy launchers (`tf/private/runner.bzl`) standalone like a
   `go_binary`, with each `tf_runner` in its deploy's package:
   - Resolve runfiles and state from `$0` with absolute paths so `bazel run` and

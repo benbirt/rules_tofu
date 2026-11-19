@@ -38,7 +38,7 @@ func runTest(extraArgs []string) error {
 	if err := s.init(os.Stdout, "-no-color"); err != nil {
 		return err
 	}
-	copyRoot, cwd, env, dirArgs := s.root, s.cwd, s.env, s.dirArgs
+	cwd, env, dirArgs := s.cwd, s.env, s.dirArgs
 
 	// Test logs are files, so no colour.
 	args := append([]string{"test", "-no-color"}, dirArgs...)
@@ -46,13 +46,7 @@ func runTest(extraArgs []string) error {
 	if outputs != "" {
 		args = append(args, "-json-into="+filepath.Join(outputs, "tofu-test.json"))
 	}
-	// Var files are given relative to the work tree, which has moved.
-	for _, f := range *varFiles {
-		if !filepath.IsAbs(f) {
-			f = filepath.Join(copyRoot, filepath.FromSlash(f))
-		}
-		args = append(args, "-var-file="+f)
-	}
+	args = append(args, s.varArgs...)
 	args = append(args, extraArgs...)
 	testErr := runTofu(env, cwd, args...)
 
@@ -88,6 +82,9 @@ type staged struct {
 	// dirArgs holds -test-directory=<dir> when --test-dir names a
 	// subdirectory of cwd, and is empty otherwise.
 	dirArgs []string
+	// varArgs holds the -var and -var-file flags for tofu init and the
+	// subcommand.
+	varArgs []string
 }
 
 // stage copies --work-tree into scratch/rules_tofu.work and prepares the root
@@ -147,17 +144,28 @@ func stage(scratch string) (*staged, error) {
 	if *testDir != "" && *testDir != "." {
 		s.dirArgs = []string{"-test-directory=" + *testDir}
 	}
+	// Relative --var-file paths are relative to the work tree. Resolve
+	// them against the staged copy in s.root.
+	files := make([]string, len(*varFiles))
+	for i, f := range *varFiles {
+		if !filepath.IsAbs(f) {
+			f = filepath.Join(s.root, filepath.FromSlash(f))
+		}
+		files[i] = f
+	}
+	s.varArgs = variableArgs(files)
 	return s, nil
 }
 
-// init runs `tofu init` offline in s.cwd with -backend=false, writing its
-// standard output to stdout and adding flags to the command line. Validation
-// needs no state and `tofu test` keeps state in memory, ignoring backend and
-// cloud blocks, whereas plain `tofu init` would contact any configured backend.
+// init runs `tofu init` offline in s.cwd with -backend=false, s.dirArgs,
+// s.varArgs and flags, writing standard output to stdout. Validation needs no
+// state and `tofu test` keeps state in memory, ignoring backend and cloud
+// blocks, whereas plain `tofu init` would contact any configured backend.
 func (s *staged) init(stdout io.Writer, flags ...string) error {
 	args := append([]string{"init"}, flags...)
 	args = append(args, "-backend=false", "-input=false", "-get=false", "-plugin-dir="+s.plugins)
 	args = append(args, s.dirArgs...)
+	args = append(args, s.varArgs...)
 	if err := runTofuTo(stdout, s.env, s.cwd, args...); err != nil {
 		if *lockFile != "" {
 			log.Print("if the provider versions in required_providers changed, run `bazel run @tf_providers//:pin` to update the lock file.")

@@ -48,12 +48,11 @@ def _tf_library_impl(ctx):
         transitive = [d[TfLibraryInfo].modules for d in ctx.attr.deps],
     )
 
-    # Materialise a work tree without tfvars, since libraries carry no
-    # variable values, and symlink each provider's exec-platform package
-    # into the plugin tree. Put the init+validate stamp in DefaultInfo.files
-    # so `bazel build :foo` fails when validation fails, and expose it on
-    # TfLibraryInfo to order downstream validations.
-    work_tree_outputs = _materialize(ctx, files.to_list(), tfvars_content = None)
+    # Materialise the work tree and symlink each provider's exec-platform
+    # package into the plugin tree. Put the init+validate stamp in
+    # DefaultInfo.files so `bazel build :foo` fails when validation fails, and
+    # expose it on TfLibraryInfo to order downstream validations.
+    work_tree_outputs = _materialize(ctx, files.to_list())
     plugin_outputs = _materialize_plugin_tree(ctx, providers_depset)
     work_tree_files = depset(direct = work_tree_outputs + plugin_outputs)
 

@@ -18,6 +18,16 @@
 #      default outputs, excluding the work tree and provider packages (issue
 #      #156), and lists each launcher's script plus deploy.validate.stamp as
 #      the launcher's default outputs (issue #143).
+#   5. //vars:deploy sets variables of each type through `vars`, including
+#      values with spaces, quotes, `=`, `$`, backticks, `${...}` and a newline
+#      (issue #150). Its plan checks that tofu receives every value with the
+#      expected type and text. Arguments after `--` override `vars` and
+#      `var_files` both under `bazel run` and when the `.apply` launcher runs
+#      directly. That apply also verifies that `tofu init` reads the local
+#      backend's path from `vars`. `bazel aquery` checks that `TofuValidate`
+#      receives `--var` and the var file. `bazel test //vars:deploy_test`
+#      checks that the test's var file overrides the deploy's `vars` and
+#      `var_files`.
 
 set -euo pipefail
 
@@ -72,6 +82,33 @@ for command in plan apply destroy; do
   grep -q -F "/app/deploy.${command}.sh" <<<"${files}" || fail "//app:deploy.${command} default outputs lack deploy.${command}.sh"
   grep -q -F '/app/deploy.validate.stamp' <<<"${files}" || fail "//app:deploy.${command} default outputs lack deploy.validate.stamp"
 done
+
+echo "--- 5. vars as -var flags ---" >&2
+out="$(bazel run //vars:deploy.plan -- -no-color 2>&1)" || fail "the plan of //vars:deploy failed: ${out}"
+echo "${out}" >&2
+grep -q -E '\+ values += "as written"' <<<"${out}" || fail "the plan didn't evaluate the values of vars"
+grep -q -E '\+ who += "vars"' <<<"${out}" || fail "the plan didn't take who from vars"
+grep -q -E '\+ where += "deploy file"' <<<"${out}" || fail "the plan didn't take where from the var file"
+
+out="$(bazel run //vars:deploy.plan -- -no-color -var 'who=a user' -var where=user 2>&1)" || fail "the plan with overrides failed: ${out}"
+echo "${out}" >&2
+grep -q -E '\+ who += "a user"' <<<"${out}" || fail "an argument after -- didn't override vars"
+grep -q -E '\+ where += "user"' <<<"${out}" || fail "an argument after -- didn't override the var file"
+
+bazel build //vars:deploy.apply >&2 || fail "building the apply launcher of //vars:deploy failed"
+out="$(cd / && env -u BUILD_WORKSPACE_DIRECTORY -u BUILD_WORKING_DIRECTORY "${BIN}/vars/deploy.apply.sh" -auto-approve -no-color -var 'who=a user' 2>&1)" ||
+  fail "the apply launcher of //vars:deploy failed when run directly: ${out}"
+echo "${out}" >&2
+grep -q -E '^who = "a user"$' <<<"${out}" || fail "the apply launcher didn't pass on an argument with a space"
+VARS_STATE="${BIN}/vars/deploy.rules_tofu-state/work/vars/state dir/vars.tfstate"
+[[ -f "${VARS_STATE}" ]] || fail "tofu init didn't get state_dir from vars: no state at ${VARS_STATE}"
+
+args="$(bazel aquery 'mnemonic("TofuValidate", //vars:deploy)' 2>/dev/null)" || fail "aquery of //vars:deploy failed"
+grep -q -F -- '--var=who=vars' <<<"${args}" || fail "validation of //vars:deploy isn't given vars: ${args}"
+grep -q -F 'vars/deploy.tfvars' <<<"${args}" || fail "validation of //vars:deploy isn't given the var file: ${args}"
+
+out="$(bazel test //vars:deploy_test --test_output=all 2>&1)" || fail "the test of //vars:deploy failed: ${out}"
+echo "${out}" >&2
 
 # The nested server would otherwise live until the test's process group is
 # killed.

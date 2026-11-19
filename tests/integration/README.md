@@ -115,7 +115,9 @@ header of `tf_modules_test.sh` for the steps.
 `run_directory/` (`run_directory_test`, driven by `run_directory_test.sh`)
 exercises `tf_deploy` launchers under `bazel run` and direct execution from
 another directory, sharing local state in `//app:deploy`'s run directory under
-`bazel-bin`. See the header of `run_directory_test.sh` for the steps.
+`bazel-bin`. Its `//vars` package checks `-var` and `-var-file` passing across
+validation, `tofu init`, launchers, CLI overrides and `tf_test`. See the header
+of `run_directory_test.sh` for the steps.
 
 ## Case lists
 

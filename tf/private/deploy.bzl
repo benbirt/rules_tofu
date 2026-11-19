@@ -22,6 +22,7 @@ load(
     _plugin_tree_root = "plugin_tree_root",
     _provider_lock = "provider_lock",
     _strict_deps = "strict_deps",
+    _var_flags = "var_flags",
     _work_tree_path = "work_tree_path",
     _work_tree_root = "work_tree_root",
 )
@@ -37,12 +38,7 @@ def _tf_deploy_impl(ctx):
     entries = files.to_list()
     _check_has_configuration(ctx, entries)
 
-    tfvars_content = json.encode_indent(
-        ctx.attr.vars,
-        indent = "  ",
-    )
-
-    outputs = _materialize(ctx, entries, tfvars_content = tfvars_content)
+    outputs = _materialize(ctx, entries)
 
     # Aggregate providers: direct + transitive via library deps.
     direct_providers = [p[TfProviderInfo] for p in ctx.attr.providers]
@@ -83,6 +79,8 @@ def _tf_deploy_impl(ctx):
         plugin_tree_root = _plugin_tree_root(ctx),
         required_stamps = [d[TfLibraryInfo].validate_stamp for d in ctx.attr.deps] + var_files_check_stamps,
         lock = lock,
+        var_flags = _var_flags(ctx, ctx.attr.vars),
+        var_files = ctx.files.var_files,
     )
     stamps = [validate_stamp] + var_files_check_stamps
 
@@ -103,7 +101,7 @@ def _tf_deploy_impl(ctx):
             providers = providers_depset,
             modules = depset(transitive = [d[TfLibraryInfo].modules for d in ctx.attr.deps]),
             dirs = _own_dirs(ctx.files.srcs + ctx.files.data),
-            tfvars_content = tfvars_content,
+            vars = ctx.attr.vars,
             var_files = ctx.files.var_files,
             stamps = stamps,
         ),
@@ -124,10 +122,11 @@ tf_deploy_rule = rule(
                   "libraries join the root module; others are reached via `module` blocks.",
         ),
         "vars": attr.string_dict(
-            doc = "String-valued variable bindings written to `rules_tofu.auto.tfvars.json`, " +
-                  "reserving that filename in the deploy's package. OpenTofu converts strings " +
-                  "for `number` and `bool` variables; pass lists, maps and objects via " +
-                  "`var_files`.",
+            doc = "Variable values passed to `tofu` as `-var=<name>=<value>`. `string` and " +
+                  "untyped variables receive the text as written. `number` and `bool` values " +
+                  "are converted. Any other type, including `any`, is parsed as an OpenTofu " +
+                  "expression. See " +
+                  "[Variables and data files](https://github.com/benbirt/rules_tofu#variables-and-data-files).",
         ),
         "var_files": attr.label_list(
             allow_files = [".tfvars.json", ".tfvars"],
@@ -211,11 +210,13 @@ def tf_deploy(name, srcs = None, deps = None, vars = None, var_files = None, dat
       deps: `tf_library` targets included in the deploy's work tree. Those in
           the deploy's own package join its root module; others are reached via
           `module` blocks in the root module's files.
-      vars: Dictionary of variable name to string value, written to
-          `rules_tofu.auto.tfvars.json` in the deploy's package directory. That
-          filename is reserved in the package. OpenTofu converts strings to
-          `number` or `bool` where declared; pass lists, maps and objects via
-          `var_files`.
+      vars: Dictionary of variable name to string value passed to `tofu` as
+          `-var=<name>=<value>` before `var_files`. `string` and untyped
+          variables receive the text as written, without interpolation. `number`
+          and `bool` values are converted. Any other type, including `any`, is
+          parsed as an OpenTofu expression, such as `"[\"a\", \"b\"]"` for a
+          `list(string)` or `"\"hello\""` for a string in `any`. See
+          [Variables and data files](https://github.com/benbirt/rules_tofu#variables-and-data-files).
       var_files: `.tfvars` or `.tfvars.json` files passed to `tofu` via
           `-var-file`, including outputs of other rules. Keys must not overlap
           with `vars` or other `var_files` entries; duplicates fail
