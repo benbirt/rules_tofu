@@ -53,6 +53,12 @@ tf_modules.module(
     source = "git::file://@FIXTURES@/network.git//vpc?ref=v1.0.0",
     subdirs = ["peering"],
 )
+# `//plain` holds only main.tf, so its library's data glob matches nothing
+# (issue #164). At a repository root, Bazel writes REPO.bazel, which matches.
+tf_modules.module(
+    name = "plain",
+    source = "git::file://@FIXTURES@/network.git//plain?ref=v1.0.0",
+)
 tf_modules.module(
     name = "dns",
     sha256 = "@DNS_SHA256@",

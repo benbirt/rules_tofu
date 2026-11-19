@@ -10,5 +10,6 @@ tf_deploy(
         "@tf_modules//cloudposse/label/null",
         "@tf_modules//dns",
         "@tf_modules//network",
+        "@tf_modules//plain",
     ],
 )

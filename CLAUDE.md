@@ -283,6 +283,9 @@ Then `bazel shutdown` so the new startup flags take effect.
     globs (`_CONFIG_GLOBS`), so an uncalled example never reaches a work tree
     (issue #140). Files that a local path reaches outside `subdir` are in the
     root package, which exports them.
+  - Keep `allow_empty = True` on both generated globs (`data` and
+    `//:_rules_tofu_files`). A directory holding only configuration files
+    leaves the glob empty (issue #164).
   - Read `subdirs` on `tf_modules.module` (`modscan --subdir`) for
     `//<subdir>` directories outside `modules/` that the module does not call
     itself. Combine the tags that declare the module, for a registry module
