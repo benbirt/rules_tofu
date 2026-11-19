@@ -5,8 +5,8 @@ rule symlinks its configuration, data, test and `var_files` inputs at their
 `work_tree_path`. Main-repository files keep their workspace-relative path and
 external files go under `external/<repo>/...`. The vendored provider packages
 live in a sibling directory, `bazel-bin/<pkg>/<name>.plugins/`, so
-`tofu init -plugin-dir=<plugin_tree>` reads them in place without copying large
-provider packages into the work tree.
+`tofu init -plugin-dir=<plugin_tree>` reads them in place without linking
+provider packages into the work tree and run directory.
 
 `materialize` builds the work tree, `materialize_plugin_tree` builds the
 sibling plugin tree and `modules_manifest` writes `<name>.modules.json`.

@@ -1,0 +1,19 @@
+load("@rules_tofu//tf:defs.bzl", "tf_library", "tf_test")
+
+# Library whose local-exec provisioner runs a script from data (issue #148).
+# :test applies it so hello.sh runs through its symlink and writes ran.txt in
+# the run directory.
+tf_library(
+    name = "lib",
+    srcs = ["main.tf"],
+    data = [
+        "greeting.txt",
+        "hello.sh",
+    ],
+)
+
+tf_test(
+    name = "test",
+    srcs = ["tests/apply.tftest.hcl"],
+    module = ":lib",
+)

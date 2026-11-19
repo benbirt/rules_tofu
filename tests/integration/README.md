@@ -86,12 +86,15 @@ See the header of `lock_update_test.sh` for the steps.
 `network_module` by `module_source`, which calls one in `dns_module`. It
 exercises standalone library builds, offline planning, `tf_test`,
 `bazel run @rules_tofu//tofu` from `app/` and the README's
-`tofu fmt -recursive` commands at the workspace root. It also holds three
-packages for module-layout edge cases:
+`tofu fmt -recursive` commands at the workspace root. It also holds four
+packages for module and test edge cases:
 
 - `empty`: libraries and a `tf_test` whose root module is empty (issue #119).
 - `nested`: a library whose `srcs` reach into subdirectories, its `tf_test`,
   and a `tf_deploy` with no `srcs` of its own.
+- `provisioner`: a library whose `local-exec` provisioner runs a script from
+  `data` and a `tf_test` run via `bazel test` and directly by relative path
+  (issue #148).
 - `sub_only`: a library whose `srcs` are all in a subdirectory.
 
 It also applies `//app:app` with no backend block and
