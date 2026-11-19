@@ -570,12 +570,6 @@ refuse to run without `allow_ephemeral_state = True` in two cases:
 
 `plan` is never gated.
 
-Adding a `backend` or `cloud` block while `terraform.tfstate` in the run
-directory holds resources or outputs makes `tofu init` fail in every launcher.
-In the run directory, run `tofu init -migrate-state` for a `backend` block, or
-delete `terraform.tfstate`; `cloud` blocks reject `-migrate-state`, so run plain
-`tofu init` there and answer its prompt.
-
 ## Tests
 
 `tf_test` runs `tofu test` offline against vendored providers and modules:
