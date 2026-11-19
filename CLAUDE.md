@@ -448,8 +448,7 @@ Then `bazel shutdown` so the new startup flags take effect.
   `//tools/format:format.check` across tracked `.tf` and `.tfvars` files, plus
   `tofu fmt -check` on `examples` and `e2e/smoke` for the file kinds
   `rules_lint` skips. `module_dependency_<version>_test` runs the README's
-  formatting commands, and `fmt_test_removed` checks that a leftover `fmt_test`
-  fails.
+  formatting commands.
 - Check targets in dependency order (`README.md`, "How it works";
   `CONTRIBUTING.md`, invariant 2; issue #143; `dependency_invalid*`,
   `test_*_invalid` and `launcher_*` cases):
