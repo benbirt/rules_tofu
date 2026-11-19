@@ -2,7 +2,7 @@
 
 load("//toolchain:toolchain.bzl", "TOOLCHAIN_TYPE")
 load(":fmt.bzl", _tf_fmt = "tf_fmt", _tf_fmt_check = "tf_fmt_check_test")
-load(":init_action.bzl", _tf_init_validate = "tf_init_validate")
+load(":init_action.bzl", "RUNNER_BIN", _tf_init_validate = "tf_init_validate")
 load(":providers.bzl", "TfLibraryInfo", "TfProviderInfo")
 load(
     ":work_tree.bzl",
@@ -139,6 +139,11 @@ _tf_library = rule(
         ),
         "_modules_bin": attr.label(
             default = MODULES_BIN,
+            executable = True,
+            cfg = "exec",
+        ),
+        "_runner_bin": attr.label(
+            default = RUNNER_BIN,
             executable = True,
             cfg = "exec",
         ),

@@ -88,11 +88,13 @@ Then `bazel shutdown` so the new startup flags take effect.
 
 - Read only the root module's `from_lock` `.terraform.lock.hcl` (`README.md`,
   "Pinning with a lock file"; `CONTRIBUTING.md`, invariant 1):
-  - Reject `.terraform.lock.hcl` in `srcs` or `data`, and don't relax the
-    work-tree check in `init_action.bzl`. `ALLOWED_SRC_EXTS` in
-    `tf/private/work_tree.bzl` admits `.hcl`, so that check is the backstop.
+  - Reject `.terraform.lock.hcl` in every directory of a work tree at analysis
+    in `materialize` (`tf/private/work_tree.bzl`; `lock_file_smuggled`).
+    `ALLOWED_SRC_EXTS` admits `.hcl` and `data` allows all files, so
+    `materialize` is the check across `srcs`, `data` and `deps`.
   - Pass the managed lock via `TfProviderInfo.lock` (`--lock-file` on the
-    runner) and copy it into the work tree only after that check runs.
+    runner), which copies it into the run or staged root module directory and
+    never into `<name>.work`.
 - Don't pass `-lockfile=readonly` to `tofu init`: it fails when the lock has
   entries a work tree doesn't use.
 - Verify every provider download against a per-platform digest: the tag's
@@ -472,23 +474,23 @@ Then `bazel shutdown` so the new startup flags take effect.
   `README.md`, "Tests") with its own `deps` and `providers`.
 - Allow empty root modules in `tf_library` and `tf_test` (issue #119; the
   `empty` packages in the fmt and lock_update fixtures):
-  - Ignore `fs.ErrNotExist` on the root walk in the manifest tool, create
-    `$CWD` before copying in the validate action, and call `MkdirAll` in the
-    test runner.
+  - Ignore `fs.ErrNotExist` on the root walk in the manifest tool. In the
+    runner's `stage`, skip `copyTree` when `--work-tree` is absent and call
+    `os.MkdirAll` on the root module directory.
   - Don't copy `.terraform.lock.hcl` into an empty root: `tofu init` installs
     no providers there and leaves the lock unpruned against an empty plugin
     cache.
-  - Keep the validate script's guidance when an empty-root test fails for a
-    missing provider (`empty_root_test_provider`).
+  - Keep `runValidate`'s missing-provider guidance when an empty-root `tf_test`
+    fails validation (`empty_root_test_provider`).
   - Don't make `tfconfig` treat missing directories as empty: `modscan` relies
     on the error.
 - Reject an empty root in `tf_deploy` at analysis (`check_has_configuration`;
   `deploy_deps_only`, `deploy_subdirectory_only`), because `tofu` validates an
   empty directory and then refuses to plan it.
-- Keep `HAS_CONFIG` (validate script), `tfconfig.HasConfig`, `hasConfig` in
-  `runner/test.go` and `check_has_configuration` aligned on what counts as
-  configuration: regular non-dot files with the four config extensions.
-  `hasConfig` duplicates `tfconfig.HasConfig` so `runner` links no HCL parser.
+- Keep `tfconfig.HasConfig`, `hasConfig` in the runner and
+  `check_has_configuration` aligned on what counts as configuration: regular
+  non-dot files with the four config extensions. `hasConfig` duplicates
+  `tfconfig.HasConfig` so `runner` links no HCL parser.
   `tfconfig.Effective` and `EffectiveTests` drop dotfiles for all callers; `pin`
   reads through `Effective`.
 - Reject `TEST_SRC_EXTS` in `tf_library` and `tf_deploy` `srcs`
@@ -518,16 +520,31 @@ Then `bazel shutdown` so the new startup flags take effect.
   one test directory. When `srcs` sit in a subdirectory, pass `-test-directory`
   to `tofu init -get=false`, validate and test alike; omit it when they sit in
   the root directory, which `tofu` reads anyway.
-- Keep `--command=test` (`tf/private/cmd/runner/test.go`) separate from the
-  deploy runner path and ephemeral-state gate:
-  - Copy the work tree into `$TEST_TMPDIR` and take neither `--state-dir` nor
-    `--output-root`.
-  - Run `tofu init` with `-backend=false`: `tofu test` ignores backends, while
-    plain `tofu init` contacts them.
-  - Put any fallback empty plugin directory under `$TEST_TMPDIR`, never in
-    runfiles.
-  - Fail if `errored_test.tfstate` exists after `tofu test`: OpenTofu writes it
-    and still exits 0 when cleanup fails to destroy a resource.
+- Keep `--command=test` (`tf/private/cmd/runner/test.go`) and
+  `--command=validate` (`tf/private/cmd/runner/validate.go`; step 1 of issue
+  #148) on shared `stage` and `(*staged).init`, separate from the deploy runner
+  path and ephemeral-state gate:
+  - Take neither `--state-dir` nor `--output-root`.
+  - Copy `--work-tree` into `<scratch>/rules_tofu.work` and put any fallback
+    empty plugin directory at `<scratch>/rules_tofu.plugins`, never in runfiles
+    or the exec root. Step 2 of issue #148, linking instead of copying, is not
+    done yet.
+  - Run `tofu init` with `-backend=false`: neither validation nor `tofu test`
+    uses a backend, while plain `tofu init` contacts configured backends.
+  - In `test`, stage under `$TEST_TMPDIR` and fail if `errored_test.tfstate`
+    exists after `tofu test`: OpenTofu writes it and still exits 0 when cleanup
+    fails to destroy a resource.
+  - In `validate`:
+    - Make path flags, including `--tofu`, absolute before changing directory:
+      Bazel passes exec-root-relative paths, and a root-package custom
+      toolchain binary is a bare filename.
+    - Stage in an `os.MkdirTemp` directory under `$TMPDIR` and always remove it
+      on exit: only `linux-sandbox` gives each action a fresh `TMPDIR` (issue
+      #90).
+    - Discard `tofu init` stdout while keeping stderr.
+    - Keep the failure hints covered by `stale_lock`,
+      `module_version_mismatch`, `empty_root_test_provider` and
+      `tf_modules_test`.
 - Write `tf_test` JSON logs via `-json-into`, which sets the minimum OpenTofu
   version to 1.12.0 (`README.md`, "Quick start" and "Bringing your own binary";
   `toolchain/versions.bzl`; 1.8.5 was dropped in issue #125). Don't pin older
@@ -557,8 +574,9 @@ Then `bazel shutdown` so the new startup flags take effect.
 - Constrain `tofu` toolchains with `exec_compatible_with` only (no
   `target_compatible_with`) so non-host `--platforms` flags still resolve one
   (issue #105), and keep rule Go tools at `cfg = "exec"`.
-- Keep `--plugin-dir` mandatory on the runner and `os.MkdirAll` it for the
-  zero-provider case.
+- Keep `--plugin-dir` mandatory on the runner. When no providers are in scope
+  and `--plugin-dir` does not exist, `os.MkdirAll` it on the deploy path and
+  fall back to an empty directory in scratch in `stage`.
 - Refuse `apply` and `destroy` unless state is durable or
   `allow_ephemeral_state` is set on `tf_deploy` (`README.md`, "State and
   backends"); don't add a second rule beside it. State under `bazel-bin` is
@@ -624,10 +642,10 @@ Then `bazel shutdown` so the new startup flags take effect.
   - Keep the rule under `tf/private/`, and keep `tofu/` free of dev-only
     dependencies. `tofu/` ships in the release archive, and `//tofu:all_files`
     is in `//:local_repository_files` so nested integration workspaces see it.
-- Isolate `tofu`'s environment and init flags in the runner (`tofuEnv`):
-  - Pin `TF_DATA_DIR` to the run directory's `.terraform` so an inherited
-    `TF_DATA_DIR` cannot make `tofu init -get=false` miss the module manifest
-    at run time.
+- Isolate `tofu`'s environment (`tofuEnv`, used by every command) and init
+  flags in the runner:
+  - Pin `TF_DATA_DIR` to `<cwd>/.terraform` so an inherited `TF_DATA_DIR`
+    cannot make `tofu init -get=false` miss the module manifest.
   - Strip `TF_PLUGIN_CACHE_DIR` so `tofu` uses only the vendored plugin tree.
   - Remove `.terraform/terraform.tfstate` before `tofu init` (`syncRunDir`,
     `backendRecordPath`; issue #92) so saved backend settings cannot block an

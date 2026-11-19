@@ -9,6 +9,7 @@ go_library(
         "main.go",
         "rundir.go",
         "test.go",
+        "validate.go",
     ],
     importpath = "github.com/benbirt/rules_tofu/tf/private/cmd/runner",
     deps = [

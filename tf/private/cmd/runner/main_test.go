@@ -2,6 +2,7 @@ package main_test
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -1001,7 +1002,7 @@ func TestRunner_Test_ErroredStateFails(t *testing.T) {
 	}
 }
 
-// `--command=test` needs no --state-dir; the other commands still do.
+// `--command=test` needs no --state-dir; plan, apply and destroy still do.
 func TestRunner_Test_StateDirNotRequired(t *testing.T) {
 	cmd, _, _, _, _ := setupTest(t)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -1549,5 +1550,244 @@ func TestRunner_Test_KeepsExecutableBit(t *testing.T) {
 		if mode&0o200 == 0 {
 			t.Errorf("%s copied with mode %o, want it writable", name, mode)
 		}
+	}
+}
+
+// setupValidate builds a `--command=validate` invocation matching the
+// TofuValidate action: all flag paths are relative to the runner's working
+// directory, including a bare filename for --tofu, and TMPDIR is set to a
+// directory under dir. The fake tofu prints a progress line on stdout and
+// exits 3 on the subcommand named by FAKE_FAIL. It returns the command, its
+// working directory, the stamp path and a reader for recorded tofu calls.
+func setupValidate(t *testing.T) (cmd *exec.Cmd, dir, stamp string, invocations func() []invocation) {
+	t.Helper()
+	bin := runnerBin(t)
+	// Resolve t.TempDir() so dir matches filepath.Abs and $(pwd); on macOS,
+	// /var is a symlink to /private/var.
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	logPath := filepath.Join(dir, "tofu-invocations.log")
+	script := fakeTofuScript("echo \"progress of $1\"\nif [ \"$1\" = \"${FAKE_FAIL:-}\" ]; then echo \"$1 broke\" >&2; exit 3; fi\n")
+	if err := os.WriteFile(filepath.Join(dir, "tofu.sh"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for f, content := range map[string]string{
+		"sources/main.tf":          "# main\n",
+		"sources/t.tftest.hcl":     "# test\n",
+		"modules.json":             testManifest,
+		"lock/.terraform.lock.hcl": "# lock\n",
+	} {
+		p := filepath.Join(dir, filepath.FromSlash(f))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o444); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "work", "mypkg", "tests"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for link, src := range map[string]string{"mypkg/main.tf": "main.tf", "mypkg/tests/t.tftest.hcl": "t.tftest.hcl"} {
+		if err := os.Symlink(filepath.Join(dir, "sources", src), filepath.Join(dir, "work", filepath.FromSlash(link))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "tmp"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	invocations = func() []invocation {
+		t.Helper()
+		data, err := os.ReadFile(logPath)
+		if err != nil {
+			t.Fatalf("read tofu invocation log: %v", err)
+		}
+		return parseInvocations(data)
+	}
+	cmd = exec.Command(bin,
+		"--command=validate",
+		"--tofu=tofu.sh",
+		"--work-tree=work",
+		"--package-dir=mypkg",
+		"--plugin-dir=work.plugins",
+		"--modules-manifest=modules.json",
+		"--stamp=validate.stamp",
+	)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "TOFU_LOG="+logPath, "TMPDIR="+filepath.Join(dir, "tmp"))
+	return cmd, dir, filepath.Join(dir, "validate.stamp"), invocations
+}
+
+// `--command=validate` resolves paths relative to its working directory and
+// stages a copy of the work tree under TMPDIR. It runs `tofu init` with stdout
+// discarded and `tofu validate` with stdout kept, writes --stamp, removes the
+// scratch directory and leaves the input work tree untouched.
+func TestRunner_Validate_InitsValidatesAndStamps(t *testing.T) {
+	cmd, dir, stamp, invocations := setupValidate(t)
+	cmd.Args = append(cmd.Args, "--lock-file=lock/.terraform.lock.hcl", "--test-dir=tests", "--var-file=sources/main.tf", "--", "-json")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
+	}
+	if strings.Contains(string(out), "progress of init") || !strings.Contains(string(out), "progress of validate") {
+		t.Errorf("output = %q, want validate's stdout and not init's", out)
+	}
+	invs := invocations()
+	if len(invs) != 2 {
+		t.Fatalf("got %d tofu invocations, want init then validate: %+v", len(invs), invs)
+	}
+	init, validate := invs[0], invs[1]
+	if init.cwd != validate.cwd || filepath.Base(init.cwd) != "mypkg" || strings.HasPrefix(init.cwd, filepath.Join(dir, "work")) {
+		t.Errorf("cwd = %q and %q, want one staged mypkg outside the work tree", init.cwd, validate.cwd)
+	}
+	wantInit := []string{"init", "-backend=false", "-input=false", "-get=false", "-test-directory=tests"}
+	for _, arg := range wantInit {
+		if !init.hasArg(arg) {
+			t.Errorf("init lacks %q: %v", arg, init.args)
+		}
+	}
+	if !init.hasArgWithPrefix("-plugin-dir=/") || init.hasArg("-plugin-dir="+filepath.Join(dir, "work.plugins")) {
+		t.Errorf("init args = %v, want an absolute fallback -plugin-dir", init.args)
+	}
+	wantValidate := []string{"validate", "-test-directory=tests", "-var-file=" + filepath.Join(dir, "sources", "main.tf"), "-json"}
+	if !reflect.DeepEqual(validate.args, wantValidate) {
+		t.Errorf("validate args = %q, want %q", validate.args, wantValidate)
+	}
+	if want := filepath.Join(init.cwd, ".terraform"); init.env["TF_DATA_DIR"] != want {
+		t.Errorf("TF_DATA_DIR = %q, want %q", init.env["TF_DATA_DIR"], want)
+	}
+	if _, err := os.Stat(stamp); err != nil {
+		t.Errorf("stamp not written: %v", err)
+	}
+	if left, err := os.ReadDir(filepath.Join(dir, "tmp")); err != nil || len(left) != 0 {
+		t.Errorf("TMPDIR holds %v after the run (err=%v), want nothing", left, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "work", "mypkg", ".terraform")); !os.IsNotExist(err) {
+		t.Errorf("the work tree gained .terraform: err=%v", err)
+	}
+}
+
+// An existing --plugin-dir is resolved to an absolute path and used in place.
+func TestRunner_Validate_PluginDirUsedInPlace(t *testing.T) {
+	cmd, dir, _, invocations := setupValidate(t)
+	pluginDir := filepath.Join(dir, "work.plugins")
+	if err := os.MkdirAll(filepath.Join(pluginDir, "registry.opentofu.org"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
+	}
+	if init := invocations()[0]; !init.hasArg("-plugin-dir=" + pluginDir) {
+		t.Errorf("init args = %v, want -plugin-dir=%s", init.args, pluginDir)
+	}
+}
+
+// When a rule has no files, --work-tree does not exist and validation runs on
+// an empty root module. `--test-dir=.` names the root module's own directory
+// and passes no -test-directory flag.
+func TestRunner_Validate_NoWorkTree(t *testing.T) {
+	cmd, dir, stamp, invocations := setupValidate(t)
+	if err := os.RemoveAll(filepath.Join(dir, "work")); err != nil {
+		t.Fatal(err)
+	}
+	cmd.Args = append(cmd.Args, "--lock-file=lock/.terraform.lock.hcl", "--test-dir=.")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
+	}
+	for _, inv := range invocations() {
+		if inv.hasArgWithPrefix("-test-directory") {
+			t.Errorf("%v: -test-directory passed for the root module's own directory", inv.args)
+		}
+	}
+	if _, err := os.Stat(stamp); err != nil {
+		t.Errorf("stamp not written: %v", err)
+	}
+}
+
+// When `tofu init` or `tofu validate` fails, the runner prints only the
+// remediation hints that apply, writes no stamp, removes its scratch
+// directory under TMPDIR and exits with tofu's status code.
+func TestRunner_Validate_FailureAdvice(t *testing.T) {
+	const (
+		pin     = "bazel run @tf_providers//:pin"
+		modules = "modules are never fetched"
+		empty   = "`tofu init` installs no providers for one"
+		fetched = "fetched module @tf_modules//net failed validation"
+	)
+	withCalls := `{"Modules":[{"Key":"","Source":"","Dir":"."},{"Key":"net","Source":"./net","Dir":"net"}]}`
+	for _, tc := range []struct {
+		name      string
+		fail      string
+		flags     []string
+		manifest  string
+		emptyRoot bool
+		want      []string
+		notWant   []string
+	}{
+		{name: "init", fail: "init", want: []string{"init broke"}, notWant: []string{pin, modules, empty, fetched}},
+		{name: "init with a lock", fail: "init", flags: []string{"--lock-file=lock/.terraform.lock.hcl"}, want: []string{pin}, notWant: []string{modules}},
+		{name: "init with module calls", fail: "init", manifest: withCalls, want: []string{modules}, notWant: []string{pin}},
+		{name: "init of a fetched module", fail: "init", flags: []string{"--fetched-module=@tf_modules//net"}, want: []string{fetched}},
+		{name: "validate", fail: "validate", flags: []string{"--lock-file=lock/.terraform.lock.hcl"}, manifest: withCalls, want: []string{"validate broke"}, notWant: []string{pin, modules, empty, fetched}},
+		{name: "validate of a fetched module", fail: "validate", flags: []string{"--fetched-module=@tf_modules//net"}, want: []string{fetched}},
+		{name: "validate of a test of an empty root", fail: "validate", flags: []string{"--test-dir=."}, emptyRoot: true, want: []string{"the root module, mypkg, has no configuration file", empty}},
+		{name: "validate of an empty root", fail: "validate", emptyRoot: true, notWant: []string{empty}},
+		{name: "validate of a test", fail: "validate", flags: []string{"--test-dir=tests"}, notWant: []string{empty}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd, dir, stamp, _ := setupValidate(t)
+			if tc.manifest != "" {
+				if err := os.WriteFile(filepath.Join(dir, "manifest-with-calls.json"), []byte(tc.manifest), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				cmd.Args = append(cmd.Args, "--modules-manifest=manifest-with-calls.json")
+			}
+			if tc.emptyRoot {
+				if err := os.Remove(filepath.Join(dir, "work", "mypkg", "main.tf")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cmd.Args = append(cmd.Args, tc.flags...)
+			cmd.Env = append(cmd.Env, "FAKE_FAIL="+tc.fail)
+			out, err := cmd.CombinedOutput()
+			var exit *exec.ExitError
+			if !errors.As(err, &exit) || exit.ExitCode() != 3 {
+				t.Fatalf("err = %v, want exit code 3\n%s", err, out)
+			}
+			for _, w := range tc.want {
+				if !strings.Contains(string(out), w) {
+					t.Errorf("output lacks %q:\n%s", w, out)
+				}
+			}
+			for _, w := range tc.notWant {
+				if strings.Contains(string(out), w) {
+					t.Errorf("output has %q:\n%s", w, out)
+				}
+			}
+			if _, err := os.Stat(stamp); !os.IsNotExist(err) {
+				t.Errorf("stamp written despite the failure: err=%v", err)
+			}
+			if left, err := os.ReadDir(filepath.Join(dir, "tmp")); err != nil || len(left) != 0 {
+				t.Errorf("TMPDIR holds %v after the run (err=%v), want nothing", left, err)
+			}
+		})
+	}
+}
+
+// `--command=validate` requires --stamp.
+func TestRunner_Validate_StampRequired(t *testing.T) {
+	cmd, _, _, _ := setupValidate(t)
+	for i, a := range cmd.Args {
+		if strings.HasPrefix(a, "--stamp=") {
+			cmd.Args = append(cmd.Args[:i], cmd.Args[i+1:]...)
+			break
+		}
+	}
+	out, err := cmd.CombinedOutput()
+	if err == nil || !strings.Contains(string(out), "--stamp is required") {
+		t.Errorf("err=%v out=%q, want --stamp is required", err, out)
 	}
 }
