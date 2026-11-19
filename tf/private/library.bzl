@@ -253,6 +253,7 @@ def tf_library(name, srcs = None, deps = None, data = None, providers = None, mo
           without `module_source` is an error.
       **kwargs: Attributes forwarded to the underlying rule.
     """
+
     # A registry module's version is normally its Bazel module's version, which
     # its publisher already bumps on every release.
     if module_version == None:

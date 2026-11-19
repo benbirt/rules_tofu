@@ -645,6 +645,8 @@ format_multirun(
 )
 ```
 
+This repository's [`tools/BUILD.bazel`](tools/BUILD.bazel) is a working example.
+
 ## The `tofu` binary
 
 Bazel downloads the OpenTofu release for the execution platform, verifies its

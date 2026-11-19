@@ -32,7 +32,7 @@ bazel test //...
 | `toolchain/` | OpenTofu binary download and toolchain registration |
 | `tofu/` | `@rules_tofu//tofu`, the toolchain's runnable `tofu` (rule in `tf/private/tofu_binary.bzl`) |
 | `docs/` | `starlark_doc_extract` target per public `.bzl` file, shipped as the BCR `docs_url` archive |
-| `tools/` | Maintainer tools (excluded from releases): `update_versions` pins an OpenTofu release |
+| `tools/` | Maintainer tools (excluded from releases): `update_versions` pins an OpenTofu release; `format` formats the repository |
 | `tests/integration/` | Bazel-in-Bazel integration tests ([`tests/integration/README.md`](tests/integration/README.md)) |
 | `tests/tofu/` | Tests for `//tofu` used as another target's tool |
 | `examples/` | Usage examples |
@@ -114,25 +114,25 @@ On the pinned Bazel version, CI runs builds, tests and example plans with
 
 ## Formatting and lint
 
-CI's `lint` job runs `gofmt -l .`, `buildifier -mode=check -r .`,
-`buildifier -lint=warn -r .` and
-`bazel run //tofu -- fmt -check -diff -recursive examples e2e/smoke` as
-separate steps, plus `bazel mod tidy` to check
-that `MODULE.bazel` is unchanged. Locally, `-mode` defaults to `fix`, so one
-`buildifier` invocation both formats Starlark files in place and prints lint
-warnings:
+No `bazel test` target checks formatting. CI's `lint` job runs
+`bazel run //tools:format.check`,
+`bazel run @buildifier_prebuilt//:buildifier -- -lint=warn -r .` and
+`bazel run //tofu -- fmt -check -diff -recursive examples e2e/smoke`, plus
+`bazel mod tidy` to check that `MODULE.bazel` is unchanged. Run locally:
 
 ```sh
-gofmt -w .
+bazel run //tools:format
 bazel run @buildifier_prebuilt//:buildifier -- -lint=warn -r .
 bazel run //tofu -- fmt -recursive examples e2e/smoke
 bazel mod tidy
 ```
 
-The rules generate no format targets, so no test checks configuration
-formatting. That `//tofu` step runs the pinned binary and is the only check. It
-names `examples` and `e2e/smoke` and leaves out `tests/integration` because
-negative-case fixtures there may be malformed on purpose.
+`//tools:format` uses `rules_lint` to format git-tracked Go, Starlark, `.tf`
+and `.tfvars` files, including `tests/integration` and nested workspaces. Set
+`rules-lint-ignored` in `.gitattributes` to exclude a file. `rules_lint` 2.9.1
+skips `.tofu`, `.tftest.hcl` and `.tofutest.hcl` files, so the `tofu fmt` step
+is their only check. It names `examples` and `e2e/smoke` to skip
+`tests/integration`, where negative-case fixtures may be malformed on purpose.
 
 When adding a nested Bazel module under `e2e/` or `tests/integration/`:
 
