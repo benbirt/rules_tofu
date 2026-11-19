@@ -64,12 +64,13 @@
 // or cloud block, state is <state-dir>/work/<package-dir>/terraform.tfstate.
 //
 // For test, <base> is a new directory under TEST_TMPDIR (see test.go). When
-// TEST_TMPDIR is unset, <base> is created under TMPDIR and removed on exit.
-// Runner initialises with -no-color, -backend=false and any -test-directory.
-// It then runs `tofu test -no-color`. If a failed destroy leaves
-// errored_test.tfstate behind, runner fails the test even though `tofu test`
-// exits 0. When TEST_UNDECLARED_OUTPUTS_DIR is set, runner writes
-// tofu-test.json there and copies any errored_test.tfstate into it.
+// TEST_TMPDIR is unset, <base> is created under TMPDIR and removed on exit
+// unless it holds the only copy of errored_test.tfstate. Runner initialises
+// with -no-color, -backend=false and any -test-directory. It then runs
+// `tofu test -no-color`. If a failed destroy leaves errored_test.tfstate
+// behind, runner fails the test even though `tofu test` exits 0. When
+// TEST_UNDECLARED_OUTPUTS_DIR is set, runner writes tofu-test.json there and
+// copies any errored_test.tfstate into it.
 //
 // For validate, <base> is a new directory under TMPDIR and is always removed
 // on exit (see validate.go). Runner initialises quietly with -backend=false

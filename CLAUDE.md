@@ -601,13 +601,19 @@ Then `bazel shutdown` so the new startup flags take effect.
     (`runValidate`, `validate.go`) free of `--state-dir`, `--output-root` and
     `checkStateDurable`. Pass `-backend=false` to `tofu init` on both because
     neither uses a backend and plain `tofu init` contacts configured backends.
-  - In `runTest`, pass `-no-color` to `tofu init` and `tofu test`. Create
-    `base` with `os.MkdirTemp` under `$TEST_TMPDIR` and leave it for Bazel to
-    remove so `errored_test.tfstate` named in the failure message still exists
-    when `TEST_UNDECLARED_OUTPUTS_DIR` is unset. When `TEST_TMPDIR` is unset,
-    create `base` under `$TMPDIR` and remove it on exit. Fail if
-    `errored_test.tfstate` exists after `tofu test` because OpenTofu writes it
-    and still exits 0 when cleanup fails to destroy a resource.
+  - In `runTest`, pass `-no-color` to `tofu init` and `tofu test`. Make
+    `TEST_UNDECLARED_OUTPUTS_DIR` absolute in `runTest` and `base` absolute in
+    `prepare` because `TMPDIR`, `TEST_TMPDIR` and
+    `TEST_UNDECLARED_OUTPUTS_DIR` may be relative while `tofu` runs in the run
+    directory. Fail if `errored_test.tfstate` exists after `tofu test` because
+    OpenTofu writes it and still exits 0 when cleanup fails to destroy a
+    resource. Copy `errored_test.tfstate` to `TEST_UNDECLARED_OUTPUTS_DIR`
+    when set. Create `base` with `os.MkdirTemp` under `$TEST_TMPDIR` and leave
+    it for Bazel to remove. When `TEST_TMPDIR` is unset, create `base` under
+    `$TMPDIR` and remove it on exit unless `TEST_UNDECLARED_OUTPUTS_DIR` is
+    also unset and `errored_test.tfstate` was written. Keeping `base` in both
+    cases preserves the `errored_test.tfstate` path named in the failure
+    message (`TestRunner_Test_ErroredStateKeptWithoutOutputs`).
   - In `runValidate`, create `base` with `os.MkdirTemp` under `$TMPDIR` and
     always remove it on exit because only `linux-sandbox` gives each action a
     fresh `TMPDIR` (issue #90). Discard `tofu init` stdout while keeping

@@ -45,6 +45,12 @@ type runDir struct {
 // kept. A regular file at a work-tree path fails the run so it cannot shadow
 // configuration.
 func prepare(base string) (*runDir, error) {
+	// Make base absolute because TMPDIR or TEST_TMPDIR may be relative.
+	// Paths derived from base are passed to tofu in the run directory.
+	base, err := filepath.Abs(base)
+	if err != nil {
+		return nil, err
+	}
 	d := &runDir{root: filepath.Join(base, "work")}
 	d.cwd = filepath.Join(d.root, filepath.FromSlash(*packageDir))
 	if err := clearRunDir(d.root, d.cwd); err != nil {

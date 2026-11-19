@@ -9,26 +9,30 @@ import (
 // runTest implements --command=test for a tf_test target without --state-dir
 // or --output-root.
 //
-// It prepares a run directory in a new directory under TEST_TMPDIR, which
-// Bazel removes after the test. When TEST_TMPDIR is unset, it uses a
-// temporary directory under TMPDIR and removes it on exit. It initialises
-// with -no-color and -backend=false and runs `tofu test -no-color`. When
-// TEST_UNDECLARED_OUTPUTS_DIR is set, `tofu test` writes tofu-test.json
-// there. If a run block's destroy fails, tofu writes the remaining resources
-// to errored_test.tfstate and still exits 0. runTest copies that file to
-// TEST_UNDECLARED_OUTPUTS_DIR when set and fails the test.
+// It prepares a run directory in a new directory under TEST_TMPDIR for Bazel
+// to remove after the test. When TEST_TMPDIR is unset, it creates the
+// directory under TMPDIR and removes it on exit unless it holds the only copy
+// of errored_test.tfstate. It initialises with -no-color and -backend=false
+// and runs `tofu test -no-color`. When TEST_UNDECLARED_OUTPUTS_DIR is set,
+// `tofu test` writes tofu-test.json there. If a run block's destroy fails,
+// tofu writes the remaining resources to errored_test.tfstate and still exits
+// 0. runTest copies that file to TEST_UNDECLARED_OUTPUTS_DIR when set and
+// fails the test.
 func runTest(extraArgs []string) error {
-	// Leave the directory in TEST_TMPDIR for Bazel to clean up so
-	// errored_test.tfstate still exists if TEST_UNDECLARED_OUTPUTS_DIR is
-	// unset. Remove it ourselves when TEST_TMPDIR is unset.
+	// Bazel removes TEST_TMPDIR. When TEST_TMPDIR is unset, remove the
+	// temporary directory on exit unless the error below names
+	// errored_test.tfstate inside it.
 	tmp := os.Getenv("TEST_TMPDIR")
 	scratch, err := os.MkdirTemp(tmp, "rules_tofu-test-")
 	if err != nil {
 		return err
 	}
-	if tmp == "" {
-		defer os.RemoveAll(scratch)
-	}
+	remove := tmp == ""
+	defer func() {
+		if remove {
+			os.RemoveAll(scratch)
+		}
+	}()
 	d, err := prepare(scratch)
 	if err != nil {
 		return err
@@ -44,6 +48,11 @@ func runTest(extraArgs []string) error {
 	args := append([]string{"test", "-no-color"}, dirArgs...)
 	outputs := os.Getenv("TEST_UNDECLARED_OUTPUTS_DIR")
 	if outputs != "" {
+		// Make outputs absolute before passing -json-into to tofu
+		// in the run directory.
+		if outputs, err = filepath.Abs(outputs); err != nil {
+			return err
+		}
 		args = append(args, "-json-into="+filepath.Join(outputs, "tofu-test.json"))
 	}
 	args = append(args, varArgs...)
@@ -58,6 +67,8 @@ func runTest(extraArgs []string) error {
 			if err := os.WriteFile(kept, data, 0o644); err != nil {
 				return err
 			}
+		} else {
+			remove = false
 		}
 		return fmt.Errorf("tofu test left resources in state after a run's destroy failed; they need cleaning up by hand from the state file kept at %s", kept)
 	}

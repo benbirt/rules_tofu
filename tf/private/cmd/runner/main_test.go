@@ -1041,6 +1041,44 @@ func TestRunner_Test_ErroredStateFails(t *testing.T) {
 	}
 }
 
+// A launcher run directly has neither TEST_TMPDIR nor
+// TEST_UNDECLARED_OUTPUTS_DIR. Without errored_test.tfstate, the temporary
+// directory under TMPDIR is removed on exit. When errored_test.tfstate is
+// written, the directory is kept so the path named in the error exists.
+func TestRunner_Test_ErroredStateKeptWithoutOutputs(t *testing.T) {
+	cmd, _, _, _, _ := setupTest(t)
+	tmp := t.TempDir()
+	var env []string
+	for _, e := range cmd.Env {
+		if !strings.HasPrefix(e, "TEST_TMPDIR=") && !strings.HasPrefix(e, "TEST_UNDECLARED_OUTPUTS_DIR=") && !strings.HasPrefix(e, "TMPDIR=") {
+			env = append(env, e)
+		}
+	}
+	cmd.Env = append(env, "TMPDIR="+tmp, "FAKE_ERRORED=1")
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("runner succeeded despite errored_test.tfstate:\n%s", out)
+	}
+	_, kept, found := strings.Cut(strings.TrimSpace(string(out)), "state file kept at ")
+	if !found || !strings.HasPrefix(kept, tmp) {
+		t.Fatalf("output = %q, want the errored-state message naming a file under %s", out, tmp)
+	}
+	if _, err := os.Stat(kept); err != nil {
+		t.Errorf("the errored state the message names was removed: %v", err)
+	}
+
+	// A run that leaves no errored state removes its directory.
+	pass := exec.Command(cmd.Args[0], cmd.Args[1:]...)
+	other := t.TempDir()
+	pass.Env = append(env, "TMPDIR="+other)
+	if out, err := pass.CombinedOutput(); err != nil {
+		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
+	}
+	if left, err := os.ReadDir(other); err != nil || len(left) != 0 {
+		t.Errorf("TMPDIR holds %v after the run (err=%v), want nothing", left, err)
+	}
+}
+
 // `--command=test` needs no --state-dir; plan, apply and destroy still do.
 func TestRunner_Test_StateDirNotRequired(t *testing.T) {
 	cmd, _, _, _, _ := setupTest(t)
@@ -1592,7 +1630,10 @@ func TestRunner_Test_RelativeFlags(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	lock := filepath.Join(base, "lock.hcl")
+	// Write the lock under setupTest's unresolved directory so filepath.Rel
+	// below computes every flag against the same root. On macOS /var links
+	// to /private/var.
+	lock := filepath.Join(filepath.Dir(workTree), "lock.hcl")
 	if err := os.WriteFile(lock, []byte("# lock\n"), 0o444); err != nil {
 		t.Fatal(err)
 	}
