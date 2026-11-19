@@ -58,7 +58,7 @@ func runValidate(extraArgs []string) error {
 			if root == "" {
 				root = "the workspace root"
 			}
-			log.Printf("the root module, %s, has no configuration file, and `tofu init` installs no providers for one. If a provider is reported missing, give the root module a file whose `required_providers` names it.", root)
+			log.Printf("the root module (%s) has no configuration files, so `tofu init` installs no providers. If a provider is reported missing, declare it in `required_providers` in a file there.", root)
 		}
 		fetchedModuleAdvice()
 		return fmt.Errorf("tofu validate: %w", err)

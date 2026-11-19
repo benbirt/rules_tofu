@@ -60,7 +60,7 @@ func prepare(base string) (*runDir, error) {
 	// missing --work-tree as an empty module.
 	if _, err := os.Stat(*workTree); err == nil {
 		if err := linkTree(*workTree, d.root); err != nil {
-			return nil, fmt.Errorf("populate the run directory %s: %w", d.root, err)
+			return nil, fmt.Errorf("link the work tree into %s: %w", d.root, err)
 		}
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return nil, err
@@ -132,7 +132,7 @@ func clearRunDir(root, cwd string) error {
 		return nil
 	})
 	if err != nil {
-		return fmt.Errorf("clear the run directory %s: %w", root, err)
+		return fmt.Errorf("clear earlier links from %s: %w", root, err)
 	}
 
 	// Remove three files from the previous run before `tofu init`:
@@ -180,13 +180,13 @@ func linkTree(src, dst string) error {
 			return errDirectoryLink(p)
 		}
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return fmt.Errorf("%s is in the way of the configuration: %w", filepath.Dir(target), err)
+			return fmt.Errorf("create directory %s: %w", filepath.Dir(target), err)
 		}
 		if existing, err := os.Lstat(target); err == nil {
 			// Remove an empty directory left when an earlier run had a
 			// directory at a path that is now a file.
 			if !existing.IsDir() || os.Remove(target) != nil {
-				return fmt.Errorf("%s is in the way of the configuration's file of that name: move it away or delete it", target)
+				return fmt.Errorf("%s collides with a work-tree file of the same name; move or delete it", target)
 			}
 		}
 		return os.Symlink(p, target)

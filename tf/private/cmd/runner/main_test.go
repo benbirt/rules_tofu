@@ -1865,7 +1865,7 @@ func TestRunner_Validate_FailureAdvice(t *testing.T) {
 	const (
 		pin     = "bazel run @tf_providers//:pin"
 		modules = "modules are never fetched"
-		empty   = "`tofu init` installs no providers for one"
+		empty   = "so `tofu init` installs no providers"
 		fetched = "fetched module @tf_modules//net failed validation"
 	)
 	withCalls := `{"Modules":[{"Key":"","Source":"","Dir":"."},{"Key":"net","Source":"./net","Dir":"net"}]}`
@@ -1884,7 +1884,7 @@ func TestRunner_Validate_FailureAdvice(t *testing.T) {
 		{name: "init of a fetched module", fail: "init", flags: []string{"--fetched-module=@tf_modules//net"}, want: []string{fetched}},
 		{name: "validate", fail: "validate", flags: []string{"--lock-file=lock/.terraform.lock.hcl"}, manifest: withCalls, want: []string{"validate broke"}, notWant: []string{pin, modules, empty, fetched}},
 		{name: "validate of a fetched module", fail: "validate", flags: []string{"--fetched-module=@tf_modules//net"}, want: []string{fetched}},
-		{name: "validate of a test of an empty root", fail: "validate", flags: []string{"--test-dir=."}, emptyRoot: true, want: []string{"the root module, mypkg, has no configuration file", empty}},
+		{name: "validate of a test of an empty root", fail: "validate", flags: []string{"--test-dir=."}, emptyRoot: true, want: []string{"the root module (mypkg) has no configuration files", empty}},
 		{name: "validate of an empty root", fail: "validate", emptyRoot: true, notWant: []string{empty}},
 		{name: "validate of a test", fail: "validate", flags: []string{"--test-dir=tests"}, notWant: []string{empty}},
 	} {
