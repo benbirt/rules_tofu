@@ -184,7 +184,7 @@ jobs:
       # git-tracked Go, Starlark, .tf and .tfvars file, including e2e/smoke
       # and tests/integration.
       - name: Check formatting
-        run: bazel run //tools/format:format.check
+        run: bazel run //tools:format.check
 
       - name: Run buildifier (lint warnings)
         run: bazel run @buildifier_prebuilt//:buildifier -- -lint=warn -r .

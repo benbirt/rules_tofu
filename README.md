@@ -645,8 +645,7 @@ format_multirun(
 )
 ```
 
-This repository's [`tools/format/BUILD.bazel`](tools/format/BUILD.bazel) is a
-working example.
+This repository's [`tools/BUILD.bazel`](tools/BUILD.bazel) is a working example.
 
 ## The `tofu` binary
 

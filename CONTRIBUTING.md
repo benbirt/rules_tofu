@@ -115,19 +115,19 @@ On the pinned Bazel version, CI runs builds, tests and example plans with
 ## Formatting and lint
 
 No `bazel test` target checks formatting. CI's `lint` job runs
-`bazel run //tools/format:format.check`,
+`bazel run //tools:format.check`,
 `bazel run @buildifier_prebuilt//:buildifier -- -lint=warn -r .` and
 `bazel run //tofu -- fmt -check -diff -recursive examples e2e/smoke`, plus
 `bazel mod tidy` to check that `MODULE.bazel` is unchanged. Run locally:
 
 ```sh
-bazel run //tools/format
+bazel run //tools:format
 bazel run @buildifier_prebuilt//:buildifier -- -lint=warn -r .
 bazel run //tofu -- fmt -recursive examples e2e/smoke
 bazel mod tidy
 ```
 
-`//tools/format` uses `rules_lint` to format git-tracked Go, Starlark, `.tf`
+`//tools:format` uses `rules_lint` to format git-tracked Go, Starlark, `.tf`
 and `.tfvars` files, including `tests/integration` and nested workspaces. Set
 `rules-lint-ignored` in `.gitattributes` to exclude a file. `rules_lint` 2.9.1
 skips `.tofu`, `.tftest.hcl` and `.tofutest.hcl` files, so the `tofu fmt` step
