@@ -36,8 +36,7 @@ go_sdk.download(version = "1.26.3")
 
 # The host Go SDK, which compiles the tools that
 # tf_providers.from_lock and tf_modules.module run (see tf/private/host_tools.bzl).
-# go_default_sdk supplies gofmt to //tools/format.
-use_repo(go_sdk, "go_default_sdk", "go_host_compatible_sdk_label")
+use_repo(go_sdk, "go_host_compatible_sdk_label")
 
 host_tools = use_repo_rule("//tf/private:host_tools.bzl", "host_tools")
 
