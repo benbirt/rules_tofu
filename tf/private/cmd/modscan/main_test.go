@@ -69,6 +69,28 @@ terraform {
 	}
 }
 
+// An _override entry replaces earlier entries with the same local name. Two
+// primary entries with the same local name are both recorded in Providers.
+// Reporting the duplicate is left to tofu.
+func TestScan_ProviderOverridesAndDuplicates(t *testing.T) {
+	requires := func(name, source string) string {
+		return "terraform {\n  required_providers {\n    " + name + " = { source = \"" + source + "\" }\n  }\n}\n"
+	}
+	repo := writeTree(t, map[string]string{
+		"a.tf":          requires("null", "hashicorp/null") + requires("x", "hashicorp/aws"),
+		"b.tf":          requires("x", "hashicorp/random"),
+		"c_override.tf": requires("null", "acme/null"),
+	})
+	got, err := scan(repo, "", nil, "", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"registry.opentofu.org/acme/null", "registry.opentofu.org/hashicorp/aws", "registry.opentofu.org/hashicorp/random"}
+	if !reflect.DeepEqual(got.Providers, want) {
+		t.Errorf("got %v, want %v", got.Providers, want)
+	}
+}
+
 func TestScan_Root(t *testing.T) {
 	repo := writeTree(t, map[string]string{"main.tf": `output "x" { value = 1 }`})
 	got, err := scan(repo, "", nil, "", nil, nil)

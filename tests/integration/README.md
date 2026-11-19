@@ -92,10 +92,15 @@ packages for module-layout edge cases:
   and a `tf_deploy` with no `srcs` of its own.
 - `sub_only`: a library whose `srcs` are all in a subdirectory.
 
-Because the module manifest (`.terraform/modules/modules.json`) is an internal
-OpenTofu format, `BUILD.bazel` generates one test per version in
-`KNOWN_VERSIONS` (`toolchain/versions.bzl`). See the header of
-`module_dependency_test.sh` for the steps.
+It also applies `//app:app` with no backend block and
+`allow_ephemeral_state = True`,
+and checks `//app:durable`, whose `backend "local"` uses `_override` and
+variable paths: `apply` is refused while `state_root` is relative and succeeds
+once `state_root` points outside `bazel-out`. Because the module manifest
+(`.terraform/modules/modules.json`) and backend record
+(`.terraform/terraform.tfstate`) are internal OpenTofu formats, `BUILD.bazel`
+generates one test per version in `KNOWN_VERSIONS` (`toolchain/versions.bzl`).
+See the header of `module_dependency_test.sh` for the steps.
 
 `tf_modules/` (`tf_modules_test`, driven by `tf_modules_test.sh`) turns
 `fixtures/network` into a tagged git repository and `fixtures/dns` into an
@@ -185,11 +190,13 @@ OpenTofu or rule wording changes do not break the assertion.
 
 ## Follow-ups
 
-`_RUN_CASES` covers both forms of the runtime ephemeral-state refusal on
-`deploy.apply` (no backend, and a `backend "local"` keeping state under
-`bazel-bin`), while `run_directory_test` covers the `allow_ephemeral_state`
-opt-in and direct launcher execution.
+`_RUN_CASES` covers both runtime ephemeral-state refusals on `deploy.apply` (no
+backend, and a relative `backend "local"`). `run_directory_test` covers
+`allow_ephemeral_state = True` and direct launcher execution, and
+`module_dependency_<version>_test` covers both no-backend local state and a
+`backend "local"` outside `bazel-out` without `allow_ephemeral_state`.
 
-Still untested in Bazel-in-Bazel: a remote backend reaching `tofu`, and hard
-`fail()` paths during `tf_providers` tag resolution (duplicate root tags, or
-modules disagreeing on `sha256` or `url_template` for a winning version).
+Still untested in Bazel-in-Bazel: a remote backend or `cloud` block reaching
+`tofu`, and hard `fail()` paths during `tf_providers` tag resolution (duplicate
+root tags, or modules disagreeing on `sha256` or `url_template` for a winning
+version).

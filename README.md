@@ -550,26 +550,16 @@ Variable keys must not overlap across `vars` and `var_files` on a `tf_deploy`;
 
 ## State and backends
 
-A deploy managing real infrastructure should declare a remote `backend "..." {}`
-or `cloud {}` block in `srcs`. The runner never rewrites backend blocks; `tofu`
-resolves them from the deploy's run directory,
-`bazel-bin/<pkg>/<name>.rules_tofu-state/work/<pkg>`.
+Launchers run `tofu` in the deploy's run directory,
+`bazel-bin/<pkg>/<name>.rules_tofu-state/work/<pkg>`. `apply` and `destroy`
+refuse to run without `allow_ephemeral_state = True` in two cases:
 
-State lands inside `bazel-bin` in two cases:
+- No `backend` or `cloud` block, which writes state to
+  `bazel-bin/<pkg>/<name>.rules_tofu-state/work/<pkg>/terraform.tfstate`.
+- `backend "local"`, unless both `path` and `workspace_dir` resolve to absolute
+  paths outside `bazel-out` after following symlinks.
 
-- No `backend` or `cloud` block: state is stored at
-  `bazel-bin/<pkg>/<name>.rules_tofu-state/terraform.tfstate`.
-- `backend "local"` without literal absolute paths outside `bazel-out` for both
-  `path` and `workspace_dir`. Those attributes default to `terraform.tfstate`
-  and `terraform.tfstate.d` in the run directory. Even with paths outside
-  `bazel-out`, local backend state remains single-machine.
-
-State under `bazel-bin` is machine-local, forks across build configurations and
-is deleted by `bazel clean`, so `apply` and `destroy` refuse to run against it
-by default. `plan` is never gated. Set `allow_ephemeral_state = True` only for
-demos, throwaway sandboxes or state-bucket bootstrap. After bootstrapping a
-state bucket, add the remote `backend` block, run `tofu init -migrate-state`,
-and remove `allow_ephemeral_state`.
+`plan` is never gated.
 
 ## Tests
 
@@ -770,10 +760,8 @@ consistent across runs until `bazel clean`. If a leftover regular file in the
 state tree collides with a configuration path, the runner fails rather than
 overwriting it. Each run installs `<name>.modules.json` at
 `.terraform/modules/modules.json`, pins `TF_DATA_DIR` to `.terraform`, and
-unsets `TF_PLUGIN_CACHE_DIR`. It then runs
-`tofu init -input=false -get=false -reconfigure -plugin-dir=...` to re-read the
-backend block without migrating state, followed by the command with `-var-file`
-flags.
+unsets `TF_PLUGIN_CACHE_DIR`. It then runs `tofu init` followed by the `tofu`
+command.
 
 `tf_test` validates `module` and `srcs` during `bazel build`. During
 `bazel test`, it copies the work tree into `$TEST_TMPDIR`, installs

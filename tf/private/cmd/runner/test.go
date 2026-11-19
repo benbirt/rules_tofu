@@ -1,26 +1,26 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
-
-	"github.com/benbirt/rules_tofu/tf/private/cmd/internal/tfconfig"
+	"strings"
 )
 
 // runTest implements --command=test: `tofu test` for a tf_test target, run as
-// a Bazel test, so --state-dir and --output-root play no part.
+// a Bazel test without --state-dir or --output-root.
 //
-// The work tree is copied into TEST_TMPDIR, or a temporary directory when
-// unset, because the runfiles tree is Bazel's and tofu writes .terraform/ and
-// the lock beside the configuration. The provider plugin tree is read in
-// place when present. Init runs with -backend=false: `tofu test` keeps state
-// in memory and ignores backend and cloud blocks, so no backend is contacted.
-// When a run's destroy fails, tofu writes the resources it could not remove to
-// errored_test.tfstate and still exits 0; runTest fails the test on that file
-// and copies it to TEST_UNDECLARED_OUTPUTS_DIR when set.
+// It stages the work tree in TEST_TMPDIR, or in a temporary directory removed
+// on exit when TEST_TMPDIR is unset (see stage). It then initialises and runs
+// `tofu test` with -no-color, writing tofu-test.json to
+// TEST_UNDECLARED_OUTPUTS_DIR when set. If a run block's destroy fails, tofu
+// writes the resources it could not remove to errored_test.tfstate and still
+// exits 0; runTest copies that file to TEST_UNDECLARED_OUTPUTS_DIR when set and
+// fails the test.
 func runTest(extraArgs []string) error {
 	scratch := os.Getenv("TEST_TMPDIR")
 	if scratch == "" {
@@ -31,58 +31,14 @@ func runTest(extraArgs []string) error {
 		defer os.RemoveAll(dir)
 		scratch = dir
 	}
-	copyRoot := filepath.Join(scratch, "rules_tofu.work")
-	if err := os.RemoveAll(copyRoot); err != nil {
+	s, err := stage(scratch)
+	if err != nil {
 		return err
 	}
-	if err := copyTree(*workTree, copyRoot); err != nil {
-		return fmt.Errorf("copy work tree: %w", err)
-	}
-	// The root module's directory, which the work tree lacks when no file
-	// is at or below it: an empty module, as in the run directory of a
-	// deploy (see rundir.go).
-	cwd := filepath.Join(copyRoot, filepath.FromSlash(*packageDir))
-	if err := os.MkdirAll(cwd, 0o755); err != nil {
-		return fmt.Errorf("work-tree cwd %s: %w", cwd, err)
-	}
-
-	// With no providers in scope the plugin tree has no files, so the
-	// runfiles tree lacks the directory: give tofu an empty one, and never
-	// write into the runfiles tree.
-	plugins := *pluginDir
-	if _, err := os.Stat(plugins); err != nil {
-		plugins = filepath.Join(scratch, "rules_tofu.plugins")
-		if err := os.MkdirAll(plugins, 0o755); err != nil {
-			return fmt.Errorf("create plugin dir %s: %w", plugins, err)
-		}
-	}
-	// Not for a root module without configuration, as in the validate
-	// action: `tofu init` does nothing there, so it installs no provider and
-	// leaves the lock as it is, which tofu then holds against the empty
-	// plugin cache.
-	if *lockFile != "" && tfconfig.HasConfig(cwd) {
-		if err := installLockFile(*lockFile, cwd); err != nil {
-			return err
-		}
-	}
-	if err := installModulesManifest(*modulesManifest, cwd); err != nil {
+	if err := s.init(os.Stdout, "-no-color"); err != nil {
 		return err
 	}
-
-	env := tofuEnv(cwd)
-	// The test files' directory, which tofu reads alongside the root module's
-	// own. Absent, tofu reads its default, `tests`.
-	var dirArgs []string
-	if *testDir != "" {
-		dirArgs = []string{"-test-directory=" + *testDir}
-	}
-	initArgs := append([]string{"init", "-no-color", "-backend=false", "-input=false", "-get=false", "-plugin-dir=" + plugins}, dirArgs...)
-	if err := runTofu(env, cwd, initArgs...); err != nil {
-		if *lockFile != "" {
-			log.Print("if the provider versions in required_providers changed, run `bazel run @tf_providers//:pin` to update the lock file.")
-		}
-		return fmt.Errorf("tofu init: %w", err)
-	}
+	copyRoot, cwd, env, dirArgs := s.root, s.cwd, s.env, s.dirArgs
 
 	// Test logs are files, so no colour.
 	args := append([]string{"test", "-no-color"}, dirArgs...)
@@ -113,6 +69,100 @@ func runTest(extraArgs []string) error {
 	}
 	if testErr != nil {
 		return fmt.Errorf("tofu test: %w", testErr)
+	}
+	return nil
+}
+
+// staged holds a writable scratch copy of the work tree prepared for offline
+// `tofu init`.
+type staged struct {
+	// root is the copied work tree root; cwd is the root module's directory
+	// within it.
+	root, cwd string
+	// plugins is the provider plugin directory passed as -plugin-dir.
+	plugins string
+	// hasConfig reports whether cwd contains any configuration files.
+	hasConfig bool
+	// env is the environment passed to tofu (see tofuEnv).
+	env []string
+	// dirArgs holds -test-directory=<dir> when --test-dir names a
+	// subdirectory of cwd, and is empty otherwise.
+	dirArgs []string
+}
+
+// stage copies --work-tree into scratch/rules_tofu.work and prepares the root
+// module's directory for --command=test and --command=validate. Bazel owns
+// --work-tree in the exec root or runfiles, while `tofu init` writes
+// .terraform/ and the lock beside the configuration. The provider plugin tree
+// is read in place when present.
+func stage(scratch string) (*staged, error) {
+	s := &staged{root: filepath.Join(scratch, "rules_tofu.work")}
+	if err := os.RemoveAll(s.root); err != nil {
+		return nil, err
+	}
+	// A rule with no files at all declares nothing under <name>.work, so
+	// --work-tree does not exist; treat it as an empty module.
+	if _, err := os.Stat(*workTree); err == nil {
+		if err := copyTree(*workTree, s.root); err != nil {
+			return nil, fmt.Errorf("copy work tree: %w", err)
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return nil, err
+	}
+	// Create the root module's directory, which --work-tree lacks when no
+	// file sits at or below --package-dir (issue #119).
+	s.cwd = filepath.Join(s.root, filepath.FromSlash(*packageDir))
+	if err := os.MkdirAll(s.cwd, 0o755); err != nil {
+		return nil, fmt.Errorf("work-tree cwd %s: %w", s.cwd, err)
+	}
+
+	// With no providers in scope, Bazel declares nothing under --plugin-dir
+	// and creates no directory for it. Give tofu an empty directory in
+	// scratch rather than writing into Bazel's tree.
+	s.plugins = *pluginDir
+	if _, err := os.Stat(s.plugins); err != nil {
+		s.plugins = filepath.Join(scratch, "rules_tofu.plugins")
+		if err := os.MkdirAll(s.plugins, 0o755); err != nil {
+			return nil, fmt.Errorf("create plugin dir %s: %w", s.plugins, err)
+		}
+	}
+	// Skip the lock when the root module has no configuration: `tofu init`
+	// installs no providers there and leaves the lock unpruned, causing
+	// `tofu validate` and `tofu test` to fail against the empty
+	// .terraform/providers directory.
+	s.hasConfig = hasConfig(s.cwd)
+	if *lockFile != "" && s.hasConfig {
+		if err := installLockFile(*lockFile, s.cwd); err != nil {
+			return nil, err
+		}
+	}
+	if err := installModulesManifest(*modulesManifest, s.cwd); err != nil {
+		return nil, err
+	}
+	s.env = tofuEnv(s.cwd)
+	// Pass -test-directory only when test files live in a subdirectory of
+	// the root module. "." means the root module's own directory, which
+	// tofu already reads; "" means no test files on validate, or OpenTofu's
+	// default "tests" on test.
+	if *testDir != "" && *testDir != "." {
+		s.dirArgs = []string{"-test-directory=" + *testDir}
+	}
+	return s, nil
+}
+
+// init runs `tofu init` offline in s.cwd with -backend=false, writing its
+// standard output to stdout and adding flags to the command line. Validation
+// needs no state and `tofu test` keeps state in memory, ignoring backend and
+// cloud blocks, whereas plain `tofu init` would contact any configured backend.
+func (s *staged) init(stdout io.Writer, flags ...string) error {
+	args := append([]string{"init"}, flags...)
+	args = append(args, "-backend=false", "-input=false", "-get=false", "-plugin-dir="+s.plugins)
+	args = append(args, s.dirArgs...)
+	if err := runTofuTo(stdout, s.env, s.cwd, args...); err != nil {
+		if *lockFile != "" {
+			log.Print("if the provider versions in required_providers changed, run `bazel run @tf_providers//:pin` to update the lock file.")
+		}
+		return fmt.Errorf("tofu init: %w", err)
 	}
 	return nil
 }
@@ -176,4 +226,25 @@ func copyFile(src, dst string) error {
 		mode = 0o755
 	}
 	return os.WriteFile(dst, data, mode)
+}
+
+// hasConfig reports whether dir contains a non-dot .tf, .tf.json, .tofu or
+// .tofu.json entry. It duplicates tfconfig.HasConfig so the runner binary does
+// not link the HCL parser; keep the two aligned.
+func hasConfig(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		for _, ext := range []string{".tf", ".tf.json", ".tofu", ".tofu.json"} {
+			if strings.HasSuffix(e.Name(), ext) {
+				return true
+			}
+		}
+	}
+	return false
 }

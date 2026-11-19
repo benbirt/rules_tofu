@@ -132,7 +132,6 @@ def _tf_test_impl(ctx):
         ctx,
         work_tree_outputs,
         infos,
-        providers_depset,
         _strict_deps(direct_providers, infos),
         ctx.files.srcs,
         ctx.files.data,

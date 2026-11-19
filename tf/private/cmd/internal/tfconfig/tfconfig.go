@@ -10,6 +10,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -107,17 +108,6 @@ func ignored(name string) bool {
 	return strings.HasPrefix(name, ".")
 }
 
-// configFiles lists the configuration files tofu reads in dir: primary
-// files, then `_override` files, which tofu merges over them.
-func configFiles(dir string) (primary, overrides []string, err error) {
-	files, err := ConfigFiles(dir)
-	if err != nil {
-		return nil, nil, err
-	}
-	primary, overrides = splitOverrides(files)
-	return primary, overrides, nil
-}
-
 // splitOverrides separates the `_override` files of files, which tofu
 // merges over the rest, from the primary ones. Each group keeps its order.
 func splitOverrides(files []string) (primary, overrides []string) {
@@ -160,11 +150,11 @@ func parse(parser *hclparse.Parser, file string) (*hcl.File, error) {
 // merges it. Duplicate primary calls and missing or non-literal source
 // attributes return an error.
 func ReadCalls(dir string) ([]Call, error) {
-	primary, overrides, err := configFiles(dir)
+	files, err := ConfigFiles(dir)
 	if err != nil {
 		return nil, err
 	}
-	return readCalls(primary, overrides)
+	return readCalls(splitOverrides(files))
 }
 
 func readCalls(primary, overrides []string) ([]Call, error) {
@@ -243,30 +233,6 @@ type Requirement struct {
 	Version string `json:"version,omitempty"`
 }
 
-// RequiredProviders returns the normalised source of every
-// required_providers entry in dir's configuration files, sorted. Two primary
-// entries of one local name return an error.
-func RequiredProviders(dir string) ([]string, error) {
-	primary, overrides, err := configFiles(dir)
-	if err != nil {
-		return nil, err
-	}
-	reqs, err := ReadRequiredProviders(append(primary, overrides...))
-	if err != nil {
-		return nil, err
-	}
-	seen := map[string]bool{}
-	for _, r := range reqs {
-		seen[r.Source] = true
-	}
-	sources := make([]string, 0, len(seen))
-	for s := range seen {
-		sources = append(sources, s)
-	}
-	sort.Strings(sources)
-	return sources, nil
-}
-
 // Declared is one required_providers entry as a file declares it.
 type Declared struct {
 	// Name is the entry's local name.
@@ -283,8 +249,8 @@ type Declared struct {
 // file name order, then the _override files', each file's in the order
 // written. Nothing is merged and nothing rejected: files in one directory may
 // belong to several root modules, such as two tf_deploy targets in a package,
-// so two entries of one name needn't be a mistake. ReadRequiredProviders reads
-// a single module's.
+// so two entries of one name needn't be a mistake. Within one module, tofu
+// reports duplicate primary entries.
 //
 // An entry is `{ source = ..., version = ... }` or the legacy bare version
 // string. Other keys, like configuration_aliases, are references that can't
@@ -344,26 +310,17 @@ func ReadRequirements(files []string) ([]Declared, error) {
 	return declared, nil
 }
 
-// ReadRequiredProviders returns the required_providers entries of one
-// module, whose configuration files are files, keyed by local name (see
-// ReadRequirements for how files are read). An entry in an `_override` file
-// replaces the entry of that name, as tofu merges it; two primary entries of
-// one name are an error, as in tofu.
-func ReadRequiredProviders(files []string) (map[string]Requirement, error) {
-	declared, err := ReadRequirements(files)
-	if err != nil {
-		return nil, err
-	}
-	reqs := map[string]Requirement{}
-	where := map[string]string{}
+// ApplyOverrides drops each entry in declared that a later _override entry of
+// the same local name replaces. declared must be in ReadRequirements order.
+func ApplyOverrides(declared []Declared) []Declared {
+	var effective []Declared
 	for _, d := range declared {
-		if prior, ok := where[d.Name]; ok && !d.Override {
-			return nil, fmt.Errorf("%s: provider %q is already required in %s", d.Range, d.Name, prior)
+		if d.Override {
+			effective = slices.DeleteFunc(effective, func(e Declared) bool { return e.Name == d.Name })
 		}
-		where[d.Name] = d.Range
-		reqs[d.Name] = d.Requirement
+		effective = append(effective, d)
 	}
-	return reqs, nil
+	return effective
 }
 
 func readRequirement(name string, expr hcl.Expression) (Requirement, error) {

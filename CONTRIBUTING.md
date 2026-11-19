@@ -27,7 +27,7 @@ bazel test //...
 | `tf/providers/` | `tf_providers` module extension |
 | `tf/modules/` | `tf_modules` module extension |
 | `tf/private/` | Rule implementations and work-tree materialisation |
-| `tf/private/cmd/{runner,dupcheck,pin,lockjson,modscan,modules}/` | Go binaries: runtime `tofu` wrapper, duplicate-variable check, `@tf_providers//:pin`, lock reader, module scanner and module manifest writer |
+| `tf/private/cmd/{runner,dupcheck,pin,lockjson,modscan,modules}/` | Go binaries: build-time validation and runtime `tofu` wrapper, duplicate-variable check, `@tf_providers//:pin`, lock reader, module scanner and module manifest writer |
 | `tf/private/cmd/internal/{flags,tfconfig}/` | Shared Go packages: repeatable CLI flags and HCL / module-source parsing |
 | `toolchain/` | OpenTofu binary download and toolchain registration |
 | `tofu/` | `@rules_tofu//tofu`, the toolchain's runnable `tofu` (rule in `tf/private/tofu_binary.bzl`) |
@@ -44,11 +44,11 @@ bazel test //...
 1. One lock file, owned by the root module. `rules_tofu` reads only the root
    module's `tf_providers.from_lock` `.terraform.lock.hcl`, written by
    `bazel run @tf_providers//:pin`. Do not accept `.terraform.lock.hcl` in
-   `srcs` or `data`, and do not relax the check in `tf/private/init_action.bzl`
-   that fails when one reaches a work tree. Every provider download must be
-   gated on a SHA-256 digest: the `sha256` on its `tf_providers.provider` tag,
-   the registry digest recorded as a fact in `MODULE.bazel.lock`, or one of the
-   lock file's `zh:` hashes.
+   `srcs` or `data`, and do not relax the analysis-time check in `materialize`
+   (`tf/private/work_tree.bzl`) that rejects it in any work-tree directory.
+   Every provider download must be gated on a SHA-256 digest: the `sha256` on
+   its `tf_providers.provider` tag, the registry digest recorded as a fact in
+   `MODULE.bazel.lock`, or one of the lock file's `zh:` hashes.
 2. Building validates. `bazel build` on any `tf_library`, `tf_deploy` or
    `tf_test` target runs `tofu init -backend=false` and `tofu validate` (with
    the test directory for `tf_test`). Do not bypass or defer this. Every

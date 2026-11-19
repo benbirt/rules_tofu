@@ -61,7 +61,8 @@ _CASES = [
     ("duplicate_vars_hcl", "broken_workspace", "//cases/duplicate_vars:dup_hcl", "declared in both"),
     ("validate_fails", "broken_workspace", "//cases/validate_fails:bad", "Reference to undeclared input variable"),
     ("missing_provider", "broken_workspace", "//cases/missing_provider:missing", "Add \"@tf_providers//hashicorp/random\" to the providers of"),
-    ("lock_file_smuggled", "broken_workspace", "//cases/lock_file_smuggled:smuggled", "refusing to validate"),
+    ("implied_provider", "broken_workspace", "//cases/missing_provider:implied", "Failed to query available provider packages"),
+    ("lock_file_smuggled", "broken_workspace", "//cases/lock_file_smuggled:smuggled", "is an OpenTofu provider lock file, which `srcs` and `data` cannot include"),
     ("auto_tfvars_conflict", "broken_workspace", "//cases/auto_tfvars_conflict:deploy", "collides with the generated"),
     ("tfvars_in_library_data", "broken_workspace", "//cases/auto_tfvars_in_data:library_tfvars", "cases/auto_tfvars_in_data/terraform.tfvars` in `data` is a variables file that OpenTofu loads by itself"),
     ("auto_tfvars_in_library_data", "broken_workspace", "//cases/auto_tfvars_in_data:library_auto_tfvars", "cases/auto_tfvars_in_data/extra.auto.tfvars` in `data` is a variables file that OpenTofu loads by itself"),
@@ -76,7 +77,7 @@ _CASES = [
     ("strict_deps_module", "broken_workspace", "//cases/strict_deps:module", "add \"//cases/strict_deps/net:net\" to the deps of //cases/strict_deps:module"),
     ("strict_deps_local", "broken_workspace", "//cases/strict_deps:local", "add the tf_library whose files are in \"cases/strict_deps/net\" to the deps of //cases/strict_deps:local"),
     ("module_source_duplicate", "broken_workspace", "//cases/module_source_duplicate:lib", "both have module_source"),
-    ("module_version_mismatch", "broken_workspace", "//cases/module_version_mismatch:lib", "is no longer acceptable"),
+    ("module_version_mismatch", "broken_workspace", "//cases/module_version_mismatch:lib", "modules are never fetched"),
     ("module_local_external", "broken_workspace", "//cases/module_local_external:lib", "is in another Bazel repository"),
     ("config_in_data", "broken_workspace", "//cases/config_in_data:lib", "in `data` is a configuration file. List it in `srcs`, or"),
     ("config_in_test_data", "broken_workspace", "//cases/config_in_data:test", "fixture/main.tofu.json` in `data` is a configuration file. List it in the `srcs` of a `tf_library` in `deps`"),
@@ -120,7 +121,7 @@ _RUN_CASES = [
     # (case_name, workspace_path, target inside that workspace, stderr fragment)
     ("ephemeral_state_refused", "broken_workspace", "//cases/ephemeral_state_refused:deploy.apply", "allow_ephemeral_state"),
     # A `backend "local"` with a relative path keeps state under bazel-bin too.
-    ("local_backend_refused", "broken_workspace", "//cases/local_backend_refused:deploy.apply", "does not provably keep state outside"),
+    ("local_backend_refused", "broken_workspace", "//cases/local_backend_refused:deploy.apply", "does not keep state outside"),
     # Launcher runfiles include the deploy's stamps, so bazel run fails in the
     # build before reaching the runner when the deploy, a library in deps or
     # the var_files check fails (issue #143).
@@ -216,12 +217,13 @@ bazel_integration_test(
     workspace_path = "lock_update",
 )
 
-# Cross-module module_source dependencies: a root module calls a tf_library
-# from another Bazel module by its module_source, which calls one from a third,
-# then builds, plans, and runs tf_test offline. Runs on every tofu version
-# rules_tofu pins because the module manifest is tofu's internal format and
-# tf_test passes flags that older OpenTofu releases lack. See
-# module_dependency_test.sh.
+# Cross-module module_source dependencies: //app calls a tf_library in another
+# Bazel module by module_source, which calls one in a third. The driver builds,
+# plans and runs tf_test offline, then exercises apply with no backend block
+# and with a backend "local". Runs for every version in KNOWN_VERSIONS because
+# the module manifest and the .terraform/terraform.tfstate backend record are
+# internal OpenTofu formats, and tf_test uses flags added in OpenTofu 1.12.
+# See module_dependency_test.sh.
 sh_binary(
     name = "module_dependency_driver",
     srcs = ["module_dependency_test.sh"],
