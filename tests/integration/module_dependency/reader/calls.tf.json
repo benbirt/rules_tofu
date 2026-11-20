@@ -1,0 +1,7 @@
+{
+  "module": {
+    "from_json": {
+      "source": "./child"
+    }
+  }
+}

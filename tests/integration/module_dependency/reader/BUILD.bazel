@@ -1,0 +1,31 @@
+load("@rules_tofu//tf:defs.bzl", "tf_library")
+
+# Checks module-call reporting via `tofu show -json -module` (issue #153).
+# Every effective call in :reader loads ./child, while ./absent does not exist,
+# so :reader builds only when OpenTofu evaluates the variable default and local
+# value, merges main_override.tf, shadows shadow.tf with shadow.tofu, and reads
+# calls.tf.json. Building it also runs `tofu init -get=false` against the
+# resulting manifest.
+tf_library(
+    name = "reader",
+    srcs = [
+        "calls.tf.json",
+        "child/main.tf",
+        "main.tf",
+        "main_override.tf",
+        "shadow.tf",
+        "shadow.tofu",
+    ],
+)
+
+# Checks provider reporting via `tofu show -json -module` (issue #153):
+# canonical addresses, a resource-implied provider, aliased provider blocks
+# reported once, and built-in terraform skipped. Step 9 of
+# module_dependency_test.sh builds :providers and checks the strict-deps error.
+# Keep `manual` (so `bazel build //...` in step 1 skips it) and omit
+# `providers`.
+tf_library(
+    name = "providers",
+    srcs = ["providers/main.tf"],
+    tags = ["manual"],
+)

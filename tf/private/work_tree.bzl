@@ -12,6 +12,7 @@ provider packages into the work tree and run directory.
 sibling plugin tree and `modules_manifest` writes `<name>.modules.json`.
 """
 
+load("//toolchain:toolchain.bzl", "TOOLCHAIN_TYPE")
 load(":providers.bzl", "TfLibraryInfo")
 
 # Only structural OpenTofu inputs are allowed in a rule's srcs. Variable values
@@ -408,7 +409,9 @@ def modules_manifest(ctx, work_tree_outputs, infos, strict, srcs, data, root = N
     directory that holds no files from `srcs`, `data` or `strict`.
 
     Args:
-      ctx: rule ctx. Must declare `_modules_bin` (cfg = "exec") on the rule.
+      ctx: rule ctx. Must list `TOOLCHAIN_TYPE` in `toolchains` (the action
+          runs the toolchain's `tofu`) and declare `_modules_bin`
+          (cfg = "exec", `MODULES_BIN`) on the rule.
       work_tree_outputs: list[File], the work tree's files (`materialize`).
       infos: the rule's deps, each a `TfLibraryInfo` or a struct with its
           `module`, `modules`, `dirs` and `modules_manifest` fields. The
@@ -458,8 +461,10 @@ def modules_manifest(ctx, work_tree_outputs, infos, strict, srcs, data, root = N
         )),
     )
 
+    tofu = ctx.toolchains[TOOLCHAIN_TYPE].tofu
     manifest = ctx.actions.declare_file(ctx.label.name + ".modules.json")
     args = ctx.actions.args()
+    args.add("--tofu", tofu.binary)
     args.add("--work-tree", work_tree_root(ctx))
     args.add("--root", root if root != None else package_dir(ctx.label))
     args.add("--modules", listing)
@@ -470,7 +475,7 @@ def modules_manifest(ctx, work_tree_outputs, infos, strict, srcs, data, root = N
     args.add("--out", manifest)
     ctx.actions.run(
         executable = ctx.attr._modules_bin[DefaultInfo].files_to_run,
-        inputs = [listing] + work_tree_outputs + [info.modules_manifest for info in infos],
+        inputs = [listing, tofu.binary] + work_tree_outputs + [info.modules_manifest for info in infos],
         outputs = [manifest],
         arguments = [args],
         mnemonic = "TofuModules",

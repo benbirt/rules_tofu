@@ -9,9 +9,9 @@ tf_library(
 )
 
 # implied.tf has only resource "random_pet" "name" {}, with no
-# required_providers entry. TofuValidate fails in `tofu init` with OpenTofu's
-# "Failed to query available provider packages" error (issue #144). Do not add
-# providers here.
+# required_providers entry. OpenTofu reports the provider the resource implies,
+# so the strict-deps check fails as it does for :missing (issue #153). Do not
+# add providers here.
 tf_library(
     name = "implied",
     srcs = ["implied.tf"],

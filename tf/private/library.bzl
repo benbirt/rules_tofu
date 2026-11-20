@@ -164,9 +164,10 @@ def tf_library(name, srcs = None, deps = None, data = None, providers = None, mo
     `../../infra/dns`.
 
     Module calls are resolved offline at build time:
-      - Every `module` block's `source` must be a literal string. `override`
-        and `*_override` files replace `source` on matching `module` blocks,
-        as OpenTofu merges them.
+      - A `module` block's `source` may use local values and variables with
+        defaults (evaluated using defaults alone, or literal strings in modules
+        fetched by `tf_modules.module`). `override` and `*_override` files
+        replace `source` on matching `module` blocks in the same target.
       - Relative paths starting with `./` or `../` resolve within the caller's
         own Bazel repository in the work tree and cannot cross into another
         Bazel repository.
@@ -191,8 +192,10 @@ def tf_library(name, srcs = None, deps = None, data = None, providers = None, mo
     `rules_tofu` writes `<name>.modules.json` at build time, copies it to
     `.terraform/modules/modules.json`, and runs `tofu init -get=false`.
     `bazel build` fails on:
-      - A `module` block whose `source` is not a literal string or uses an
-        unsupported source type.
+      - Configuration that OpenTofu cannot load (including a `module` `source`
+        referencing a variable without a default, or an override file without
+        the block it overrides in the same target), or a `module` `source` of an
+        unsupported type.
       - A local `./` or `../` call to a directory outside the work tree, in
         another Bazel repository, or absent from `deps`.
       - A non-local `module` call that no `tf_library` in `deps` matches.
@@ -207,8 +210,9 @@ def tf_library(name, srcs = None, deps = None, data = None, providers = None, mo
         may target directories in the work tree that hold no configuration
         files.
       - A module call cycle.
-      - A non-built-in `required_providers` entry in `srcs` missing from this
-        target's `providers`, even when `deps` supply it. An entry outside
+      - A non-built-in provider required by `srcs` (in `required_providers` or
+        implied by a resource, data source or `provider` block) missing from
+        this target's `providers`, even when `deps` supply it. An entry outside
         `registry.opentofu.org` always fails because `rules_tofu` cannot vendor
         it. Built-in providers such as `terraform.io/builtin/terraform` are
         exempt.

@@ -17,6 +17,8 @@ filegroup(
         "//tf/private/cmd/dupcheck:all_files",
         "//tf/private/cmd/internal/flags:all_files",
         "//tf/private/cmd/internal/tfconfig:all_files",
+        "//tf/private/cmd/internal/tofushow:all_files",
+        "//tf/private/cmd/internal/tofushow/tofutest:all_files",
         "//tf/private/cmd/lockjson:all_files",
         "//tf/private/cmd/modscan:all_files",
         "//tf/private/cmd/modules:all_files",

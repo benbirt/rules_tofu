@@ -86,7 +86,7 @@ See the header of `lock_update_test.sh` for the steps.
 `network_module` by `module_source`, which calls one in `dns_module`. It
 exercises standalone library builds, offline planning, `tf_test`,
 `bazel run @rules_tofu//tofu` from `app/` and the README's
-`tofu fmt -recursive` commands at the workspace root. It also holds four
+`tofu fmt -recursive` commands at the workspace root. It also holds five
 packages for module and test edge cases:
 
 - `empty`: libraries and a `tf_test` whose root module is empty (issue #119).
@@ -95,6 +95,11 @@ packages for module and test edge cases:
 - `provisioner`: a library whose `local-exec` provisioner runs a script from
   `data` and a `tf_test` run via `bazel test` and directly by relative path
   (issue #148).
+- `reader`: exercises `tofu show -json -module` (issue #153) with module calls
+  using a variable default, a local value, `_override`, `.tofu` shadowing and
+  `.tf.json`, plus a `manual` `:providers` target covering canonical addresses,
+  an implied provider, aliased `provider` blocks and a skipped built-in
+  provider.
 - `sub_only`: a library whose `srcs` are all in a subdirectory.
 
 It also applies `//app:app` with no backend block and
@@ -103,9 +108,10 @@ and checks `//app:durable`, whose `backend "local"` uses `_override` and
 variable paths: `apply` is refused while `state_root` is relative and succeeds
 once `state_root` points outside `bazel-out`. Because the module manifest
 (`.terraform/modules/modules.json`) and backend record
-(`.terraform/terraform.tfstate`) are internal OpenTofu formats, `BUILD.bazel`
-generates one test per version in `KNOWN_VERSIONS` (`toolchain/versions.bzl`).
-See the header of `module_dependency_test.sh` for the steps.
+(`.terraform/terraform.tfstate`) are internal OpenTofu formats and
+`tofu show -json -module` carries no `format_version`, `BUILD.bazel` generates
+one test per version in `KNOWN_VERSIONS` (`toolchain/versions.bzl`). See the
+header of `module_dependency_test.sh` for the steps.
 
 `tf_modules/` (`tf_modules_test`, driven by `tf_modules_test.sh`) turns
 `fixtures/network` into a tagged git repository and `fixtures/dns` into an

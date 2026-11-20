@@ -1,0 +1,16 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "tofutest",
+    testonly = True,
+    srcs = ["tofutest.go"],
+    importpath = "github.com/benbirt/rules_tofu/tf/private/cmd/internal/tofushow/tofutest",
+    visibility = ["//tf/private/cmd:__subpackages__"],
+    deps = ["//tf/private/cmd/internal/tofushow"],
+)
+
+filegroup(
+    name = "all_files",
+    srcs = glob(["*"]),
+    visibility = ["//:__subpackages__"],
+)

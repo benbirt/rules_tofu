@@ -157,8 +157,9 @@ arguments after `--`, or passed directly to the `.sh` script, are forwarded to
 Each target lists the providers and modules that its own `srcs` use.
 `bazel build` fails unless:
 
-- `providers` includes every provider in `required_providers`, except built-in
-  ones.
+- `providers` includes every non-built-in provider declared in
+  `required_providers` or implied by a resource, data source or `provider`
+  block.
 - `deps` includes the `tf_library` for every non-local `module` call. A call to
   the target's own `module_source` with `//<subdir>` needs no entry.
 - Every relative `module` call names a directory containing files from this
@@ -171,19 +172,24 @@ installed for the dependency's own files. The error names what to add:
 # app/BUILD.bazel
 tf_library(
     name = "app",
-    srcs = ["main.tf"],  # calls terraform-aws-modules/vpc/aws on line 5
+    srcs = ["main.tf"],  # calls terraform-aws-modules/vpc/aws
     deps = ["//net"],    # depends on @tf_modules//terraform-aws-modules/vpc/aws
 )
 ```
 
 ```
-rules_tofu: //app:app: module "vpc" (app/main.tf:5): source "terraform-aws-modules/vpc/aws" resolves to "@tf_modules//terraform-aws-modules/vpc/aws", which is not in the deps of //app:app; add "@tf_modules//terraform-aws-modules/vpc/aws" to the deps of //app:app
+rules_tofu: //app:app: module "vpc" in "app": source "terraform-aws-modules/vpc/aws" resolves to "@tf_modules//terraform-aws-modules/vpc/aws", which is not in the deps of //app:app; add "@tf_modules//terraform-aws-modules/vpc/aws" to the deps of //app:app
 ```
 
 Checks follow files, not Bazel packages:
 
 - A `tf_deploy` with a same-package `tf_library` in `deps` lists only what its
   own `srcs` use, as in [`examples/aws`](examples/aws).
+- Each target's `srcs` in a directory are checked without other targets' files.
+  An `override` or `*_override` file must be in the same target as the block it
+  overrides. If a `.tofu` or `.tofu.json` file is in a different target from the
+  `.tf` or `.tf.json` file it shadows, the shadowed file's target must list what
+  that file requires.
 - A relative call needs the `tf_library` whose files are in the called
   directory. Another library in the same package does not count.
 - A `tf_test` lists the libraries that the `run` blocks in its `srcs` load,
@@ -508,12 +514,21 @@ callers' `version` constraints accept. When `module_source` is set,
 `module_version` defaults to the version of the Bazel module that holds the
 library; setting `module_version` without `module_source` is an error.
 
-Every `module` block's `source` must be a literal string. Non-local calls match
-a `tf_library` in `deps` by `module_source`, either exact or leaving the
-shortest `//<subdir>` suffix. A direct `module_source` dependency in another
-package fails `bazel build` unless a call in this target's files reaches it.
-See [Strict dependencies](#strict-dependencies). Full call-matching rules are in
-the [API docs](https://registry.bazel.build/modules/rules_tofu/latest/docs).
+A `module` block's `source` may refer to local values and to variables that
+declare a `default`. Variables in `source` take their defaults when the module
+manifest is built; arguments passed by a calling module, `vars`, `var_files` and
+`TF_VAR_*` do not apply. A variable without a `default` fails `bazel build`. If
+`tofu init` later evaluates a different address, such as from `vars` or
+`var_files`, it fails with OpenTofu's `"Module source has changed"` error.
+Inside `run` blocks of `tf_test` files and inside modules fetched by
+`tf_modules.module`, `source` must be a literal string.
+
+Non-local calls match a `tf_library` in `deps` by `module_source`, either exact
+or leaving the shortest `//<subdir>` suffix. A direct `module_source` dependency
+in another package fails `bazel build` unless a call in this target's files
+reaches it. See [Strict dependencies](#strict-dependencies). Full call-matching
+rules are in the
+[API docs](https://registry.bazel.build/modules/rules_tofu/latest/docs).
 
 ## Variables and data files
 

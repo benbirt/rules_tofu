@@ -3,9 +3,11 @@
 // calls. With the manifest in place, `tofu init -get=false` fetches and
 // installs nothing and still checks each call's source and version against it.
 //
-// It runs as a Bazel build action for tf_library, tf_deploy and tf_test.
+// It runs as the TofuModules build action for tf_library, tf_deploy and
+// tf_test.
 //
 // Flags:
+//   - --tofu=<path>: path to the `tofu` binary, required.
 //   - --work-tree=<path>: work tree root, required.
 //   - --root=<dir>: root module directory relative to --work-tree, or "" for
 //     the workspace root package.
@@ -28,9 +30,20 @@
 //
 // Starting at --root, modules walks every `module` block and any test `run`
 // modules and writes {"Modules":[...]} sorted by Key to --out. Local calls are
-// recorded too, since `tofu init -get=false` installs none.
+// recorded too, since `tofu init -get=false` installs none. Each walked
+// directory is read once via tofushow.Reader.ReadFiles (`tofu show -json
+// -module`, without `tofu init` or network access), passing every configuration
+// file in that work-tree directory so it matches what `tofu init` loads.
+// OpenTofu merges override files, lets .tofu and .tofu.json shadow .tf and
+// .tf.json, and evaluates `module` `source` expressions using local values and
+// variable defaults (vars and var_files are not passed). OpenTofu has no
+// command that reports test `run` blocks, so test files are read with
+// tfconfig.TestFiles and tfconfig.ReadTestCalls, where `module` `source` must
+// be a literal string.
 //
 // It rejects the build when:
+//   - OpenTofu cannot load a walked directory or the target's own files in a
+//     directory;
 //   - a local source starting with ./, ../, .\ or ..\ leaves the work tree,
 //     crosses into or out of external/<repo> or names a directory absent from
 //     the work tree;
@@ -39,13 +52,21 @@
 //     configuration files;
 //   - two deps claim the same normalised module_source;
 //   - module calls form a cycle;
-//   - a direct dep outside --root is not used by any call in checked files.
+//   - a direct module_source dep outside --root is not used by any call in the
+//     target's checked files.
 //
-// Strict deps (issue #135) checks the target's own_srcs against its direct
-// declarations. On tf_test, run blocks in test files listed in own_srcs are
-// checked as direct calls. Test files from the module under test are not. In
-// checked files, the build also fails on:
-//   - a non-built-in required_providers entry with no matching
+// Strict deps (issues #135 and #153) checks the target's own_srcs against its
+// direct declarations. Configuration files in own_srcs are read directory by
+// directory via tofushow.Reader.ReadFiles, each directory staged without other
+// targets' files. Each target's files in a directory must stand alone: an
+// override file (tfconfig.IsOverride) must be in the same target as the block
+// it overrides, and a .tofu or .tofu.json file in another target does not
+// shadow this target's .tf or .tf.json file during strict deps. On tf_test,
+// `run` blocks in test files listed in own_srcs are checked as direct calls;
+// test files from the module under test are not. In checked files, the build
+// also fails on:
+//   - a non-built-in provider reported by OpenTofu (in required_providers or
+//     implied by a resource, data source or provider block) with no matching
 //     --direct-provider;
 //   - a non-local call resolving to a dep with callable false;
 //   - a local call resolving to a directory outside own_srcs, own_data and
@@ -58,17 +79,19 @@
 //
 // Files from deps are not checked here, whether in --root or in modules
 // reached by calls (issue #144). No rule takes configuration as data (issue
-// #140), so every configuration file belongs to one target's srcs. Each dep is
-// checked before dependants build (issue #143). Any provider still missing,
-// such as one implied without required_providers, is reported by `tofu init`
-// during validation.
+// #140), so every configuration file belongs to one target's srcs, and each
+// dep is checked before dependants build (issue #143). Provider failures that
+// depend on the assembled root module, such as a lock constraint mismatch or
+// an empty-root tf_test whose `run` block loads a helper needing a provider,
+// are reported by `tofu init` during TofuValidate.
 //
-// A direct dep counts as used when its dir is --root, or when a checked file
-// calls it by module_source or by a local path to one of its dirs.
+// A direct module_source dep counts as used when its dir is --root, or when a
+// checked file calls it by module_source or by a local path to one of its
+// dirs.
 //
 // Unrecognised or malformed flags exit 2. Missing required flags, unreadable
-// or invalid JSON or HCL, I/O errors or any failed check print
-// rules_tofu: <error> to stderr and exit 1.
+// or invalid JSON or HCL, OpenTofu load errors, I/O errors or any failed check
+// print rules_tofu: <error> to stderr and exit 1.
 package main
 
 import (
@@ -86,11 +109,13 @@ import (
 
 	"github.com/benbirt/rules_tofu/tf/private/cmd/internal/flags"
 	"github.com/benbirt/rules_tofu/tf/private/cmd/internal/tfconfig"
+	"github.com/benbirt/rules_tofu/tf/private/cmd/internal/tofushow"
 	"github.com/hashicorp/hcl/v2"
 	regaddr "github.com/opentofu/registry-address/v2"
 )
 
 var (
+	tofu     = flag.String("tofu", "", "path to the tofu binary")
 	workTree = flag.String("work-tree", "", "path to the work tree root")
 	root     = flag.String("root", "", "work-tree-relative directory of the root module; empty for the workspace root package")
 	modules  = flag.String("modules", "", "JSON file with modules, own_srcs, own_data and dep_dirs (see the package doc)")
@@ -110,6 +135,7 @@ func main() {
 
 func run() error {
 	for name, value := range map[string]string{
+		"--tofu":      *tofu,
 		"--work-tree": *workTree,
 		"--modules":   *modules,
 		"--label":     *label,
@@ -132,7 +158,12 @@ func run() error {
 	if err := json.Unmarshal(data, &listing); err != nil {
 		return fmt.Errorf("parse %s: %w", *modules, err)
 	}
-	manifest, err := buildManifest(*workTree, *root, *label, listing.Modules, *testDir,
+	// Reader.ReadFiles runs `tofu` in a temporary working directory.
+	tofuPath, err := filepath.Abs(*tofu)
+	if err != nil {
+		return err
+	}
+	manifest, err := buildManifest(tofushow.Reader{Tofu: tofuPath}, *workTree, *root, *label, listing.Modules, *testDir,
 		own{srcs: listing.OwnSrcs, data: listing.OwnData, providers: *listed, depDirs: listing.DepDirs})
 	if err != nil {
 		return err
@@ -188,9 +219,8 @@ type Record struct {
 // requirement is a non-built-in provider required by the target's srcs and
 // absent from own.providers.
 type requirement struct {
-	// where is the work-tree-relative file:line of the required_providers
-	// entry.
-	where    string
+	// dir is the work-tree directory of the files that require it.
+	dir      string
 	provider string
 }
 
@@ -201,7 +231,7 @@ type requirement struct {
 // is recorded as `tofu init` records it and walked like a call from root.
 // own supplies the target's files and direct declarations for strict-deps
 // checks.
-func buildManifest(workTree, root, label string, deps []dep, testDir string, own own) (*Manifest, error) {
+func buildManifest(reader tofushow.Reader, workTree, root, label string, deps []dep, testDir string, own own) (*Manifest, error) {
 	bySource := map[string]*dep{}
 	var all []*dep
 	for i := range deps {
@@ -239,48 +269,48 @@ func buildManifest(workTree, root, label string, deps []dep, testDir string, own
 		directDir[dirOf(f)] = true
 		mine[filepath.Join(workTree, filepath.FromSlash(f))] = true
 	}
-	// resolve checks the call c from dir and returns the work-tree directory it
-	// loads. For non-local calls it also returns the matching dep. where names
-	// the call in errors.
-	resolve := func(c tfconfig.Call, where, dir string) (string, *dep, error) {
-		if tfconfig.IsLocal(c.Source) {
-			childDir := tfconfig.ResolveLocal(dir, c.Source)
+	// resolve checks a call to source from dir and returns the work-tree
+	// directory it loads. For non-local calls it also returns the matching dep.
+	// where names the call in errors.
+	resolve := func(source, where, dir string) (string, *dep, error) {
+		if tfconfig.IsLocal(source) {
+			childDir := tfconfig.ResolveLocal(dir, source)
 			if err := checkLocal(workTree, dir, childDir); err != nil {
-				return "", nil, fmt.Errorf("%s: %s: source %q %w", label, where, c.Source, err)
+				return "", nil, fmt.Errorf("%s: %s: source %q %w", label, where, source, err)
 			}
 			return childDir, nil, nil
 		}
-		d, subdir := lookup(all, c.Source)
+		d, subdir := lookup(all, source)
 		if d == nil {
-			return "", nil, fmt.Errorf("%s: %s: no dep provides source %q. %s", label, where, c.Source, missingHint(c.Source))
+			return "", nil, fmt.Errorf("%s: %s: no dep provides source %q. %s", label, where, source, missingHint(source))
 		}
 		childDir := path.Join(d.Dir, subdir)
 		if err := checkProvided(workTree, childDir, subdir, isGenerated(d)); err != nil {
 			return "", nil, fmt.Errorf("%s: %s: %s (module_source %q) %w", label, where, hubLabel(d), d.Source, err)
 		}
-		if tfconfig.IsRegistry(c.Source) && d.Version == "" {
+		if tfconfig.IsRegistry(source) && d.Version == "" {
 			return "", nil, fmt.Errorf("%s: %s: %s provides the registry module %q, so it must set module_version", label, where, d.Label, d.Source)
 		}
 		return childDir, d, nil
 	}
 	// direct checks a call from one of the target's files against strict deps
 	// and marks any direct dep it reaches as used.
-	direct := func(c tfconfig.Call, where, dir string) error {
-		childDir, d, err := resolve(c, where, dir)
+	direct := func(source, where, dir string) error {
+		childDir, d, err := resolve(source, where, dir)
 		if err != nil {
 			return err
 		}
 		if d != nil {
 			if !d.Callable {
 				return fmt.Errorf("%s: %s: source %q resolves to %q, which is not in the deps of %s; add %q to the deps of %s",
-					label, where, c.Source, hubLabel(d), label, hubLabel(d), label)
+					label, where, source, hubLabel(d), label, hubLabel(d), label)
 			}
 			used[d.Label] = true
 			return nil
 		}
 		if !directDir[childDir] {
 			return fmt.Errorf("%s: %s: source %q resolves to the directory %q, which has no files from %s or from a tf_library in its deps; "+
-				"add the tf_library whose files are in %q to the deps of %s", label, where, c.Source, rootDir(childDir), label, rootDir(childDir), label)
+				"add the tf_library whose files are in %q to the deps of %s", label, where, source, rootDir(childDir), label, rootDir(childDir), label)
 		}
 		for _, d := range all {
 			if d.Direct && slices.Contains(d.Dirs, childDir) {
@@ -295,20 +325,20 @@ func buildManifest(workTree, root, label string, deps []dep, testDir string, own
 	// is finite, so no depth limit is needed.
 	active := map[string]string{}
 	var walk func(key, dir string) error
-	// visit records the call c, made from dir under the key childKey, and
-	// walks into the module it loads. where names the call in errors.
-	visit := func(c tfconfig.Call, childKey, where, dir string) error {
-		record := Record{Key: childKey, Source: c.Source}
-		childDir, d, err := resolve(c, where, dir)
+	// visit records a call to source from dir under childKey and walks into
+	// the module it loads. where names the call in errors.
+	visit := func(source, childKey, where, dir string) error {
+		record := Record{Key: childKey, Source: source}
+		childDir, d, err := resolve(source, where, dir)
 		if err != nil {
 			return err
 		}
-		if d != nil && tfconfig.IsRegistry(c.Source) {
+		if d != nil && tfconfig.IsRegistry(source) {
 			record.Version = d.Version
 		}
 		if above, ok := active[childDir]; ok {
 			return fmt.Errorf("%s: %s: source %q is the directory of %s, an ancestor of this call, so the module calls form a cycle",
-				label, where, c.Source, moduleName(above))
+				label, where, source, moduleName(above))
 		}
 		rel, err := filepath.Rel(filepath.FromSlash(rootDir(root)), filepath.FromSlash(rootDir(childDir)))
 		if err != nil {
@@ -318,20 +348,32 @@ func buildManifest(workTree, root, label string, deps []dep, testDir string, own
 		manifest.Modules = append(manifest.Modules, record)
 		return walk(childKey, childDir)
 	}
+	// read caches the module calls in each walked directory. walk passes every
+	// configuration file in dir across all targets, matching what `tofu init`
+	// loads.
+	read := map[string][]tofushow.Call{}
 	walk = func(key, dir string) error {
 		active[dir] = key
 		defer delete(active, dir)
-		calls, err := tfconfig.ReadCalls(filepath.Join(workTree, filepath.FromSlash(dir)))
-		if err != nil {
-			return err
+		calls, ok := read[dir]
+		if !ok {
+			files, err := configFiles(workTree, dir)
+			if err != nil {
+				return err
+			}
+			m, err := reader.ReadFiles(dir, files)
+			if err != nil {
+				return fmt.Errorf("%s: %w", label, err)
+			}
+			calls = m.Calls
+			read[dir] = calls
 		}
 		for _, c := range calls {
 			childKey := c.Name
 			if key != "" {
 				childKey = key + "." + c.Name
 			}
-			where := fmt.Sprintf("module %q (%s)", c.Name, displayRange(workTree, c.Range))
-			if err := visit(c, childKey, where, dir); err != nil {
+			if err := visit(c.Source, childKey, callIn(c.Name, dir), dir); err != nil {
 				return err
 			}
 		}
@@ -362,21 +404,21 @@ func buildManifest(workTree, root, label string, deps []dep, testDir string, own
 			where := fmt.Sprintf("run %q (%s)", r.Name, displayRange(workTree, r.Range))
 			// Test files from the module under test are not in mine.
 			if mine[r.Range.Filename] {
-				if err := direct(r.Call, where, root); err != nil {
+				if err := direct(r.Source, where, root); err != nil {
 					return nil, err
 				}
 			}
-			if err := visit(r.Call, r.key, where, root); err != nil {
+			if err := visit(r.Source, r.key, where, root); err != nil {
 				return nil, err
 			}
 		}
 		delete(active, root)
 	}
 
-	// Check the target's configuration files directory by directory. They are
-	// all in srcs: no rule takes one as data. ReadCalls reads the whole
-	// directory so _override files apply. mine then selects calls whose
-	// effective source is in one of the target's files.
+	// Check the target's own configuration files directory by directory (no
+	// rule allows configuration in data). ReadFiles stages only this target's
+	// files in each directory, so every call and provider OpenTofu reports
+	// belongs to this target (issue #153).
 	byDir := map[string][]string{}
 	for _, f := range own.srcs {
 		if tfconfig.IsConfigFile(path.Base(f)) {
@@ -391,35 +433,17 @@ func buildManifest(workTree, root, label string, deps []dep, testDir string, own
 	sort.Strings(dirs)
 	var missing []requirement
 	for _, dir := range dirs {
-		declared, err := tfconfig.ReadRequirements(byDir[dir])
+		m, err := reader.ReadFiles(dir, byDir[dir])
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%s: %w%s", label, err, standAloneHint(label, err, byDir[dir]))
 		}
-		// Report each missing provider once per directory, even when several
-		// files or an _override file repeat it.
-		reported := map[string]bool{}
-		for _, r := range tfconfig.ApplyOverrides(declared) {
-			p := r.Source
-			if listed[p] || isBuiltin(p) || reported[p] {
-				continue
+		for _, p := range m.Providers {
+			if !listed[p.Source] && !isBuiltin(p.Source) {
+				missing = append(missing, requirement{dir: dir, provider: p.Source})
 			}
-			reported[p] = true
-			file, _, _ := strings.Cut(r.Range, ",")
-			if rel, err := filepath.Rel(workTree, file); err == nil {
-				file = filepath.ToSlash(rel)
-			}
-			missing = append(missing, requirement{where: file, provider: p})
 		}
-		calls, err := tfconfig.ReadCalls(filepath.Join(workTree, filepath.FromSlash(dir)))
-		if err != nil {
-			return nil, err
-		}
-		for _, c := range calls {
-			if !mine[c.Range.Filename] {
-				continue
-			}
-			where := fmt.Sprintf("module %q (%s)", c.Name, displayRange(workTree, c.Range))
-			if err := direct(c, where, dir); err != nil {
+		for _, c := range m.Calls {
+			if err := direct(c.Source, callIn(c.Name, dir), dir); err != nil {
 				return nil, err
 			}
 		}
@@ -497,7 +521,7 @@ func missingProviders(label string, missing []requirement) error {
 	var lines, labels, foreign []string
 	seen := map[string]bool{}
 	for _, m := range missing {
-		lines = append(lines, fmt.Sprintf("    %s requires %s", m.where, displayProvider(m.provider)))
+		lines = append(lines, fmt.Sprintf("    %s, required in %s", displayProvider(m.provider), displayDir(m.dir)))
 		if seen[m.provider] {
 			continue
 		}
@@ -525,7 +549,7 @@ func missingProviders(label string, missing []requirement) error {
 var defaultProviderHost = regaddr.DefaultProviderRegistryHost.String()
 
 // isBuiltin reports whether canonical provider address provider is built into
-// tofu, so that it needs no plugin.
+// OpenTofu and needs no plugin.
 func isBuiltin(provider string) bool {
 	p, err := regaddr.ParseProviderSource(provider)
 	return err == nil && p.IsBuiltIn()
@@ -712,4 +736,50 @@ func displayRange(workTree string, r hcl.Range) string {
 		name = filepath.ToSlash(rel)
 	}
 	return fmt.Sprintf("%s:%d", name, r.Start.Line)
+}
+
+// callIn formats module call name in work-tree directory dir for error
+// messages. OpenTofu's -module JSON output includes no file or line numbers.
+func callIn(name, dir string) string {
+	return fmt.Sprintf("module %q in %s", name, displayDir(dir))
+}
+
+// displayDir formats work-tree directory dir for error messages.
+func displayDir(dir string) string {
+	if dir == "" {
+		return "the workspace root directory"
+	}
+	return fmt.Sprintf("%q", dir)
+}
+
+// standAloneHint returns a hint to append when OpenTofu fails to load a
+// target's configuration files in one directory on their own. It returns ""
+// unless err is a *tofushow.LoadError and files includes an override file. The
+// failure may have another cause, so OpenTofu's own diagnostics are kept
+// intact.
+func standAloneHint(label string, err error, files []string) string {
+	var load *tofushow.LoadError
+	if !errors.As(err, &load) || !slices.ContainsFunc(files, func(f string) bool { return tfconfig.IsOverride(filepath.Base(f)) }) {
+		return ""
+	}
+	return fmt.Sprintf("\n\nOpenTofu read the files of %s in this directory without any other target's files. "+
+		"An override file must be in the same target as the block it overrides.", label)
+}
+
+// configFiles returns the paths under workTree of all files with a
+// configuration extension in dir. Dot-prefixed files and .tofu shadowing are
+// left to OpenTofu.
+func configFiles(workTree, dir string) ([]string, error) {
+	abs := filepath.Join(workTree, filepath.FromSlash(dir))
+	entries, err := os.ReadDir(abs)
+	if err != nil {
+		return nil, err
+	}
+	var files []string
+	for _, e := range entries {
+		if !e.IsDir() && tfconfig.IsConfigFile(e.Name()) {
+			files = append(files, filepath.Join(abs, e.Name()))
+		}
+	}
+	return files, nil
 }

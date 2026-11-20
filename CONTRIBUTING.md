@@ -28,7 +28,7 @@ bazel test //...
 | `tf/modules/` | `tf_modules` module extension |
 | `tf/private/` | Rule implementations and work-tree materialisation |
 | `tf/private/cmd/{runner,dupcheck,pin,lockjson,modscan,modules}/` | Go binaries: build-time validation and runtime `tofu` wrapper, duplicate-variable check, `@tf_providers//:pin`, lock reader, module scanner and module manifest writer |
-| `tf/private/cmd/internal/{flags,tfconfig}/` | Shared Go packages: repeatable CLI flags and HCL / module-source parsing |
+| `tf/private/cmd/internal/{flags,tfconfig,tofushow}/` | Shared Go packages: repeatable CLI flags; HCL, test-file and module-source parsing; and `tofu show -json -module` inspection (with `tofushow/tofutest` for Go tests) |
 | `toolchain/` | OpenTofu binary download and toolchain registration |
 | `tofu/` | `@rules_tofu//tofu`, the toolchain's runnable `tofu` (rule in `tf/private/tofu_binary.bzl`) |
 | `docs/` | `starlark_doc_extract` target per public `.bzl` file, shipped as the BCR `docs_url` archive |

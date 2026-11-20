@@ -1,0 +1,3 @@
+module "shadowed" {
+  source = "./absent"
+}
