@@ -1051,6 +1051,14 @@ Add "@tf_providers//hashicorp/null" to the providers of //app.`,
 			own: own{srcs: []string{"app/main.tf"}, depDirs: []string{"app"}, providers: []string{"registry.opentofu.org/posthog/posthog"}},
 		},
 		{
+			name: "another target's .tofu file does not change a provider the rule's files declare",
+			files: map[string]string{
+				"app/main.tf":   "terraform {\n  required_providers {\n    posthog = { source = \"PostHog/posthog\" }\n  }\n}\n",
+				"app/main.tofu": "terraform {\n  required_providers {\n    posthog = { source = \"acme/posthog\" }\n  }\n}\n",
+			},
+			own: own{srcs: []string{"app/main.tf"}, depDirs: []string{"app"}, providers: []string{"registry.opentofu.org/posthog/posthog"}},
+		},
+		{
 			name: "a provider a dep's file in the directory declares must still be listed",
 			files: map[string]string{
 				"app/versions.tf": "terraform {\n  required_providers {\n    posthog = { source = \"PostHog/posthog\" }\n  }\n}\n",

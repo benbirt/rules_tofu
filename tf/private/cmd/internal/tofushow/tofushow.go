@@ -60,7 +60,7 @@ type Provider struct {
 
 // Reader runs `tofu` to inspect module directories.
 type Reader struct {
-	// Tofu is the path to the `tofu` binary.
+	// Tofu is the path to the `tofu` binary, required.
 	Tofu string
 }
 
@@ -90,6 +90,9 @@ func (r Reader) show(root, dir string) (*Module, error) {
 	arg := filepath.FromSlash(dir)
 	if arg == "" {
 		arg = "."
+	}
+	if r.Tofu == "" {
+		return nil, errors.New("no tofu binary to run")
 	}
 	// cmd.Dir changes the working directory that a relative path would be
 	// resolved against.

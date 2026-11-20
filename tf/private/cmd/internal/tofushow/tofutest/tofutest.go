@@ -17,9 +17,9 @@ import (
 // TEST_SRCDIR; under `go test ./tf/private/cmd/...`, pass an absolute
 // -tofu=<path> because `go test` runs each package in its own directory.
 //
-// Reader also makes RUNFILES_DIR and TEST_SRCDIR absolute and clears
-// BUILD_WORKING_DIRECTORY for the test so the //tofu launcher finds its binary
-// and stays in ReadFiles's working directory.
+// Reader also makes relative RUNFILES_DIR and TEST_SRCDIR paths absolute and
+// clears BUILD_WORKING_DIRECTORY for the test so the //tofu launcher finds its
+// binary and stays in ReadFiles's working directory.
 func Reader(t *testing.T, path string) tofushow.Reader {
 	t.Helper()
 	if path == "" {
@@ -37,7 +37,9 @@ func Reader(t *testing.T, path string) tofushow.Reader {
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Setenv(name, abs)
+		if abs != dir {
+			t.Setenv(name, abs)
+		}
 		if !resolved {
 			path = filepath.Join(abs, path)
 			resolved = true

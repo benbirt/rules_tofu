@@ -420,16 +420,20 @@ Then `bazel shutdown` so the new startup flags take effect.
     (`TestBuildManifest_StrictDeps`). Never attribute requirements or calls by
     package, whole work-tree directory or HCL source range, and do not inherit
     direct declarations across targets.
-  - Resolve each provider local name in `m.LocalNames` against the whole
-    work-tree directory (`readDir(dir).LocalNames`, the same cached read the
-    walk uses) before checking `--direct-provider`
-    (`TestBuildManifest_StrictDeps`, `TestReadFiles_LocalNames`). This is the
-    one deliberate exception to reading a target's files alone: a `tf_deploy`
-    configuring a non-`hashicorp` provider (e.g. `provider "posthog" {}`) whose
-    `required_providers` sits in a same-package `tf_library` in `deps` would
-    otherwise report `hashicorp/<name>`, and OpenTofu rejects a second
-    `required_providers` entry in the directory. Calls and which local names
-    are used still come from the target's files alone.
+  - When a target's own files leave a provider local name in `m.LocalNames` at
+    the default `registry.opentofu.org/hashicorp/<name>`, resolve it against
+    the whole work-tree directory (`readDir(dir).LocalNames`, the same cached
+    read the walk uses, called only for such names) before checking
+    `--direct-provider` (`TestBuildManifest_StrictDeps`,
+    `TestReadFiles_LocalNames`). This is the one deliberate exception to
+    reading a target's files alone: a `tf_deploy` configuring a non-`hashicorp`
+    provider (e.g. `provider "posthog" {}`) whose `required_providers` sits in
+    a same-package `tf_library` in `deps` would otherwise report
+    `hashicorp/<name>`, and OpenTofu rejects a second `required_providers`
+    entry in the directory. Any other address the target's own files declare
+    stands regardless of other targets' files (such as another target's `.tofu`
+    file), and calls and which local names are used still come from the
+    target's files alone.
   - Require each target's files in a directory to stand alone (issue #153;
     `strict_deps_override` in `tests/integration/BUILD.bazel`,
     `TestBuildManifest_StrictDeps`): an override file (`tfconfig.IsOverride`)

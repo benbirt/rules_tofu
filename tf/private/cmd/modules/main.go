@@ -63,14 +63,16 @@
 // it overrides, a `module` `source` referring to a local value or variable
 // needs that declaration in the same target, and a .tofu or .tofu.json file in
 // another target does not shadow this target's .tf or .tf.json file during
-// strict deps. One exception applies to provider local names: each local name
-// used by the target's files is resolved against the whole work-tree directory
-// (including files from deps in that directory), so a target that configures
-// or uses a provider declared in a same-package dep's required_providers is
-// checked against that provider's canonical address rather than
-// hashicorp/<name>. On tf_test, `run` blocks in test files listed in own_srcs
-// are checked as direct calls; test files from the module under test are not.
-// In checked files, the build also fails on:
+// strict deps. One exception applies to provider local names: when the
+// target's own files resolve a local name to the default
+// registry.opentofu.org/hashicorp/<name>, it is looked up in the whole
+// work-tree directory (including files from deps in that directory), so a
+// target configuring or using a provider declared in a same-package dep's
+// required_providers is checked against that address. Any other address the
+// target's own files declare stands regardless of other targets' files. On
+// tf_test, `run` blocks in test files listed in own_srcs are checked as direct
+// calls; test files from the module under test are not. In checked files, the
+// build also fails on:
 //   - a non-built-in provider reported by OpenTofu (in required_providers or
 //     implied by a resource, data source or provider block) with no matching
 //     --direct-provider;
@@ -445,20 +447,23 @@ func buildManifest(reader tofushow.Reader, workTree, root, label string, deps []
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w%s", label, err, standAloneHint(label, err, byDir[dir]))
 		}
-		// Resolve each provider local name against the whole directory so a
-		// target (such as a tf_deploy) that configures or uses a provider
-		// declared in a same-package dep's required_providers is checked
-		// against that provider rather than hashicorp/<name>. OpenTofu rejects
-		// a duplicate required_providers entry in the same directory, so the
-		// target cannot redeclare it.
-		whole, err := readDir(dir)
-		if err != nil {
-			return nil, err
-		}
+		// Resolve a provider local name against the whole directory only when
+		// the target's files leave it at the default hashicorp/<name>. That
+		// lets a target such as a tf_deploy configure or use a provider
+		// declared in a same-package dep's required_providers without
+		// redeclaring it, which OpenTofu rejects in the same directory. Any
+		// other address the target's own files declare stands regardless of
+		// other targets' files.
 		required := map[string]bool{}
 		for name, source := range m.LocalNames {
-			if declared, ok := whole.LocalNames[name]; ok {
-				source = declared
+			if source == defaultProviderHost+"/hashicorp/"+name {
+				whole, err := readDir(dir)
+				if err != nil {
+					return nil, err
+				}
+				if declared, ok := whole.LocalNames[name]; ok {
+					source = declared
+				}
 			}
 			required[source] = true
 		}
