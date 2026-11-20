@@ -555,11 +555,6 @@ not check variable values, a wrong type in `vars` fails at `plan` rather than
 Override any variable on a `.plan`, `.apply` or `.destroy` target by passing
 the flag after `--`, as in `bazel run :prod.plan -- -var region=eu-west-1`.
 
-In a `tf_deploy` or `tf_test`, the files `tofu` sees are symlinks to Bazel's
-inputs. A script in `data` run by a `local-exec` provisioner or an `external`
-data source can create files beside itself. It must not modify a `data` file in
-place.
-
 ## State and backends
 
 Launchers run `tofu` in the deploy's run directory,
