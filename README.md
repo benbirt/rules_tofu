@@ -187,9 +187,10 @@ Checks follow files, not Bazel packages:
   own `srcs` use, as in [`examples/aws`](examples/aws).
 - Each target's `srcs` in a directory are checked without other targets' files.
   An `override` or `*_override` file must be in the same target as the block it
-  overrides. If a `.tofu` or `.tofu.json` file is in a different target from the
-  `.tf` or `.tf.json` file it shadows, the shadowed file's target must list what
-  that file requires.
+  overrides, and a `module` `source` that refers to a local value or variable
+  needs that `locals` or `variable` block in the same target. If a `.tofu` or
+  `.tofu.json` file is in a different target from the `.tf` or `.tf.json` file
+  it shadows, the shadowed file's target must list what that file requires.
 - A relative call needs the `tf_library` whose files are in the called
   directory. Another library in the same package does not count.
 - A `tf_test` lists the libraries that the `run` blocks in its `srcs` load,

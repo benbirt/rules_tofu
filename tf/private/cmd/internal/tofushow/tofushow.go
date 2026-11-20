@@ -8,8 +8,9 @@
 //
 // OpenTofu documents the `-module` output as a subset of its JSON
 // configuration representation, without a `format_version` field. Parse
-// rejects output missing `root_module`, a call's `source` or a provider's
-// `full_name`, or carrying conflicting version constraints for one provider.
+// rejects output missing `root_module`, a call's `source`, or a provider's
+// `name` or `full_name`, as well as one local name mapped to two providers or
+// conflicting version constraints for one provider.
 package tofushow
 
 import (
@@ -19,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -33,6 +35,9 @@ type Module struct {
 	// entries in required_providers and providers implied by a resource, data
 	// source or provider block. Built-in providers are included.
 	Providers []Provider
+	// LocalNames maps each provider local name reported for the module to the
+	// canonical address OpenTofu resolves it to with the staged files alone.
+	LocalNames map[string]string
 }
 
 // Call is a `module` block reported by OpenTofu.
@@ -55,12 +60,12 @@ type Provider struct {
 
 // Reader runs `tofu` to inspect module directories.
 type Reader struct {
-	// Tofu is the absolute path to the `tofu` binary. ReadFiles changes the
-	// subprocess working directory, so a relative path is not safe.
+	// Tofu is the path to the `tofu` binary.
 	Tofu string
 }
 
-// LoadError reports that `tofu` exited non-zero while loading a module.
+// LoadError reports that `tofu` exited non-zero with diagnostics while loading
+// a module.
 type LoadError struct {
 	// Dir is the directory argument passed to ReadFiles.
 	Dir string
@@ -86,18 +91,25 @@ func (r Reader) show(root, dir string) (*Module, error) {
 	if arg == "" {
 		arg = "."
 	}
-	cmd := exec.Command(r.Tofu, "show", "-json", "-no-color", "-module="+arg)
+	// cmd.Dir changes the working directory that a relative path would be
+	// resolved against.
+	tofu, err := filepath.Abs(r.Tofu)
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.Command(tofu, "show", "-json", "-no-color", "-module="+arg)
 	cmd.Dir = root
-	cmd.Env = environ()
+	cmd.Env = environ(root)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
+		diagnostics := strings.TrimSpace(stderr.String())
 		var exit *exec.ExitError
-		if errors.As(err, &exit) {
-			return nil, &LoadError{Dir: dir, Diagnostics: strings.TrimSpace(stderr.String())}
+		if errors.As(err, &exit) && exit.Exited() && diagnostics != "" {
+			return nil, &LoadError{Dir: dir, Diagnostics: diagnostics}
 		}
-		return nil, fmt.Errorf("run tofu show -module: %w", err)
+		return nil, fmt.Errorf("run tofu show -json -module=%s: %w", arg, err)
 	}
 	m, err := Parse(stdout.Bytes())
 	if err != nil {
@@ -109,28 +121,36 @@ func (r Reader) show(root, dir string) (*Module, error) {
 // ReadFiles symlinks configuration files into a temporary directory under
 // slash-separated path dir (or the scratch root when dir is ""), runs `tofu
 // show` with the scratch root as its working directory, and removes the
-// temporary directory. Callers must pass configuration files only: when dir is
-// "", the staged directory is `tofu`'s working directory, where auto-loaded
-// .tfvars files would take effect. files need not share a source directory, so
-// long as their base names are distinct.
+// temporary directory. dir must be "" or a clean relative path that stays
+// inside the scratch root. files need not share a source directory, so long as
+// their base names are distinct. ReadFiles rejects .tfvars and .tfvars.json
+// files: when dir is "", the staged directory is `tofu`'s working directory,
+// where auto-loaded variable files would take effect.
 //
 // Staging into a scratch directory serves three purposes:
 //   - OpenTofu reads whole directories; staging lets strict-deps checks read
 //     one target's files without other targets' files in the same directory.
 //   - `tofu show` loads terraform.tfvars[.json] and *.auto.tfvars[.json] from
 //     its working directory (not the module directory), which would alter an
-//     evaluated `source`. The scratch root has none, and environ strips
-//     TF_VAR_* and TF_CLI_ARGS*, so variables in `source` always take their
-//     defaults.
+//     evaluated `source`. The scratch root has none, and environ strips TF_*
+//     variables, HOME and XDG_CONFIG_HOME (setting HOME to the scratch root),
+//     so variables in `source` always take their defaults and user CLI config
+//     or TF_LOG cannot interfere.
 //   - Staging under dir makes OpenTofu's diagnostics report paths as
 //     <dir>/<file> (or <file> when dir is "").
 //
 // OpenTofu loads only the staged files: it rejects an override file when the
 // block it overrides is not among files, ignores dot-prefixed file names, and
-// lets .tofu and .tofu.json shadow .tf and .tf.json of the same stem.
+// lets .tofu and .tofu.json shadow .tf and .tf.json of the same stem. A
+// non-built-in provider local name with no required_providers entry among
+// files is reported as registry.opentofu.org/hashicorp/<name>.
 //
-// If `tofu` exits non-zero, ReadFiles returns a *LoadError.
+// If `tofu` exits non-zero with diagnostics, ReadFiles returns a *LoadError; a
+// signal or empty stderr returns an ordinary error.
 func (r Reader) ReadFiles(dir string, files []string) (*Module, error) {
+	if dir != "" && (path.Clean(dir) != dir || path.IsAbs(dir) || dir == ".." || strings.HasPrefix(dir, "../")) {
+		return nil, fmt.Errorf("directory %q is not a clean relative path", dir)
+	}
 	scratch, err := os.MkdirTemp("", "rules_tofu-show-")
 	if err != nil {
 		return nil, err
@@ -141,39 +161,49 @@ func (r Reader) ReadFiles(dir string, files []string) (*Module, error) {
 		return nil, err
 	}
 	for _, f := range files {
+		base := filepath.Base(f)
+		if strings.HasSuffix(base, ".tfvars") || strings.HasSuffix(base, ".tfvars.json") {
+			return nil, fmt.Errorf("%s is a variables file, not configuration", f)
+		}
 		target, err := filepath.Abs(f)
 		if err != nil {
 			return nil, err
 		}
-		if err := os.Symlink(target, filepath.Join(staged, filepath.Base(f))); err != nil {
+		if err := os.Symlink(target, filepath.Join(staged, base)); err != nil {
 			return nil, err
 		}
 	}
 	return r.show(scratch, dir)
 }
 
-// environ returns os.Environ() without TF_VAR_* and TF_CLI_ARGS* variables, so
-// input variables and injected CLI flags cannot affect what `tofu show`
-// reports.
-func environ() []string {
+// environ returns the environment for `tofu show` run in scratch: os.Environ()
+// without any TF_* variable, HOME or XDG_CONFIG_HOME, plus TF_IN_AUTOMATION=1
+// and HOME=<scratch>. Input variables (TF_VAR_*), injected flags
+// (TF_CLI_ARGS*), logging (TF_LOG*) and CLI configuration files in the user's
+// home or XDG config directory or named by TF_CLI_CONFIG_FILE then cannot
+// affect what `tofu` reports or prints.
+func environ(scratch string) []string {
 	var env []string
 	for _, e := range os.Environ() {
-		if strings.HasPrefix(e, "TF_VAR_") || strings.HasPrefix(e, "TF_CLI_ARGS") {
+		if strings.HasPrefix(e, "TF_") || strings.HasPrefix(e, "HOME=") || strings.HasPrefix(e, "XDG_CONFIG_HOME=") {
 			continue
 		}
 		env = append(env, e)
 	}
-	return env
+	return append(env, "TF_IN_AUTOMATION=1", "HOME="+scratch)
 }
 
 // Parse decodes the JSON output of `tofu show -json -module=<dir>`. Multiple
 // provider_config entries can share a full_name (for example, aliased provider
-// blocks); OpenTofu computes them from one requirement per provider, so Parse
-// merges them by full_name and rejects distinct non-empty version_constraint
-// values for the same full_name.
+// blocks or two local names for one provider); OpenTofu gives each of them the
+// combined version_constraint for that provider, so Parse merges them by
+// full_name and rejects distinct non-empty version_constraint values as
+// unexpected output. It also rejects missing name or full_name fields and a
+// local name that two entries give to different providers.
 func Parse(output []byte) (*Module, error) {
 	var config struct {
 		ProviderConfig map[string]struct {
+			Name              string `json:"name"`
 			FullName          string `json:"full_name"`
 			VersionConstraint string `json:"version_constraint"`
 		} `json:"provider_config"`
@@ -190,7 +220,7 @@ func Parse(output []byte) (*Module, error) {
 	if config.RootModule == nil {
 		return nil, errors.New("unexpected output: no root_module")
 	}
-	m := &Module{}
+	m := &Module{LocalNames: map[string]string{}}
 	for name, c := range config.RootModule.ModuleCalls {
 		if c.Source == "" {
 			return nil, fmt.Errorf("unexpected output: module call %q has no source", name)
@@ -201,9 +231,13 @@ func Parse(output []byte) (*Module, error) {
 
 	versions := map[string]string{}
 	for key, p := range config.ProviderConfig {
-		if p.FullName == "" {
-			return nil, fmt.Errorf("unexpected output: provider_config %q has no full_name", key)
+		if p.Name == "" || p.FullName == "" {
+			return nil, fmt.Errorf("unexpected output: provider_config %q has no name or no full_name", key)
 		}
+		if other, ok := m.LocalNames[p.Name]; ok && other != p.FullName {
+			return nil, fmt.Errorf("unexpected output: provider local name %q is both %s and %s", p.Name, min(other, p.FullName), max(other, p.FullName))
+		}
+		m.LocalNames[p.Name] = p.FullName
 		switch seen := versions[p.FullName]; {
 		case seen == "":
 			versions[p.FullName] = p.VersionConstraint

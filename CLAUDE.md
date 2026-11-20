@@ -255,28 +255,34 @@ Then `bazel shutdown` so the new startup flags take effect.
     that reports them.
   - Always stage into a fresh scratch directory under `<scratch>/<dir>` and run
     `tofu show -json -no-color -module=<dir>` with `<scratch>` as the working
-    directory and `TF_VAR_*` and `TF_CLI_ARGS*` stripped (`environ`;
+    directory, stripping every `TF_*` variable, `HOME` and `XDG_CONFIG_HOME`
+    and setting `TF_IN_AUTOMATION=1` and `HOME=<scratch>` (`environ`;
     `TestReadFiles_IgnoresEnvironment`). Never run `tofu show -module` in the
     work tree: `tofu show` loads `terraform.tfvars[.json]` and
     `*.auto.tfvars[.json]` from its working directory (not the `-module`
     directory) and applies `TF_VAR_*` to the shown module, which would alter an
-    evaluated `source`. Pass configuration files only to `ReadFiles`: when
-    `dir` is `""`, the staged directory is `tofu`'s working directory, where
-    auto-loaded `.tfvars` files would take effect. Staging under `<dir>` also
-    makes diagnostics name `<dir>/<file>`.
+    evaluated `source`, while `TF_LOG*` and CLI config in `HOME` or
+    `TF_CLI_CONFIG_FILE` would pollute or alter output (especially outside
+    Bazel actions in stages 2 and 3). Keep `ReadFiles`'s guards rejecting bad
+    `dir` paths and `*.tfvars[.json]` files
+    (`TestReadFiles_RejectsBadArguments`): when `dir` is `""`, the staged
+    directory is `tofu`'s working directory. Staging under `<dir>` also makes
+    diagnostics name `<dir>/<file>`.
   - Don't pass `vars` or `var_files` to `TofuModules`. Variables in a `module`
     `source` take their defaults there; if `vars` or `var_files` evaluate a
     different address at `tofu init`, OpenTofu fails with
     `"Module source has changed"`.
-  - Don't parse `tofu`'s diagnostics (`tofushow.LoadError`).
+  - Don't parse `tofu`'s diagnostics (`tofushow.LoadError`; returned only when
+    `tofu` exits non-zero with non-empty stderr, not on signals or empty
+    stderr).
   - `tofu show -json -module` (added in OpenTofu 1.11) carries no
     `format_version`, and OpenTofu's v1 compatibility promises list `show -json`
     without naming `-module`. Keep `tofushow.Parse`'s checks (`root_module`,
-    call `source`, `provider_config` `full_name` and agreeing
-    `version_constraint` values per `full_name`),
+    call `source`, `provider_config` `name` and `full_name`, one `full_name`
+    per local name, and agreeing `version_constraint` values per `full_name`),
     `//tf/private/cmd/internal/tofushow:tofushow_test` (`TestReadFiles_Facts`,
-    `TestParse`), and per-version coverage in `module_dependency_<version>_test`
-    (`//reader` and `//reader:providers` in
+    `TestReadFiles_LocalNames`, `TestParse`), and per-version coverage in
+    `module_dependency_<version>_test` (`//reader` and `//reader:providers` in
     `tests/integration/module_dependency_test.sh` step 9).
 - Parse module `source` strings only with `tfconfig.ParseSource` in Go
   (`modscan parse`), matching OpenTofu's `addrs.ParseModuleSource` via
@@ -409,19 +415,30 @@ Then `bazel shutdown` so the new startup flags take effect.
   #153; `README.md`, "Strict dependencies"; `strict_deps_*` cases):
   - Stage and read a target's configuration `own_srcs` one directory at a time
     with `tofushow.Reader.ReadFiles`, without any other target's files in that
-    directory, and check every provider (`m.Providers`, including implied ones,
-    skipping `isBuiltin`) and call (`m.Calls`) OpenTofu reports
+    directory, and check every provider local name (`m.LocalNames`, including
+    implied ones, skipping `isBuiltin`) and call (`m.Calls`) OpenTofu reports
     (`TestBuildManifest_StrictDeps`). Never attribute requirements or calls by
     package, whole work-tree directory or HCL source range, and do not inherit
     direct declarations across targets.
+  - Resolve each provider local name in `m.LocalNames` against the whole
+    work-tree directory (`readDir(dir).LocalNames`, the same cached read the
+    walk uses) before checking `--direct-provider`
+    (`TestBuildManifest_StrictDeps`, `TestReadFiles_LocalNames`). This is the
+    one deliberate exception to reading a target's files alone: a `tf_deploy`
+    configuring a non-`hashicorp` provider (e.g. `provider "posthog" {}`) whose
+    `required_providers` sits in a same-package `tf_library` in `deps` would
+    otherwise report `hashicorp/<name>`, and OpenTofu rejects a second
+    `required_providers` entry in the directory. Calls and which local names
+    are used still come from the target's files alone.
   - Require each target's files in a directory to stand alone (issue #153;
     `strict_deps_override` in `tests/integration/BUILD.bazel`,
     `TestBuildManifest_StrictDeps`): an override file (`tfconfig.IsOverride`)
-    must be in the same target as the block it overrides, and a `.tofu` or
-    `.tofu.json` file in another target does not shadow this target's `.tf` or
-    `.tf.json` file during strict deps. `standAloneHint` appends a hint only on
-    `*tofushow.LoadError` when the staged files include an override file,
-    without parsing `tofu`'s output.
+    must be in the same target as the block it overrides, a `module` `source`
+    referring to a local value or variable needs that declaration in the same
+    target, and a `.tofu` or `.tofu.json` file in another target does not
+    shadow this target's `.tf` or `.tf.json` file during strict deps.
+    `standAloneHint` appends a hint only on `*tofushow.LoadError` when the
+    staged files include an override file, without parsing `tofu`'s output.
   - Check only a target's `srcs`, plus `run` blocks in a `tf_test`'s `srcs`,
     against `--direct-provider`, `callable` modules and `dep_dirs`. Do
     not re-check files from `deps` in the root module's directory

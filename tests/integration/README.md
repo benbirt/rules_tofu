@@ -98,8 +98,8 @@ packages for module and test edge cases:
 - `reader`: exercises `tofu show -json -module` (issue #153) with module calls
   using a variable default, a local value, `_override`, `.tofu` shadowing and
   `.tf.json`, plus a `manual` `:providers` target covering canonical addresses,
-  an implied provider, aliased `provider` blocks and a skipped built-in
-  provider.
+  providers implied by a resource and a data source, aliased `provider` blocks
+  and a skipped built-in provider.
 - `sub_only`: a library whose `srcs` are all in a subdirectory.
 
 It also applies `//app:app` with no backend block and

@@ -60,11 +60,17 @@
 // directory via tofushow.Reader.ReadFiles, each directory staged without other
 // targets' files. Each target's files in a directory must stand alone: an
 // override file (tfconfig.IsOverride) must be in the same target as the block
-// it overrides, and a .tofu or .tofu.json file in another target does not
-// shadow this target's .tf or .tf.json file during strict deps. On tf_test,
-// `run` blocks in test files listed in own_srcs are checked as direct calls;
-// test files from the module under test are not. In checked files, the build
-// also fails on:
+// it overrides, a `module` `source` referring to a local value or variable
+// needs that declaration in the same target, and a .tofu or .tofu.json file in
+// another target does not shadow this target's .tf or .tf.json file during
+// strict deps. One exception applies to provider local names: each local name
+// used by the target's files is resolved against the whole work-tree directory
+// (including files from deps in that directory), so a target that configures
+// or uses a provider declared in a same-package dep's required_providers is
+// checked against that provider's canonical address rather than
+// hashicorp/<name>. On tf_test, `run` blocks in test files listed in own_srcs
+// are checked as direct calls; test files from the module under test are not.
+// In checked files, the build also fails on:
 //   - a non-built-in provider reported by OpenTofu (in required_providers or
 //     implied by a resource, data source or provider block) with no matching
 //     --direct-provider;
@@ -100,6 +106,7 @@ import (
 	"flag"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path"
 	"path/filepath"
@@ -158,12 +165,7 @@ func run() error {
 	if err := json.Unmarshal(data, &listing); err != nil {
 		return fmt.Errorf("parse %s: %w", *modules, err)
 	}
-	// Reader.ReadFiles runs `tofu` in a temporary working directory.
-	tofuPath, err := filepath.Abs(*tofu)
-	if err != nil {
-		return err
-	}
-	manifest, err := buildManifest(tofushow.Reader{Tofu: tofuPath}, *workTree, *root, *label, listing.Modules, *testDir,
+	manifest, err := buildManifest(tofushow.Reader{Tofu: *tofu}, *workTree, *root, *label, listing.Modules, *testDir,
 		own{srcs: listing.OwnSrcs, data: listing.OwnData, providers: *listed, depDirs: listing.DepDirs})
 	if err != nil {
 		return err
@@ -348,27 +350,33 @@ func buildManifest(reader tofushow.Reader, workTree, root, label string, deps []
 		manifest.Modules = append(manifest.Modules, record)
 		return walk(childKey, childDir)
 	}
-	// read caches the module calls in each walked directory. walk passes every
-	// configuration file in dir across all targets, matching what `tofu init`
-	// loads.
-	read := map[string][]tofushow.Call{}
+	// readDir asks OpenTofu about every configuration file in work-tree
+	// directory dir across all targets, matching what `tofu init` loads, and
+	// caches the result per directory.
+	read := map[string]*tofushow.Module{}
+	readDir := func(dir string) (*tofushow.Module, error) {
+		if m, ok := read[dir]; ok {
+			return m, nil
+		}
+		files, err := configFiles(workTree, dir)
+		if err != nil {
+			return nil, err
+		}
+		m, err := reader.ReadFiles(dir, files)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", label, err)
+		}
+		read[dir] = m
+		return m, nil
+	}
 	walk = func(key, dir string) error {
 		active[dir] = key
 		defer delete(active, dir)
-		calls, ok := read[dir]
-		if !ok {
-			files, err := configFiles(workTree, dir)
-			if err != nil {
-				return err
-			}
-			m, err := reader.ReadFiles(dir, files)
-			if err != nil {
-				return fmt.Errorf("%s: %w", label, err)
-			}
-			calls = m.Calls
-			read[dir] = calls
+		m, err := readDir(dir)
+		if err != nil {
+			return err
 		}
-		for _, c := range calls {
+		for _, c := range m.Calls {
 			childKey := c.Name
 			if key != "" {
 				childKey = key + "." + c.Name
@@ -417,8 +425,8 @@ func buildManifest(reader tofushow.Reader, workTree, root, label string, deps []
 
 	// Check the target's own configuration files directory by directory (no
 	// rule allows configuration in data). ReadFiles stages only this target's
-	// files in each directory, so every call and provider OpenTofu reports
-	// belongs to this target (issue #153).
+	// files in each directory, so every call and provider local name OpenTofu
+	// reports belongs to this target (issue #153).
 	byDir := map[string][]string{}
 	for _, f := range own.srcs {
 		if tfconfig.IsConfigFile(path.Base(f)) {
@@ -437,9 +445,26 @@ func buildManifest(reader tofushow.Reader, workTree, root, label string, deps []
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w%s", label, err, standAloneHint(label, err, byDir[dir]))
 		}
-		for _, p := range m.Providers {
-			if !listed[p.Source] && !isBuiltin(p.Source) {
-				missing = append(missing, requirement{dir: dir, provider: p.Source})
+		// Resolve each provider local name against the whole directory so a
+		// target (such as a tf_deploy) that configures or uses a provider
+		// declared in a same-package dep's required_providers is checked
+		// against that provider rather than hashicorp/<name>. OpenTofu rejects
+		// a duplicate required_providers entry in the same directory, so the
+		// target cannot redeclare it.
+		whole, err := readDir(dir)
+		if err != nil {
+			return nil, err
+		}
+		required := map[string]bool{}
+		for name, source := range m.LocalNames {
+			if declared, ok := whole.LocalNames[name]; ok {
+				source = declared
+			}
+			required[source] = true
+		}
+		for _, p := range slices.Sorted(maps.Keys(required)) {
+			if !listed[p] && !isBuiltin(p) {
+				missing = append(missing, requirement{dir: dir, provider: p})
 			}
 		}
 		for _, c := range m.Calls {

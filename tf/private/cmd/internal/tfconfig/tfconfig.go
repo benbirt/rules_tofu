@@ -469,10 +469,13 @@ func ModuleDirs(repo, moduleDir string, called ...string) ([]string, error) {
 	return dirs, nil
 }
 
-// IsOverride reports whether configuration file base name name is an OpenTofu
-// override file (`override` or `*_override` before its configuration
-// extension). Callers must pass a base name that satisfies IsConfigFile.
+// IsOverride reports whether file base name name is an OpenTofu override file:
+// not dot-prefixed, with a configuration extension, and `override` or
+// `*_override` as its stem.
 func IsOverride(name string) bool {
+	if ignored(name) || configExt(name) == "" {
+		return false
+	}
 	stem := strings.TrimSuffix(name, configExt(name))
 	return stem == "override" || strings.HasSuffix(stem, "_override")
 }

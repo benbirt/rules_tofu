@@ -21,3 +21,7 @@ provider "google" {
 }
 
 resource "null_resource" "implied" {}
+
+data "http" "implied" {
+  url = "https://example.com"
+}

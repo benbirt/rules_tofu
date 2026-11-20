@@ -52,8 +52,8 @@
 #      rewritten.
 #   9. `bazel build //reader:providers` fails strict deps and names the exact
 #      providers OpenTofu reports for reader/providers/main.tf: canonical
-#      addresses, a resource-implied provider, aliased provider blocks reported
-#      once, and the built-in provider skipped (issue #153).
+#      addresses, resource- and data-source-implied providers, aliased provider
+#      blocks reported once, and the built-in provider skipped (issue #153).
 #
 # Runs once per OpenTofu version in KNOWN_VERSIONS because the module manifest
 # and the .terraform/terraform.tfstate backend record read by the
@@ -195,9 +195,10 @@ echo "${out}" >&2
 want='rules_tofu: //reader:providers: its files require these providers, which are not in its providers:
     example.com/acme/corp, required in "reader/providers"
     hashicorp/google, required in "reader/providers"
+    hashicorp/http, required in "reader/providers"
     hashicorp/null, required in "reader/providers"
     hashicorp/random, required in "reader/providers"
-Add "@tf_providers//hashicorp/google", "@tf_providers//hashicorp/null", "@tf_providers//hashicorp/random" to the providers of //reader:providers.'
+Add "@tf_providers//hashicorp/google", "@tf_providers//hashicorp/http", "@tf_providers//hashicorp/null", "@tf_providers//hashicorp/random" to the providers of //reader:providers.'
 grep -q -F "${want}" <<<"${out}" || fail "the strict-deps error doesn't name exactly the providers of reader/providers/main.tf"
 
 echo "OK: with tofu ${TOFU_VERSION}, modules from other Bazel modules were called by module_source, and tofu fmt formatted the workspace" >&2

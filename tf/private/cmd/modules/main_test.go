@@ -1043,6 +1043,23 @@ Add "@tf_providers//hashicorp/null" to the providers of //app.`,
 			want:  "    hashicorp/random, required in \"app\"\n",
 		},
 		{
+			name: "a provider a dep's file in the directory declares is known by that address",
+			files: map[string]string{
+				"app/versions.tf": "terraform {\n  required_providers {\n    posthog = { source = \"PostHog/posthog\" }\n  }\n}\n",
+				"app/main.tf":     "provider \"posthog\" {}\nresource \"posthog_dashboard\" \"x\" {}\n",
+			},
+			own: own{srcs: []string{"app/main.tf"}, depDirs: []string{"app"}, providers: []string{"registry.opentofu.org/posthog/posthog"}},
+		},
+		{
+			name: "a provider a dep's file in the directory declares must still be listed",
+			files: map[string]string{
+				"app/versions.tf": "terraform {\n  required_providers {\n    posthog = { source = \"PostHog/posthog\" }\n  }\n}\n",
+				"app/main.tf":     "provider \"posthog\" {}\nresource \"posthog_dashboard\" \"x\" {}\n",
+			},
+			own:  own{srcs: []string{"app/main.tf"}, depDirs: []string{"app"}},
+			want: "    posthog/posthog, required in \"app\"\nAdd \"@tf_providers//posthog/posthog\" to the providers of //app.",
+		},
+		{
 			name:  "a generated library is named by its hub label",
 			files: map[string]string{"app/main.tf": `module "dns" { source = "acme/dns/aws" }`, "external/dns+/main.tf": ``},
 			deps:  []dep{{Label: "@@rules_tofu++tf_modules+tf_modules_dns//:_rules_tofu_module", Source: "acme/dns/aws", Version: "1.0.0", Dir: "external/dns+"}},
@@ -1083,7 +1100,7 @@ Add "@tf_providers//hashicorp/null" to the providers of //app.`,
 				t.Fatal(err)
 			case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
 				t.Fatalf("got\n%v\nwant an error containing\n%s", err, tc.want)
-			case tc.without != "" && strings.Contains(err.Error(), tc.without):
+			case tc.without != "" && err != nil && strings.Contains(err.Error(), tc.without):
 				t.Fatalf("got\n%v\nwant an error without %q", err, tc.without)
 			}
 		})

@@ -403,3 +403,24 @@ func TestResolveLocal(t *testing.T) {
 		}
 	}
 }
+
+func TestIsOverride(t *testing.T) {
+	for name, want := range map[string]bool{
+		"override.tf":           true,
+		"main_override.tf":      true,
+		"main_override.tofu":    true,
+		"override.tf.json":      true,
+		"main_override.tf.json": true,
+		"main.tf":               false,
+		"overrides.tf":          false,
+		// OpenTofu ignores dot-prefixed files.
+		"._override.tf":     false,
+		".main_override.tf": false,
+		"main_override":     false,
+		"main_override.txt": false,
+	} {
+		if got := IsOverride(name); got != want {
+			t.Errorf("IsOverride(%q) = %v, want %v", name, got, want)
+		}
+	}
+}

@@ -164,10 +164,11 @@ def tf_library(name, srcs = None, deps = None, data = None, providers = None, mo
     `../../infra/dns`.
 
     Module calls are resolved offline at build time:
-      - A `module` block's `source` may use local values and variables with
-        defaults (evaluated using defaults alone, or literal strings in modules
-        fetched by `tf_modules.module`). `override` and `*_override` files
-        replace `source` on matching `module` blocks in the same target.
+      - A `module` block's `source` may refer to local values and variables that
+        declare a `default`; variables take their defaults when the manifest is
+        built, and `source` must be a literal string in modules fetched by
+        `tf_modules.module`. `override` and `*_override` files replace `source`
+        on matching `module` blocks in the same target.
       - Relative paths starting with `./` or `../` resolve within the caller's
         own Bazel repository in the work tree and cannot cross into another
         Bazel repository.

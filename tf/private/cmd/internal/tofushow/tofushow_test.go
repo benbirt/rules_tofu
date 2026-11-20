@@ -83,6 +83,10 @@ resource "null_resource" "implied" {}
 
 resource "terraform_data" "builtin" {}
 
+data "http" "implied" {
+  url = "https://example.com"
+}
+
 variable "where" {
   default = "./evaluated"
 }
@@ -128,9 +132,18 @@ module "shadowed" {
 		Providers: []tofushow.Provider{
 			{Source: "example.com/acme/corp"},
 			{Source: "registry.opentofu.org/hashicorp/google"},
+			{Source: "registry.opentofu.org/hashicorp/http"},
 			{Source: "registry.opentofu.org/hashicorp/null"},
 			{Source: "registry.opentofu.org/hashicorp/random", Version: ">= 3.0.0"},
 			{Source: "terraform.io/builtin/terraform"},
+		},
+		LocalNames: map[string]string{
+			"corp":      "example.com/acme/corp",
+			"google":    "registry.opentofu.org/hashicorp/google",
+			"http":      "registry.opentofu.org/hashicorp/http",
+			"null":      "registry.opentofu.org/hashicorp/null",
+			"random":    "registry.opentofu.org/hashicorp/random",
+			"terraform": "terraform.io/builtin/terraform",
 		},
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -189,8 +202,8 @@ func TestReadFiles_Error(t *testing.T) {
 	}
 }
 
-// TF_VAR_* and TF_CLI_ARGS* in the environment are stripped, so variables in
-// `source` still take their defaults.
+// TF_* variables and HOME are isolated, so environment variables, logging and
+// user CLI configuration cannot affect what `tofu show` reports.
 func TestReadFiles_IgnoresEnvironment(t *testing.T) {
 	root := writeTree(t, map[string]string{
 		"main.tf": "variable \"where\" {\n  default = \"./default\"\n}\nmodule \"m\" {\n  source = var.where\n}\n",
@@ -198,6 +211,10 @@ func TestReadFiles_IgnoresEnvironment(t *testing.T) {
 	r := reader(t)
 	t.Setenv("TF_VAR_where", "./from-environment")
 	t.Setenv("TF_CLI_ARGS_show", "-var where=./from-arguments")
+	t.Setenv("TF_LOG", "TRACE")
+	t.Setenv("TF_CLI_CONFIG_FILE", filepath.Join(root, "missing.tofurc"))
+	home := writeTree(t, map[string]string{".tofurc": "not CLI configuration {"})
+	t.Setenv("HOME", home)
 	got, err := r.ReadFiles("", glob(t, root, ""))
 	if err != nil {
 		t.Fatal(err)
@@ -224,8 +241,9 @@ func TestReadFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := &tofushow.Module{
-		Calls:     []tofushow.Call{{Name: "mine", Source: "./mine"}},
-		Providers: []tofushow.Provider{{Source: "registry.opentofu.org/hashicorp/null"}},
+		Calls:      []tofushow.Call{{Name: "mine", Source: "./mine"}},
+		Providers:  []tofushow.Provider{{Source: "registry.opentofu.org/hashicorp/null"}},
+		LocalNames: map[string]string{"null": "registry.opentofu.org/hashicorp/null"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("one file: got %+v, want %+v", got, want)
@@ -273,10 +291,81 @@ func TestParse(t *testing.T) {
 		"no root_module":                   `{"format_version": "2.0"}`,
 		"a call without a source":          `{"root_module": {"module_calls": {"m": {}}}}`,
 		"a provider without a full_name":   `{"provider_config": {"aws": {"name": "aws"}}, "root_module": {}}`,
-		"two constraints for one provider": `{"provider_config": {"aws": {"full_name": "example.com/a/aws", "version_constraint": "1.0.0"}, "aws.west": {"full_name": "example.com/a/aws", "version_constraint": "2.0.0"}}, "root_module": {}}`,
+		"a provider without a name":        `{"provider_config": {"aws": {"full_name": "example.com/a/aws"}}, "root_module": {}}`,
+		"one local name for two providers": `{"provider_config": {"aws": {"name": "aws", "full_name": "example.com/a/aws"}, "aws.west": {"name": "aws", "full_name": "example.com/b/aws"}}, "root_module": {}}`,
+		"two constraints for one provider": `{"provider_config": {"aws": {"name": "aws", "full_name": "example.com/a/aws", "version_constraint": "1.0.0"}, "aws.west": {"name": "aws", "full_name": "example.com/a/aws", "version_constraint": "2.0.0"}}, "root_module": {}}`,
 	} {
 		if _, err := tofushow.Parse([]byte(output)); err == nil || !strings.Contains(err.Error(), "unexpected output") {
 			t.Errorf("%s: got %v, want an \"unexpected output\" error", name, err)
+		}
+	}
+}
+
+// Two local names for one provider share the constraint OpenTofu combines from
+// both entries, and a local name no staged file declares resolves to
+// hashicorp/<name>.
+func TestReadFiles_LocalNames(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"versions.tf": `
+terraform {
+  required_providers {
+    first = {
+      source  = "hashicorp/aws"
+      version = ">= 5.0"
+    }
+    second = {
+      source  = "hashicorp/aws"
+      version = "< 6.0"
+    }
+    posthog = {
+      source = "PostHog/posthog"
+    }
+  }
+}
+`,
+		"main.tf": "provider \"posthog\" {}\n",
+	})
+	r := reader(t)
+	got, err := r.ReadFiles("app", glob(t, root, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := &tofushow.Module{
+		Providers: []tofushow.Provider{
+			{Source: "registry.opentofu.org/hashicorp/aws", Version: ">= 5.0.0, < 6.0.0"},
+			{Source: "registry.opentofu.org/posthog/posthog"},
+		},
+		LocalNames: map[string]string{
+			"aws":     "registry.opentofu.org/hashicorp/aws",
+			"first":   "registry.opentofu.org/hashicorp/aws",
+			"second":  "registry.opentofu.org/hashicorp/aws",
+			"posthog": "registry.opentofu.org/posthog/posthog",
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("whole module: got\n%+v\nwant\n%+v", got, want)
+	}
+
+	got, err = r.ReadFiles("app", []string{filepath.Join(root, "main.tf")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := map[string]string{"posthog": "registry.opentofu.org/hashicorp/posthog"}; !reflect.DeepEqual(got.LocalNames, want) {
+		t.Errorf("without versions.tf: got %+v, want %+v", got.LocalNames, want)
+	}
+}
+
+func TestReadFiles_RejectsBadArguments(t *testing.T) {
+	root := writeTree(t, map[string]string{"main.tf": ``, "terraform.tfvars": ``, "x.auto.tfvars.json": `{}`})
+	r := reader(t)
+	for _, dir := range []string{"/abs", "..", "../up", "a/../b", "a//b", "a/"} {
+		if _, err := r.ReadFiles(dir, []string{filepath.Join(root, "main.tf")}); err == nil || !strings.Contains(err.Error(), "not a clean relative path") {
+			t.Errorf("dir %q: got %v, want an error", dir, err)
+		}
+	}
+	for _, name := range []string{"terraform.tfvars", "x.auto.tfvars.json"} {
+		if _, err := r.ReadFiles("", []string{filepath.Join(root, name)}); err == nil || !strings.Contains(err.Error(), "is a variables file") {
+			t.Errorf("%s: got %v, want an error", name, err)
 		}
 	}
 }

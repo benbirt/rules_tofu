@@ -16,20 +16,38 @@ import (
 // `-tofu=$(rlocationpath //tofu)` are resolved against RUNFILES_DIR or
 // TEST_SRCDIR; under `go test ./tf/private/cmd/...`, pass an absolute
 // -tofu=<path> because `go test` runs each package in its own directory.
+//
+// Reader also makes RUNFILES_DIR and TEST_SRCDIR absolute and clears
+// BUILD_WORKING_DIRECTORY for the test so the //tofu launcher finds its binary
+// and stays in ReadFiles's working directory.
 func Reader(t *testing.T, path string) tofushow.Reader {
 	t.Helper()
 	if path == "" {
 		t.Skip("tofu binary path not set; pass -tofu=<path> or run via bazel test")
 	}
-	if !filepath.IsAbs(path) {
-		for _, name := range []string{"RUNFILES_DIR", "TEST_SRCDIR"} {
-			if dir := os.Getenv(name); dir != "" {
-				path = filepath.Join(dir, path)
-				break
-			}
+	// ReadFiles runs the //tofu launcher in a scratch working directory, where
+	// relative RUNFILES_DIR or TEST_SRCDIR paths would break.
+	resolved := filepath.IsAbs(path)
+	for _, name := range []string{"RUNFILES_DIR", "TEST_SRCDIR"} {
+		dir := os.Getenv(name)
+		if dir == "" {
+			continue
+		}
+		abs, err := filepath.Abs(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv(name, abs)
+		if !resolved {
+			path = filepath.Join(abs, path)
+			resolved = true
 		}
 	}
-	// Reader.ReadFiles runs `tofu` in a temporary working directory.
+	// Under `bazel run` the //tofu launcher would change to this directory.
+	if os.Getenv("BUILD_WORKING_DIRECTORY") != "" {
+		t.Setenv("BUILD_WORKING_DIRECTORY", "")
+	}
+	// Resolve any relative path now, before the test changes working directory.
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		t.Fatal(err)
