@@ -415,34 +415,33 @@ Then `bazel shutdown` so the new startup flags take effect.
   #153; `README.md`, "Strict dependencies"; `strict_deps_*` cases):
   - Stage and read a target's configuration `own_srcs` one directory at a time
     with `tofushow.Reader.ReadFiles`, without any other target's files in that
-    directory, and check every provider local name (`m.LocalNames`, including
-    implied ones, skipping `isBuiltin`) and call (`m.Calls`) OpenTofu reports
+    directory, and check every provider (`m.Providers`, including implied ones,
+    skipping `isBuiltin`) and call (`m.Calls`) OpenTofu reports
     (`TestBuildManifest_StrictDeps`). Never attribute requirements or calls by
     package, whole work-tree directory or HCL source range, and do not inherit
     direct declarations across targets.
-  - When a target's own files leave a provider local name in `m.LocalNames` at
-    the default `registry.opentofu.org/hashicorp/<name>`, resolve it against
-    the whole work-tree directory (`readDir(dir).LocalNames`, the same cached
-    read the walk uses, called only for such names) before checking
-    `--direct-provider` (`TestBuildManifest_StrictDeps`,
-    `TestReadFiles_LocalNames`). This is the one deliberate exception to
-    reading a target's files alone: a `tf_deploy` configuring a non-`hashicorp`
-    provider (e.g. `provider "posthog" {}`) whose `required_providers` sits in
-    a same-package `tf_library` in `deps` would otherwise report
-    `hashicorp/<name>`, and OpenTofu rejects a second `required_providers`
-    entry in the directory. Any other address the target's own files declare
-    stands regardless of other targets' files (such as another target's `.tofu`
-    file), and calls and which local names are used still come from the
-    target's files alone.
-  - Require each target's files in a directory to stand alone (issue #153;
-    `strict_deps_override` in `tests/integration/BUILD.bazel`,
-    `TestBuildManifest_StrictDeps`): an override file (`tfconfig.IsOverride`)
-    must be in the same target as the block it overrides, a `module` `source`
-    referring to a local value or variable needs that declaration in the same
-    target, and a `.tofu` or `.tofu.json` file in another target does not
-    shadow this target's `.tf` or `.tf.json` file during strict deps.
-    `standAloneHint` appends a hint only on `*tofushow.LoadError` when the
-    staged files include an override file, without parsing `tofu`'s output.
+  - Require each target's files in a directory to stand alone with no
+    exceptions (issue #153; `strict_deps_override` in
+    `tests/integration/BUILD.bazel`, `TestBuildManifest_StrictDeps`):
+    - An override file (`tfconfig.IsOverride`) must be in the same target as
+      the block it overrides (`standAloneHint` appends a hint only on
+      `*tofushow.LoadError` when the staged files include an override file,
+      without parsing `tofu`'s output).
+    - A `module` `source` referring to a local value or variable needs that
+      declaration in the same target.
+    - A `.tofu` or `.tofu.json` file in another target does not shadow this
+      target's `.tf` or `.tf.json` file during strict deps.
+    - Never resolve a target's provider local names against the whole
+      work-tree directory: a provider whose `required_providers` sits in
+      another target's file reads as `registry.opentofu.org/hashicorp/<name>`
+      and is checked as such (`TestBuildManifest_StrictDeps`,
+      `TestReadFiles_LocalNames`). If the whole directory should be considered,
+      it should be one target (like `rules_go` compiling a `go_library` from
+      its own `srcs`); users can list the file holding `required_providers` in
+      the `srcs` of every target whose files use the provider. `read[dir]` and
+      `tofushow.Module.LocalNames` feed only `declaredElsewhere` in
+      `missingProviders` (using the walk's cache with no extra `tofu` call),
+      never the check itself.
   - Check only a target's `srcs`, plus `run` blocks in a `tf_test`'s `srcs`,
     against `--direct-provider`, `callable` modules and `dep_dirs`. Do
     not re-check files from `deps` in the root module's directory

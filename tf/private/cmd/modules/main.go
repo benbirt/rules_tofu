@@ -61,18 +61,13 @@
 // targets' files. Each target's files in a directory must stand alone: an
 // override file (tfconfig.IsOverride) must be in the same target as the block
 // it overrides, a `module` `source` referring to a local value or variable
-// needs that declaration in the same target, and a .tofu or .tofu.json file in
-// another target does not shadow this target's .tf or .tf.json file during
-// strict deps. One exception applies to provider local names: when the
-// target's own files resolve a local name to the default
-// registry.opentofu.org/hashicorp/<name>, it is looked up in the whole
-// work-tree directory (including files from deps in that directory), so a
-// target configuring or using a provider declared in a same-package dep's
-// required_providers is checked against that address. Any other address the
-// target's own files declare stands regardless of other targets' files. On
-// tf_test, `run` blocks in test files listed in own_srcs are checked as direct
-// calls; test files from the module under test are not. In checked files, the
-// build also fails on:
+// needs that declaration in the same target, a provider's required_providers
+// entry must be in the same target as the files that use it (otherwise
+// OpenTofu reads the local name as hashicorp/<name>), and a .tofu or
+// .tofu.json file in another target does not shadow this target's .tf or
+// .tf.json file during strict deps. On tf_test, `run` blocks in test files
+// listed in own_srcs are checked as direct calls; test files from the module
+// under test are not. In checked files, the build also fails on:
 //   - a non-built-in provider reported by OpenTofu (in required_providers or
 //     implied by a resource, data source or provider block) with no matching
 //     --direct-provider;
@@ -82,7 +77,10 @@
 //
 // Missing-provider errors name the @tf_providers//<namespace>/<name> label to
 // add to providers, or report that a provider outside registry.opentofu.org
-// cannot be vendored. Built-in providers under terraform.io/builtin/ and
+// cannot be vendored. If the walk already read the directory and another
+// target's file there declares a missing hashicorp/<name> local name under a
+// different address, the error also points to putting that file in this
+// target's srcs. Built-in providers under terraform.io/builtin/ and
 // opentofu.org/builtin/ need no plugin and are skipped.
 //
 // Files from deps are not checked here, whether in --root or in modules
@@ -108,7 +106,6 @@ import (
 	"flag"
 	"fmt"
 	"io/fs"
-	"maps"
 	"os"
 	"path"
 	"path/filepath"
@@ -427,8 +424,8 @@ func buildManifest(reader tofushow.Reader, workTree, root, label string, deps []
 
 	// Check the target's own configuration files directory by directory (no
 	// rule allows configuration in data). ReadFiles stages only this target's
-	// files in each directory, so every call and provider local name OpenTofu
-	// reports belongs to this target (issue #153).
+	// files in each directory, so every call and provider OpenTofu reports
+	// belongs to this target (issue #153).
 	byDir := map[string][]string{}
 	for _, f := range own.srcs {
 		if tfconfig.IsConfigFile(path.Base(f)) {
@@ -442,34 +439,27 @@ func buildManifest(reader tofushow.Reader, workTree, root, label string, deps []
 	}
 	sort.Strings(dirs)
 	var missing []requirement
+	var declaredElsewhere []string
 	for _, dir := range dirs {
 		m, err := reader.ReadFiles(dir, byDir[dir])
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w%s", label, err, standAloneHint(label, err, byDir[dir]))
 		}
-		// Resolve a provider local name against the whole directory only when
-		// the target's files leave it at the default hashicorp/<name>. That
-		// lets a target such as a tf_deploy configure or use a provider
-		// declared in a same-package dep's required_providers without
-		// redeclaring it, which OpenTofu rejects in the same directory. Any
-		// other address the target's own files declare stands regardless of
-		// other targets' files.
-		required := map[string]bool{}
-		for name, source := range m.LocalNames {
-			if source == defaultProviderHost+"/hashicorp/"+name {
-				whole, err := readDir(dir)
-				if err != nil {
-					return nil, err
-				}
-				if declared, ok := whole.LocalNames[name]; ok {
-					source = declared
-				}
+		for _, p := range m.Providers {
+			if !listed[p.Source] && !isBuiltin(p.Source) {
+				missing = append(missing, requirement{dir: dir, provider: p.Source})
 			}
-			required[source] = true
 		}
-		for _, p := range slices.Sorted(maps.Keys(required)) {
-			if !listed[p] && !isBuiltin(p) {
-				missing = append(missing, requirement{dir: dir, provider: p})
+		// For the error message only (never for the check, and without an
+		// extra `tofu` call): if the walk already read the whole directory and
+		// resolved a missing hashicorp/<name> local name to another address,
+		// point out that another target's file declares it there.
+		if whole, ok := read[dir]; ok {
+			for name, source := range m.LocalNames {
+				if declared := whole.LocalNames[name]; declared != "" && declared != source && !listed[source] && source == defaultProviderHost+"/hashicorp/"+name {
+					declaredElsewhere = append(declaredElsewhere, fmt.Sprintf("%q is declared as %s by another target's file in %s; put the file that declares it in the srcs of %s too.",
+						name, displayProvider(declared), displayDir(dir), label))
+				}
 			}
 		}
 		for _, c := range m.Calls {
@@ -479,7 +469,8 @@ func buildManifest(reader tofushow.Reader, workTree, root, label string, deps []
 		}
 	}
 	if len(missing) > 0 {
-		return nil, missingProviders(label, missing)
+		sort.Strings(declaredElsewhere)
+		return nil, missingProviders(label, missing, declaredElsewhere)
 	}
 
 	var unused []string
@@ -546,8 +537,9 @@ func testRuns(workTree, root, testDir string) ([]testRun, error) {
 // missingProviders formats the error for providers that label's srcs require
 // and its providers attribute lacks. It names each
 // @tf_providers//<namespace>/<name> label to add, or reports that rules_tofu
-// cannot vendor providers outside registry.opentofu.org.
-func missingProviders(label string, missing []requirement) error {
+// cannot vendor providers outside registry.opentofu.org, and appends any
+// declaredElsewhere hints for local names declared in another target's file.
+func missingProviders(label string, missing []requirement, declaredElsewhere []string) error {
 	var lines, labels, foreign []string
 	seen := map[string]bool{}
 	for _, m := range missing {
@@ -570,6 +562,7 @@ func missingProviders(label string, missing []requirement) error {
 		advice = append(advice, fmt.Sprintf("rules_tofu can't vendor %s: it only vendors providers from %s.",
 			strings.Join(foreign, ", "), defaultProviderHost))
 	}
+	advice = append(advice, declaredElsewhere...)
 	return fmt.Errorf("%s: its files require these providers, which are not in its providers:\n%s\n%s",
 		label, strings.Join(lines, "\n"), strings.Join(advice, " "))
 }

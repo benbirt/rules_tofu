@@ -1043,12 +1043,12 @@ Add "@tf_providers//hashicorp/null" to the providers of //app.`,
 			want:  "    hashicorp/random, required in \"app\"\n",
 		},
 		{
-			name: "a provider a dep's file in the directory declares is known by that address",
+			name: "a provider declared in the rule's own srcs beside the file that uses it",
 			files: map[string]string{
 				"app/versions.tf": "terraform {\n  required_providers {\n    posthog = { source = \"PostHog/posthog\" }\n  }\n}\n",
 				"app/main.tf":     "provider \"posthog\" {}\nresource \"posthog_dashboard\" \"x\" {}\n",
 			},
-			own: own{srcs: []string{"app/main.tf"}, depDirs: []string{"app"}, providers: []string{"registry.opentofu.org/posthog/posthog"}},
+			own: own{srcs: []string{"app/main.tf", "app/versions.tf"}, providers: []string{"registry.opentofu.org/posthog/posthog"}},
 		},
 		{
 			name: "another target's .tofu file does not change a provider the rule's files declare",
@@ -1059,13 +1059,14 @@ Add "@tf_providers//hashicorp/null" to the providers of //app.`,
 			own: own{srcs: []string{"app/main.tf"}, depDirs: []string{"app"}, providers: []string{"registry.opentofu.org/posthog/posthog"}},
 		},
 		{
-			name: "a provider a dep's file in the directory declares must still be listed",
+			name: "a provider only a dep's file in the directory declares is read as hashicorp/<name>",
 			files: map[string]string{
 				"app/versions.tf": "terraform {\n  required_providers {\n    posthog = { source = \"PostHog/posthog\" }\n  }\n}\n",
 				"app/main.tf":     "provider \"posthog\" {}\nresource \"posthog_dashboard\" \"x\" {}\n",
 			},
-			own:  own{srcs: []string{"app/main.tf"}, depDirs: []string{"app"}},
-			want: "    posthog/posthog, required in \"app\"\nAdd \"@tf_providers//posthog/posthog\" to the providers of //app.",
+			own: own{srcs: []string{"app/main.tf"}, depDirs: []string{"app"}, providers: []string{"registry.opentofu.org/posthog/posthog"}},
+			want: "    hashicorp/posthog, required in \"app\"\n" +
+				`Add "@tf_providers//hashicorp/posthog" to the providers of //app. "posthog" is declared as posthog/posthog by another target's file in "app"; put the file that declares it in the srcs of //app too.`,
 		},
 		{
 			name:  "a generated library is named by its hub label",
