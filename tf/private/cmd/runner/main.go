@@ -29,47 +29,53 @@
 //
 // Trailing arguments after flags are forwarded verbatim to tofu.
 //
-// For plan, apply and destroy, runner performs these steps in order:
-//   - Mirror --work-tree as symlinks into <state-dir>/work, removing the
-//     previous run's lock, .terraform/providers and
-//     .terraform/terraform.tfstate (see rundir.go). The deploy's .plan, .apply
-//     and .destroy share that directory so OpenTofu resolves relative paths
-//     consistently across launchers.
-//   - Copy any --lock-file to .terraform.lock.hcl and --modules-manifest to
-//     .terraform/modules/modules.json in <state-dir>/work/<package-dir>, then
-//     run `tofu init -input=false -get=false -plugin-dir=<plugin-dir>` there
-//     with the variable flags, TF_DATA_DIR set to its .terraform and
-//     TF_PLUGIN_CACHE_DIR unset.
-//   - For apply and destroy without --allow-ephemeral-state, read the backend
-//     recorded in .terraform/terraform.tfstate (see backend.go) and refuse if
-//     the record cannot be read or state is ephemeral: no backend or cloud
-//     block, or a local backend unless path and workspace_dir are both
-//     absolute paths outside --output-root.
-//   - Run `tofu plan -input=false -out=<state-dir>/tfplan` (printing
-//     "rules_tofu: plan saved to <path>" to stdout), `tofu apply -input=false`
-//     or `tofu destroy -input=false`, with the variable flags and any
-//     trailing arguments.
+// For every command, runner prepares a run directory at
+// <base>/work/<package-dir> (see rundir.go). It mirrors --work-tree into
+// <base>/work as real directories and symlinks with absolute targets. In a
+// reused directory it first removes old symlinks, .terraform.lock.hcl,
+// .terraform/providers and .terraform/terraform.tfstate. It copies
+// --modules-manifest to .terraform/modules/modules.json. When the run
+// directory has configuration files, it also copies any --lock-file to
+// .terraform.lock.hcl. When --plugin-dir does not exist, it passes an empty
+// <base>/plugins directory instead. It then runs
+// `tofu init -input=false -get=false -plugin-dir=<dir>` in the run directory
+// with TF_DATA_DIR set to .terraform and TF_PLUGIN_CACHE_DIR unset.
 //
-// Every mode passes --var as -var=<name>=<value> and then --var-file as
-// -var-file=<path>, each in the order given, to both `tofu init` and the
+// Every command passes --var as -var=<name>=<value> and then --var-file as
+// -var-file=<path>, in the order given, to both `tofu init` and the
 // subcommand. Trailing arguments follow them on the subcommand only. A later
 // variable flag overrides an earlier one.
 //
+// Plan, apply and destroy use --state-dir as <base>. Sharing that directory
+// across launchers keeps .terraform/, local state and relative path
+// resolution consistent across runs. After `tofu init`:
+//   - apply and destroy without --allow-ephemeral-state read the backend
+//     recorded in .terraform/terraform.tfstate (see backend.go). They refuse
+//     to run if the record cannot be read or state is ephemeral. State is
+//     ephemeral when there is no backend or cloud block, or when a local
+//     backend's path and workspace_dir are not both absolute paths outside
+//     --output-root.
+//   - plan runs `tofu plan -input=false -out=<state-dir>/tfplan` and prints
+//     "rules_tofu: plan saved to <path>" to stdout. apply and destroy run
+//     `tofu apply -input=false` and `tofu destroy -input=false`.
+//
 // Runner passes no -state, -state-out or -backend-config flags and never
-// rewrites a backend block: OpenTofu owns where state lives. Without a backend
+// rewrites a backend block. OpenTofu owns where state lives. Without a backend
 // or cloud block, state is <state-dir>/work/<package-dir>/terraform.tfstate.
 //
-// For test, runner copies --work-tree into TEST_TMPDIR or a temporary
-// directory, initialises with -backend=false and runs `tofu test` there (see
-// test.go). If a failed destroy leaves errored_test.tfstate behind, runner
-// fails the test even though `tofu test` exits 0. When
+// For test, <base> is a new directory under TEST_TMPDIR (see test.go). When
+// TEST_TMPDIR is unset, <base> is created under TMPDIR and removed on exit
+// unless it holds the only copy of errored_test.tfstate. Runner initialises
+// with -no-color, -backend=false and any -test-directory. It then runs
+// `tofu test -no-color`. If a failed destroy leaves errored_test.tfstate
+// behind, runner fails the test even though `tofu test` exits 0. When
 // TEST_UNDECLARED_OUTPUTS_DIR is set, runner writes tofu-test.json there and
 // copies any errored_test.tfstate into it.
 //
-// For validate, runner copies --work-tree into a temporary directory removed
-// on exit, initialises with -backend=false, runs `tofu validate` there, checks
-// that the root module declares any --var names, and writes --stamp (see
-// validate.go).
+// For validate, <base> is a new directory under TMPDIR and is always removed
+// on exit (see validate.go). Runner initialises quietly with -backend=false
+// and any -test-directory and runs `tofu validate`. It then checks that the
+// root module declares any --var names and writes --stamp.
 //
 // When a tofu subprocess exits non-zero, runner exits with that code unless
 // errored_test.tfstate supersedes it with exit code 1. Unrecognised or
@@ -94,7 +100,7 @@ import (
 var (
 	workTree        = flag.String("work-tree", "", "path to the materialised work tree root")
 	packageDir      = flag.String("package-dir", "", "work-tree-relative directory of the root module; empty for the workspace root package")
-	pluginDir       = flag.String("plugin-dir", "", "absolute path to the vendored provider plugin tree, passed to tofu init via -plugin-dir")
+	pluginDir       = flag.String("plugin-dir", "", "path to the vendored provider plugin tree, passed to tofu init via -plugin-dir; when it does not exist, tofu gets an empty directory instead")
 	vars            = flags.StringList("var", "name=value passed to tofu via -var (repeatable)")
 	varFiles        = flags.StringList("var-file", "path to a .tfvars or .tfvars.json file passed to tofu via -var-file (repeatable)")
 	modulesManifest = flag.String("modules-manifest", "", "the .terraform/modules/modules.json recording every module call, copied into place before tofu init -get=false")
@@ -103,8 +109,8 @@ var (
 	stamp           = flag.String("stamp", "", "for --command=validate, the file to write when validation passes")
 	fetchedModule   = flag.String("fetched-module", "", "for --command=validate of a library generated by tf_modules, its @tf_modules label, named with advice when validation fails")
 
-	stateDir   = flag.String("state-dir", "", "absolute path to the per-deploy state directory; tofu runs in work/<package-dir> beneath it")
-	outputRoot = flag.String("output-root", "", "absolute path to Bazel's output tree (bazel-out); a local backend's state inside it is ephemeral")
+	stateDir   = flag.String("state-dir", "", "path to the per-deploy state directory; tofu runs in work/<package-dir> beneath it")
+	outputRoot = flag.String("output-root", "", "path to Bazel's output tree (bazel-out); a local backend's state inside it is ephemeral")
 
 	allowEphemeralState = flag.Bool("allow-ephemeral-state", false,
 		"permit apply/destroy when state is ephemeral: no backend, or a local backend whose path and workspace_dir are not both absolute paths outside --output-root; "+
@@ -146,26 +152,17 @@ func run() error {
 			return fmt.Errorf("%s is required", name)
 		}
 	}
-	switch *command {
-	case "plan", "apply", "destroy":
-	case "test":
-		return runTest(extraArgs)
-	case "validate":
-		return runValidate(extraArgs)
-	default:
-		return fmt.Errorf(`--command must be "plan", "apply", "destroy", "test" or "validate", got %q`, *command)
-	}
-	if *stateDir == "" {
-		return errors.New("--state-dir is required")
-	}
-	if *outputRoot == "" {
-		return errors.New("--output-root is required")
-	}
-
-	// tofu runs in another directory, so every path handed to it, and every
-	// link into the work tree, must be absolute. The launcher passes absolute
-	// paths; this covers a hand-run runner.
-	for _, p := range append([]*string{workTree, pluginDir, stateDir, outputRoot, tofu}, varFilePtrs()...) {
+	// Make every path flag absolute before running tofu in the run directory
+	// or linking into --work-tree. TofuValidate receives paths relative to
+	// the exec root. That includes a bare filename for --tofu when a custom
+	// toolchain binary lives in the root package. A tf_test launcher run
+	// directly by a relative path passes paths relative to the caller's
+	// working directory.
+	paths := []*string{tofu, workTree, pluginDir, modulesManifest, lockFile, stamp, stateDir, outputRoot}
+	for _, p := range append(paths, varFilePtrs()...) {
+		if *p == "" {
+			continue
+		}
 		abs, err := filepath.Abs(*p)
 		if err != nil {
 			return err
@@ -173,55 +170,46 @@ func run() error {
 		*p = abs
 	}
 
-	srcDir := filepath.Join(*workTree, filepath.FromSlash(*packageDir))
-	if _, err := os.Stat(srcDir); err != nil {
-		return fmt.Errorf("work tree package directory %s: %w", srcDir, err)
+	switch *command {
+	case "plan", "apply", "destroy":
+		return runDeploy(extraArgs)
+	case "test":
+		return runTest(extraArgs)
+	case "validate":
+		return runValidate(extraArgs)
+	default:
+		return fmt.Errorf(`--command must be "plan", "apply", "destroy", "test" or "validate", got %q`, *command)
 	}
-	runRoot := filepath.Join(*stateDir, "work")
-	cwd := filepath.Join(runRoot, filepath.FromSlash(*packageDir))
+}
 
+// runDeploy implements --command=plan, apply and destroy for tf_deploy
+// launchers. A deploy's launchers share one run directory under --state-dir
+// so .terraform/ and local state persist across runs.
+func runDeploy(extraArgs []string) error {
+	if *stateDir == "" {
+		return errors.New("--state-dir is required")
+	}
+	if *outputRoot == "" {
+		return errors.New("--output-root is required")
+	}
+	d, err := prepare(*stateDir)
+	if err != nil {
+		return err
+	}
+	cwd, env := d.cwd, d.env
 	planFile := filepath.Join(*stateDir, "tfplan")
+	varArgs := variableArgs()
 
-	if err := os.MkdirAll(*stateDir, 0o755); err != nil {
-		return fmt.Errorf("create %s: %w", *stateDir, err)
-	}
-	if err := syncRunDir(*workTree, runRoot, cwd); err != nil {
-		return err
-	}
-
-	env := tofuEnv(cwd)
-
-	// Ensure the vendored plugin tree exists even when zero providers are in
-	// scope: the deploy declares no symlinks under <name>.plugins/ in that
-	// case, so the runfiles tree lacks the directory. -plugin-dir overrides
-	// default plugin search paths and prevents runtime registry lookups.
-	if err := os.MkdirAll(*pluginDir, 0o755); err != nil {
-		return fmt.Errorf("create plugin dir %s: %w", *pluginDir, err)
-	}
-	if *lockFile != "" {
-		if err := installLockFile(*lockFile, cwd); err != nil {
-			return err
-		}
-	}
-	if err := installModulesManifest(*modulesManifest, cwd); err != nil {
-		return err
-	}
-	varArgs := variableArgs(*varFiles)
-
-	// Removing the previous backend record above makes tofu init read any
-	// backend or cloud block afresh without `bazel clean`. -reconfigure is not
-	// passed because tofu rejects it when a cloud block is present. The
+	// Removing the previous backend record before init makes tofu read any
+	// backend or cloud block afresh without `bazel clean`. -reconfigure is
+	// not passed because tofu rejects it when a cloud block is present. The
 	// variable flags are passed because backend and cloud blocks may
 	// reference variables.
-	initArgs := append([]string{"init", "-input=false", "-get=false", "-plugin-dir=" + *pluginDir}, varArgs...)
-	if err := runTofu(env, cwd, initArgs...); err != nil {
-		if *lockFile != "" {
-			log.Print("if the provider versions in required_providers changed, run `bazel run @tf_providers//:pin` to update the lock file.")
-		}
+	if err := d.init(os.Stdout, varArgs...); err != nil {
 		if localState := filepath.Join(cwd, defaultStateFile); hasContent(localState) {
 			log.Printf("if tofu needs approval for state migration from %s, in its directory run `tofu init -migrate-state` for a backend block or `tofu init` for a cloud block, or delete that file.", localState)
 		}
-		return fmt.Errorf("tofu init: %w", err)
+		return err
 	}
 
 	// Check the backend recorded by tofu init before mutating infrastructure.
@@ -264,14 +252,13 @@ func hasContent(path string) bool {
 }
 
 // variableArgs returns -var=<v> for each --var flag followed by -var-file=<f>
-// for each path in files. Callers pass files after resolving --var-file paths
-// for tofu's working directory.
-func variableArgs(files []string) []string {
-	args := make([]string, 0, len(*vars)+len(files))
+// for each --var-file flag.
+func variableArgs() []string {
+	args := make([]string, 0, len(*vars)+len(*varFiles))
 	for _, v := range *vars {
 		args = append(args, "-var="+v)
 	}
-	for _, f := range files {
+	for _, f := range *varFiles {
 		args = append(args, "-var-file="+f)
 	}
 	return args

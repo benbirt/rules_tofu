@@ -8,14 +8,14 @@ deploy launchers carry the deploy's stamps in default outputs and runfiles, and
 `tf_test` carries its stamp in runfiles, so targets validate in dependency
 order before dependants, launchers or tests run (issue #143).
 
-`-plugin-dir` is always passed, keeping `tofu init` offline whether or not
+`-plugin-dir` is always passed so `tofu init` stays offline whether or not
 `required_providers` is declared. It points at the sibling plugin tree from
-`materialize_plugin_tree`, or at an empty scratch directory when no providers
-are in scope and the plugin tree has no files.
+`materialize_plugin_tree`, or at an empty directory under `$TMPDIR` when no
+providers are in scope.
 
 When providers come from `tf_providers.from_lock` and the root module has
-configuration files, the runner copies the workspace's lock next to the
-configuration. `materialize` in `work_tree.bzl` rejects `.terraform.lock.hcl`
+configuration files, the runner copies the workspace's lock into the run
+directory. `materialize` in `work_tree.bzl` rejects `.terraform.lock.hcl`
 in the work tree at analysis. `tofu init` then checks both `required_providers`
 constraints and the vendored packages' hashes against the lock.
 
@@ -74,10 +74,11 @@ def tf_init_validate(ctx, work_tree_files, work_tree_root, package_dir, plugin_t
     tofu = ctx.toolchains[TOOLCHAIN_TYPE].tofu
     stamp = ctx.actions.declare_file(ctx.label.name + ".validate.stamp")
 
-    # The runner stages a writable copy of --work-tree in a scratch directory,
-    # reads provider packages in place from --plugin-dir, and writes --stamp
-    # when init and validate pass (see //tf/private/cmd/runner). An empty
-    # test_dir means tests live in package_dir itself, passed as ".".
+    # The runner mirrors --work-tree as symlinks in a temporary directory
+    # under $TMPDIR and reads provider packages in place from --plugin-dir
+    # (see //tf/private/cmd/runner). It writes --stamp once init and validate
+    # pass in the run directory. An empty test_dir means tests live in
+    # package_dir itself and is passed as ".".
     args = ctx.actions.args()
     args.add("--command=validate")
     args.add("--tofu", tofu.binary)

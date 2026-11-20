@@ -801,12 +801,12 @@ func TestRunner_NoLockFile_RemovesLeftoverLock(t *testing.T) {
 	assertWorkTreeUntouched(t, cmd)
 }
 
-// setupTest builds a `--command=test` invocation, as the launcher a tf_test
-// generates makes it: no --state-dir and no --output-root, a
-// TEST_TMPDIR to copy the work tree into, and a TEST_UNDECLARED_OUTPUTS_DIR.
-// The fake tofu logs its calls and, when FAKE_ERRORED is set, leaves an
-// errored_test.tfstate behind on `test`. It returns the command, the work
-// tree in runfiles, the scratch directory and the outputs directory.
+// setupTest builds a `--command=test` invocation matching a generated tf_test
+// launcher. It sets TEST_TMPDIR and TEST_UNDECLARED_OUTPUTS_DIR and omits
+// --state-dir and --output-root. The fake tofu logs its calls and writes
+// errored_test.tfstate on `test` when FAKE_ERRORED is set. It returns the
+// command, the work tree in runfiles, TEST_TMPDIR, the outputs directory and
+// a reader for recorded tofu calls.
 func setupTest(t *testing.T) (cmd *exec.Cmd, workTree, scratch, outputs string, invocations func() []invocation) {
 	t.Helper()
 	bin := runnerBin(t)
@@ -867,7 +867,7 @@ func setupTest(t *testing.T) (cmd *exec.Cmd, workTree, scratch, outputs string, 
 		"--modules-manifest="+modulesManifest,
 		"--command=test",
 		"--test-dir=tests",
-		"--var-file=mypkg/test.tfvars",
+		"--var-file="+filepath.Join(workTree, "mypkg", "test.tfvars"),
 		"--var=name=a b",
 	)
 	cmd.Env = append(os.Environ(),
@@ -878,12 +878,23 @@ func setupTest(t *testing.T) (cmd *exec.Cmd, workTree, scratch, outputs string, 
 	return cmd, workTree, scratch, outputs, invocations
 }
 
-// `--command=test` copies the work tree into TEST_TMPDIR, initialises it
-// offline with -backend=false and -test-directory, and runs `tofu test` there
-// with the JSON log in the outputs. Both commands receive -var and -var-file,
-// with relative var files resolved into the copy. Trailing arguments go to
+// testRunDir returns the <TEST_TMPDIR>/rules_tofu-test-*/work directory
+// created by a `--command=test` run.
+func testRunDir(t *testing.T, scratch string) string {
+	t.Helper()
+	dirs, err := filepath.Glob(filepath.Join(scratch, "rules_tofu-test-*", "work"))
+	if err != nil || len(dirs) != 1 {
+		t.Fatalf("run directories under %s = %v (err=%v), want one", scratch, dirs, err)
+	}
+	return dirs[0]
+}
+
+// `--command=test` mirrors the work tree as symlinks under TEST_TMPDIR. In
+// the run directory there it runs `tofu init` offline with -backend=false and
+// -test-directory. It then runs `tofu test` with -json-into in the undeclared
+// outputs. Both commands receive -var and -var-file. Trailing arguments go to
 // `tofu test` last. The runfiles work tree is left untouched.
-func TestRunner_Test_InitsAndTestsACopy(t *testing.T) {
+func TestRunner_Test_InitsAndTestsALinkedTree(t *testing.T) {
 	cmd, workTree, scratch, outputs, invocations := setupTest(t)
 	cmd.Args = append(cmd.Args, "--", "-verbose")
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -893,10 +904,10 @@ func TestRunner_Test_InitsAndTestsACopy(t *testing.T) {
 	if len(invs) != 2 {
 		t.Fatalf("got %d tofu invocations, want init then test: %+v", len(invs), invs)
 	}
-	copyPkg := filepath.Join(scratch, "rules_tofu.work", "mypkg")
+	runPkg := filepath.Join(testRunDir(t, scratch), "mypkg")
 	// The fake tofu logs $(pwd), a resolved path: on macOS /var is a symlink
 	// to /private/var.
-	wantCwd, err := filepath.EvalSymlinks(copyPkg)
+	wantCwd, err := filepath.EvalSymlinks(runPkg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -912,7 +923,7 @@ func TestRunner_Test_InitsAndTestsACopy(t *testing.T) {
 	if !init.hasArgWithPrefix("-plugin-dir=") {
 		t.Errorf("init lacks -plugin-dir: %v", init.args)
 	}
-	varArgs := []string{"-var=name=a b", "-var-file=" + filepath.Join(scratch, "rules_tofu.work", "mypkg", "test.tfvars")}
+	varArgs := []string{"-var=name=a b", "-var-file=" + filepath.Join(workTree, "mypkg", "test.tfvars")}
 	if got := init.args[len(init.args)-len(varArgs):]; !reflect.DeepEqual(got, varArgs) {
 		t.Errorf("init args end %q, want %q", got, varArgs)
 	}
@@ -921,24 +932,26 @@ func TestRunner_Test_InitsAndTestsACopy(t *testing.T) {
 	if !reflect.DeepEqual(test.args, wantTest) {
 		t.Errorf("test args = %q, want %q", test.args, wantTest)
 	}
-	// The copy holds the sources' contents and the manifest. The runfiles
-	// tree is untouched.
-	if data, err := os.ReadFile(filepath.Join(copyPkg, "tests", "t.tftest.hcl")); err != nil || string(data) != "# mypkg/tests/t.tftest.hcl\n" {
-		t.Errorf("copied test file = %q, %v", data, err)
+	// The run directory links each work-tree file and holds a regular
+	// manifest file. The runfiles tree is untouched.
+	for _, f := range []string{"main.tf", "tests/t.tftest.hcl", "test.tfvars"} {
+		assertLink(t, filepath.Join(runPkg, f), filepath.Join(workTree, "mypkg", f))
 	}
-	for _, f := range []string{".terraform/modules/modules.json", "main.tf"} {
-		if _, err := os.Stat(filepath.Join(copyPkg, f)); err != nil {
-			t.Errorf("copy lacks %s: %v", f, err)
-		}
+	if data, err := os.ReadFile(filepath.Join(runPkg, "tests", "t.tftest.hcl")); err != nil || string(data) != "# mypkg/tests/t.tftest.hcl\n" {
+		t.Errorf("linked test file = %q, %v", data, err)
+	}
+	if info, err := os.Lstat(filepath.Join(runPkg, ".terraform", "modules", "modules.json")); err != nil || !info.Mode().IsRegular() {
+		t.Errorf("the manifest is not a regular file in the run directory: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(workTree, "mypkg", ".terraform")); !os.IsNotExist(err) {
 		t.Errorf("runfiles work tree gained .terraform: err=%v", err)
 	}
 }
 
-// The lock goes into the copy of a root module that has configuration, and
-// not into one that has none: `tofu init` does nothing in such a directory,
-// and a lock left there is held against a plugin cache init never filled.
+// The lock is copied into the run directory only when the root module has
+// configuration. In an empty root module `tofu init` installs no providers.
+// Leaving the lock there would fail validation and tests against an empty
+// .terraform/providers directory.
 func TestRunner_Test_LockOnlyWithConfiguration(t *testing.T) {
 	for name, empty := range map[string]bool{"configuration": false, "an empty root": true} {
 		t.Run(name, func(t *testing.T) {
@@ -956,7 +969,7 @@ func TestRunner_Test_LockOnlyWithConfiguration(t *testing.T) {
 			if out, err := cmd.CombinedOutput(); err != nil {
 				t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
 			}
-			_, err := os.Stat(filepath.Join(scratch, "rules_tofu.work", "mypkg", ".terraform.lock.hcl"))
+			_, err := os.Stat(filepath.Join(testRunDir(t, scratch), "mypkg", ".terraform.lock.hcl"))
 			if empty && !os.IsNotExist(err) {
 				t.Errorf("an empty root module was given the lock: err=%v", err)
 			}
@@ -967,9 +980,9 @@ func TestRunner_Test_LockOnlyWithConfiguration(t *testing.T) {
 	}
 }
 
-// With no providers in scope the plugin tree is absent from runfiles: tofu
-// gets an empty directory under TEST_TMPDIR, and nothing is created in the
-// runfiles tree.
+// When no providers are in scope, the plugin tree is absent from runfiles.
+// tofu receives an empty fallback directory under TEST_TMPDIR. Nothing is
+// created in runfiles.
 func TestRunner_Test_MissingPluginDirFallsBack(t *testing.T) {
 	cmd, workTree, scratch, _, invocations := setupTest(t)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -986,7 +999,7 @@ func TestRunner_Test_MissingPluginDirFallsBack(t *testing.T) {
 			got = strings.TrimPrefix(a, "-plugin-dir=")
 		}
 	}
-	if want := filepath.Join(scratch, "rules_tofu.plugins"); got != want {
+	if want := filepath.Join(filepath.Dir(testRunDir(t, scratch)), "plugins"); got != want {
 		t.Errorf("-plugin-dir = %q, want %q", got, want)
 	}
 	if info, err := os.Stat(got); err != nil || !info.IsDir() {
@@ -1025,6 +1038,44 @@ func TestRunner_Test_ErroredStateFails(t *testing.T) {
 	}
 	if _, err := os.Stat(kept); err != nil {
 		t.Errorf("errored state not kept: %v", err)
+	}
+}
+
+// A launcher run directly has neither TEST_TMPDIR nor
+// TEST_UNDECLARED_OUTPUTS_DIR. Without errored_test.tfstate, the temporary
+// directory under TMPDIR is removed on exit. When errored_test.tfstate is
+// written, the directory is kept so the path named in the error exists.
+func TestRunner_Test_ErroredStateKeptWithoutOutputs(t *testing.T) {
+	cmd, _, _, _, _ := setupTest(t)
+	tmp := t.TempDir()
+	var env []string
+	for _, e := range cmd.Env {
+		if !strings.HasPrefix(e, "TEST_TMPDIR=") && !strings.HasPrefix(e, "TEST_UNDECLARED_OUTPUTS_DIR=") && !strings.HasPrefix(e, "TMPDIR=") {
+			env = append(env, e)
+		}
+	}
+	cmd.Env = append(env, "TMPDIR="+tmp, "FAKE_ERRORED=1")
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("runner succeeded despite errored_test.tfstate:\n%s", out)
+	}
+	_, kept, found := strings.Cut(strings.TrimSpace(string(out)), "state file kept at ")
+	if !found || !strings.HasPrefix(kept, tmp) {
+		t.Fatalf("output = %q, want the errored-state message naming a file under %s", out, tmp)
+	}
+	if _, err := os.Stat(kept); err != nil {
+		t.Errorf("the errored state the message names was removed: %v", err)
+	}
+
+	// A run that leaves no errored state removes its directory.
+	pass := exec.Command(cmd.Args[0], cmd.Args[1:]...)
+	other := t.TempDir()
+	pass.Env = append(env, "TMPDIR="+other)
+	if out, err := pass.CombinedOutput(); err != nil {
+		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
+	}
+	if left, err := os.ReadDir(other); err != nil || len(left) != 0 {
+		t.Errorf("TMPDIR holds %v after the run (err=%v), want nothing", left, err)
 	}
 }
 
@@ -1091,8 +1142,9 @@ func TestRunner_Env_DataDirAndNoPluginCache(t *testing.T) {
 	}
 }
 
-// The same holds in test mode, where init passes -backend=false without
-// -reconfigure and sets TF_DATA_DIR to the copy's .terraform.
+// In test mode, tofu runs with TF_DATA_DIR set to the run directory's
+// .terraform and TF_PLUGIN_CACHE_DIR unset. `tofu init` passes -backend=false
+// without -reconfigure.
 func TestRunner_Test_EnvAndInitFlags(t *testing.T) {
 	cmd, _, scratch, _, invocations := setupTest(t)
 	cmd.Env = append(cmd.Env, "TF_DATA_DIR=/bogus/data", "TF_PLUGIN_CACHE_DIR=/bogus/cache")
@@ -1106,7 +1158,7 @@ func TestRunner_Test_EnvAndInitFlags(t *testing.T) {
 	if init := invs[0]; init.hasArg("-reconfigure") || !init.hasArg("-backend=false") {
 		t.Errorf("test-mode init args = %v, want -backend=false and no -reconfigure", init.args)
 	}
-	want := filepath.Join(scratch, "rules_tofu.work", "mypkg", ".terraform")
+	want := filepath.Join(testRunDir(t, scratch), "mypkg", ".terraform")
 	for _, inv := range invs {
 		if inv.env["TF_DATA_DIR"] != want {
 			t.Errorf("%s: TF_DATA_DIR = %q, want %q", inv.args[0], inv.env["TF_DATA_DIR"], want)
@@ -1258,6 +1310,9 @@ func TestRunner_RunDir_RelativeFlags(t *testing.T) {
 		t.Fatal(err)
 	}
 	cmd.Args = append(cmd.Args, "--var-file="+addVarFile(map[string]any{"env": "prod"}))
+	if err := os.MkdirAll(argValue(t, cmd, "--plugin-dir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	want := map[string]string{}
 	for i, a := range cmd.Args {
 		for _, name := range []string{"--tofu", "--work-tree", "--plugin-dir", "--state-dir", "--output-root", "--var-file"} {
@@ -1497,9 +1552,8 @@ func TestRunner_LocalBackend_Gate(t *testing.T) {
 }
 
 // A work tree holds files and real directories only. A symlink to a directory
-// is refused by name, by the test's copy and by the run directory's mirror
-// alike: the walks don't descend into one, and following it by hand would
-// never end on a link that leads back to its own parent (issue #89).
+// is refused by name for both tests and deploys (issue #89). WalkDir does not
+// descend into one. Walking one by hand would loop on a link to an ancestor.
 func TestRunner_Test_SymlinkToDirectoryFails(t *testing.T) {
 	cmd, workTree, _, _, _ := setupTest(t)
 	if err := os.Symlink(".", filepath.Join(workTree, "mypkg", "loop")); err != nil {
@@ -1535,54 +1589,115 @@ func assertDirectoryLinkRefused(t *testing.T, cmd *exec.Cmd, rel string) {
 	}
 }
 
-// Bazel's outputs are read-only, so the copy a test runs in is made writable
-// whatever its sources are, and a file that was executable still is: a script
-// a `local-exec` provisioner or an `external` data source runs must run from
-// the copy too.
-func TestRunner_Test_KeepsExecutableBit(t *testing.T) {
+// A test's run directory links to the read-only files in the work tree. An
+// executable script runs through its symlink as a `local-exec` provisioner or
+// `external` data source runs it. Files written beside the script land in the
+// run directory rather than in the work tree or sources.
+func TestRunner_Test_RunsScriptThroughLink(t *testing.T) {
 	cmd, workTree, scratch, _, _ := setupTest(t)
 	sources := filepath.Join(filepath.Dir(workTree), "sources", "mypkg")
-	for name, mode := range map[string]os.FileMode{"run.sh": 0o555, "data.txt": 0o444} {
-		src := filepath.Join(sources, name)
-		if err := os.WriteFile(src, []byte("#!/bin/sh\necho ran > ran.txt\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Chmod(src, mode); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Symlink(src, filepath.Join(workTree, "mypkg", name)); err != nil {
-			t.Fatal(err)
-		}
+	src := filepath.Join(sources, "run.sh")
+	if err := os.WriteFile(src, []byte("#!/bin/sh\necho ran > \"$(dirname \"$0\")/ran.txt\"\n"), 0o555); err != nil {
+		t.Fatal(err)
 	}
-	// The fake tofu runs the script as a provisioner would, from the copy.
+	if err := os.Symlink(src, filepath.Join(workTree, "mypkg", "run.sh")); err != nil {
+		t.Fatal(err)
+	}
 	setFakeTofu(t, cmd, "if [ \"$1\" = test ]; then ./run.sh || exit 1; fi\n")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
 	}
 
-	copyPkg := filepath.Join(scratch, "rules_tofu.work", "mypkg")
-	if _, err := os.Stat(filepath.Join(copyPkg, "ran.txt")); err != nil {
-		t.Errorf("the copied script did not run: %v", err)
+	runPkg := filepath.Join(testRunDir(t, scratch), "mypkg")
+	assertLink(t, filepath.Join(runPkg, "run.sh"), filepath.Join(workTree, "mypkg", "run.sh"))
+	if info, err := os.Lstat(filepath.Join(runPkg, "ran.txt")); err != nil || !info.Mode().IsRegular() {
+		t.Errorf("the script did not write beside its link: %v", err)
 	}
-	for name, wantExec := range map[string]bool{"run.sh": true, "data.txt": false, "main.tf": false} {
-		info, err := os.Stat(filepath.Join(copyPkg, name))
-		if err != nil {
-			t.Fatal(err)
-		}
-		mode := info.Mode().Perm()
-		if gotExec := mode&0o100 != 0; gotExec != wantExec {
-			t.Errorf("%s copied with mode %o, want executable = %v", name, mode, wantExec)
-		}
-		if mode&0o200 == 0 {
-			t.Errorf("%s copied with mode %o, want it writable", name, mode)
+	for _, dir := range []string{sources, filepath.Join(workTree, "mypkg")} {
+		if _, err := os.Lstat(filepath.Join(dir, "ran.txt")); !os.IsNotExist(err) {
+			t.Errorf("the script wrote into %s: err=%v", dir, err)
 		}
 	}
 }
 
+// A tf_test launcher run directly by a relative path passes paths relative to
+// the caller's working directory. The runner resolves them to absolute paths
+// before passing them to tofu in the run directory or using them as symlink
+// targets.
+func TestRunner_Test_RelativeFlags(t *testing.T) {
+	cmd, workTree, scratch, _, invocations := setupTest(t)
+	base, err := filepath.EvalSymlinks(filepath.Dir(workTree))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Write the lock under setupTest's unresolved directory so filepath.Rel
+	// below computes every flag against the same root. On macOS /var links
+	// to /private/var.
+	lock := filepath.Join(filepath.Dir(workTree), "lock.hcl")
+	if err := os.WriteFile(lock, []byte("# lock\n"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	pluginDir := argValue(t, cmd, "--plugin-dir")
+	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd.Args = append(cmd.Args, "--lock-file="+lock)
+	for i, a := range cmd.Args {
+		for _, name := range []string{"--tofu", "--work-tree", "--plugin-dir", "--modules-manifest", "--lock-file", "--var-file"} {
+			if v, ok := strings.CutPrefix(a, name+"="); ok {
+				rel, err := filepath.Rel(filepath.Dir(workTree), v)
+				if err != nil {
+					t.Fatal(err)
+				}
+				cmd.Args[i] = name + "=" + rel
+			}
+		}
+	}
+	cmd.Dir = base
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
+	}
+	invs := invocations()
+	if len(invs) != 2 {
+		t.Fatalf("got %d tofu invocations, want init then test: %+v", len(invs), invs)
+	}
+	for _, arg := range []string{"-plugin-dir=" + filepath.Join(base, "work", "mypkg.plugins"), "-var-file=" + filepath.Join(base, "work", "mypkg", "test.tfvars")} {
+		if !invs[0].hasArg(arg) {
+			t.Errorf("init args = %v, want %s", invs[0].args, arg)
+		}
+	}
+	runPkg := filepath.Join(testRunDir(t, scratch), "mypkg")
+	assertLink(t, filepath.Join(runPkg, "main.tf"), filepath.Join(base, "work", "mypkg", "main.tf"))
+	if _, err := os.Stat(filepath.Join(runPkg, ".terraform.lock.hcl")); err != nil {
+		t.Errorf("the lock was not installed: %v", err)
+	}
+}
+
+// When no providers are in scope, a deploy's plugin tree is absent from
+// runfiles. tofu receives an empty fallback directory under --state-dir.
+// Nothing is created in runfiles.
+func TestRunner_MissingPluginDirFallsBack(t *testing.T) {
+	cmd, _, invocations := setup(t)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
+	}
+	pluginDir := argValue(t, cmd, "--plugin-dir")
+	if _, err := os.Stat(pluginDir); !os.IsNotExist(err) {
+		t.Errorf("plugin dir %s was created: err=%v", pluginDir, err)
+	}
+	want := filepath.Join(argValue(t, cmd, "--state-dir"), "plugins")
+	if init := invocations()[0]; !init.hasArg("-plugin-dir=" + want) {
+		t.Errorf("init args = %v, want -plugin-dir=%s", init.args, want)
+	}
+	if info, err := os.Stat(want); err != nil || !info.IsDir() {
+		t.Errorf("fallback plugin dir: %v", err)
+	}
+}
+
 // setupValidate builds a `--command=validate` invocation matching the
-// TofuValidate action: all flag paths are relative to the runner's working
-// directory, including a bare filename for --tofu, and TMPDIR is set to a
-// directory under dir. The fake tofu prints a progress line on stdout and
+// TofuValidate action. Every flag path is relative to the runner's working
+// directory, including a bare filename for --tofu. TMPDIR points to a
+// subdirectory of dir. The fake tofu prints a progress line on stdout and
 // exits 3 on the subcommand named by FAKE_FAIL. It returns the command, its
 // working directory, the stamp path and a reader for recorded tofu calls.
 func setupValidate(t *testing.T) (cmd *exec.Cmd, dir, stamp string, invocations func() []invocation) {
@@ -1647,11 +1762,12 @@ func setupValidate(t *testing.T) (cmd *exec.Cmd, dir, stamp string, invocations 
 	return cmd, dir, filepath.Join(dir, "validate.stamp"), invocations
 }
 
-// `--command=validate` resolves paths relative to its working directory and
-// stages a copy of the work tree under TMPDIR. It runs `tofu init` with stdout
-// discarded, `tofu validate` with stdout kept and `tofu show -json -module=.`
-// to check --var names, then writes --stamp, removes the scratch directory and
-// leaves the input work tree untouched.
+// `--command=validate` resolves relative flag paths against its working
+// directory and mirrors the work tree as symlinks under TMPDIR. In the run
+// directory there it runs `tofu init` with stdout discarded, `tofu validate`
+// with stdout kept and `tofu show -json -module=.` to check --var names. It
+// then writes --stamp, removes the temporary directory under TMPDIR and
+// leaves the work tree untouched.
 func TestRunner_Validate_InitsValidatesAndStamps(t *testing.T) {
 	cmd, dir, stamp, invocations := setupValidate(t)
 	cmd.Args = append(cmd.Args, "--lock-file=lock/.terraform.lock.hcl", "--test-dir=tests", "--var-file=sources/main.tf", "--var=name=a b", "--", "-json")
@@ -1749,7 +1865,7 @@ func TestRunner_Validate_FailureAdvice(t *testing.T) {
 	const (
 		pin     = "bazel run @tf_providers//:pin"
 		modules = "modules are never fetched"
-		empty   = "`tofu init` installs no providers for one"
+		empty   = "so `tofu init` installs no providers"
 		fetched = "fetched module @tf_modules//net failed validation"
 	)
 	withCalls := `{"Modules":[{"Key":"","Source":"","Dir":"."},{"Key":"net","Source":"./net","Dir":"net"}]}`
@@ -1768,7 +1884,7 @@ func TestRunner_Validate_FailureAdvice(t *testing.T) {
 		{name: "init of a fetched module", fail: "init", flags: []string{"--fetched-module=@tf_modules//net"}, want: []string{fetched}},
 		{name: "validate", fail: "validate", flags: []string{"--lock-file=lock/.terraform.lock.hcl"}, manifest: withCalls, want: []string{"validate broke"}, notWant: []string{pin, modules, empty, fetched}},
 		{name: "validate of a fetched module", fail: "validate", flags: []string{"--fetched-module=@tf_modules//net"}, want: []string{fetched}},
-		{name: "validate of a test of an empty root", fail: "validate", flags: []string{"--test-dir=."}, emptyRoot: true, want: []string{"the root module, mypkg, has no configuration file", empty}},
+		{name: "validate of a test of an empty root", fail: "validate", flags: []string{"--test-dir=."}, emptyRoot: true, want: []string{"the root module (mypkg) has no configuration files", empty}},
 		{name: "validate of an empty root", fail: "validate", emptyRoot: true, notWant: []string{empty}},
 		{name: "validate of a test", fail: "validate", flags: []string{"--test-dir=tests"}, notWant: []string{empty}},
 	} {

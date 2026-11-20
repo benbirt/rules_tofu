@@ -8,50 +8,37 @@ import (
 	"io"
 	"log"
 	"os"
-	"path/filepath"
 	"strings"
 )
 
 // runValidate implements --command=validate for the TofuValidate build action
-// of tf_library, tf_deploy and tf_test. It stages the work tree in a temporary
-// directory removed on exit (see stage), runs `tofu init` and `tofu validate`
-// there, checks that the root module declares every --var name, and writes
-// --stamp. Both `tofu init` and `tofu validate` receive the -var and -var-file
-// flags. `tofu validate` also receives extraArgs.
+// of tf_library, tf_deploy and tf_test. It prepares a run directory in a
+// temporary directory under TMPDIR and removes it on exit. It runs
+// `tofu init -backend=false` and `tofu validate` there. It then checks that
+// the root module declares every --var name and writes --stamp. Both commands
+// receive the -var and -var-file flags. `tofu validate` also receives
+// extraArgs.
 func runValidate(extraArgs []string) error {
 	if *stamp == "" {
 		return errors.New("--stamp is required")
 	}
-	// Bazel passes paths relative to the exec root, while tofu runs in the
-	// staged directory. That includes --tofu, which is a bare filename when
-	// a custom toolchain's binary lives in the root package.
-	paths := append([]*string{tofu, workTree, pluginDir, modulesManifest, stamp}, varFilePtrs()...)
-	if *lockFile != "" {
-		paths = append(paths, lockFile)
-	}
-	for _, p := range paths {
-		abs, err := filepath.Abs(*p)
-		if err != nil {
-			return err
-		}
-		*p = abs
-	}
-
-	// Create and remove our own directory under TMPDIR: only linux-sandbox
-	// gives each action a fresh TMPDIR (issue #90).
+	// Create and remove a dedicated directory under TMPDIR because only
+	// linux-sandbox gives each action a fresh TMPDIR (issue #90).
 	scratch, err := os.MkdirTemp("", "rules_tofu-validate-")
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(scratch)
-	s, err := stage(scratch)
+	d, err := prepare(scratch)
 	if err != nil {
 		return err
 	}
+	dirArgs := testDirArgs()
+	varArgs := variableArgs()
 
 	// Discard `tofu init` stdout so passing builds stay quiet; errors go to
 	// stderr.
-	if err := s.init(io.Discard); err != nil {
+	if err := d.init(io.Discard, append(append([]string{"-backend=false"}, dirArgs...), varArgs...)...); err != nil {
 		if calls, readErr := hasModuleCalls(*modulesManifest); readErr == nil && calls {
 			log.Print("modules are never fetched, so ignore any advice to run `tofu init`: each module call's source and version must match the tf_library in deps that provides it (its module_source and module_version).")
 		}
@@ -59,24 +46,24 @@ func runValidate(extraArgs []string) error {
 		return err
 	}
 
-	args := append([]string{"validate"}, s.dirArgs...)
-	args = append(args, s.varArgs...)
+	args := append([]string{"validate"}, dirArgs...)
+	args = append(args, varArgs...)
 	args = append(args, extraArgs...)
-	if err := runTofu(s.env, s.cwd, args...); err != nil {
+	if err := runTofu(d.env, d.cwd, args...); err != nil {
 		// For an empty root module, `tofu init` installs no providers
 		// even when modules loaded by a tf_test's run blocks require
 		// them.
-		if !s.hasConfig && *testDir != "" {
+		if !d.hasConfig && *testDir != "" {
 			root := *packageDir
 			if root == "" {
 				root = "the workspace root"
 			}
-			log.Printf("the root module, %s, has no configuration file, and `tofu init` installs no providers for one. If a provider is reported missing, give the root module a file whose `required_providers` names it.", root)
+			log.Printf("the root module (%s) has no configuration files, so `tofu init` installs no providers. If a provider is reported missing, declare it in `required_providers` in a file there.", root)
 		}
 		fetchedModuleAdvice()
 		return fmt.Errorf("tofu validate: %w", err)
 	}
-	if err := checkVarsDeclared(s); err != nil {
+	if err := checkVarsDeclared(d); err != nil {
 		return err
 	}
 	return os.WriteFile(*stamp, nil, 0o644)
@@ -87,12 +74,12 @@ func runValidate(extraArgs []string) error {
 // passed, it does nothing. `tofu validate` accepts an undeclared -var that
 // `tofu plan`, `apply` and `destroy` reject. Querying tofu leaves
 // configuration parsing to OpenTofu.
-func checkVarsDeclared(s *staged) error {
+func checkVarsDeclared(d *runDir) error {
 	if len(*vars) == 0 {
 		return nil
 	}
 	var out bytes.Buffer
-	if err := runTofuTo(&out, s.env, s.cwd, "show", "-json", "-module=."); err != nil {
+	if err := runTofuTo(&out, d.env, d.cwd, "show", "-json", "-module=."); err != nil {
 		return fmt.Errorf("tofu show -module: %w", err)
 	}
 	var config struct {

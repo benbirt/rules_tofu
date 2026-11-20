@@ -727,11 +727,12 @@ downloads instead.
 `var_files` at workspace-relative paths and external repositories under
 `external/<repository>/`. Both rules symlink exec-platform provider
 packages into `bazel-bin/<pkg>/<name>.plugins/` and write the module manifest to
-`bazel-bin/<pkg>/<name>.modules.json`. `bazel build` copies the work tree into a
-scratch directory, installs that manifest at
-`<pkg>/.terraform/modules/modules.json`, and runs
-`tofu init -backend=false -get=false -plugin-dir=... && tofu validate` as a
-cached action, writing the empty file `bazel-bin/<pkg>/<name>.validate.stamp`.
+`bazel-bin/<pkg>/<name>.modules.json`. `bazel build` mirrors the work tree as
+symlinks into a temporary directory removed on exit. It installs the manifest
+at `<pkg>/.terraform/modules/modules.json` there and runs
+`tofu init -backend=false -get=false -plugin-dir=... && tofu validate` in
+`<pkg>` as a cached action. Passing validation writes the empty file
+`bazel-bin/<pkg>/<name>.validate.stamp`.
 A `tf_deploy` with `var_files` also writes `<name>.var_files_check.stamp` after
 checking for duplicate variable keys. Those stamps are the target's only
 default outputs; the work tree and plugin tree are built as inputs to
@@ -753,8 +754,9 @@ unsets `TF_PLUGIN_CACHE_DIR`. It then runs `tofu init` followed by the `tofu`
 command.
 
 `tf_test` validates `module` and `srcs` during `bazel build`. During
-`bazel test`, it copies the work tree into `$TEST_TMPDIR`, installs
-`<name>.modules.json`, and runs `tofu init -backend=false` followed by
+`bazel test` it mirrors the work tree as symlinks into a new directory under
+`$TEST_TMPDIR`. In `module`'s package directory there it installs
+`<name>.modules.json` and runs `tofu init -backend=false` followed by
 `tofu test`. Both phases pass `-test-directory` when `srcs` is in a
 subdirectory of `module`'s package. Validation, deploy launchers and `tf_test`
 pass any `-var` and `-var-file` flags to both `tofu init` and the command that

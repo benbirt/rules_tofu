@@ -167,12 +167,13 @@ def _tf_test_impl(ctx):
     work_tree_root = "{}/{}.work".format(package_rel, ctx.label.name)
     plugin_tree_root = "{}/{}.plugins".format(package_rel, ctx.label.name)
 
-    # Var file paths are work-tree-relative because the runner copies the
-    # tree into $TEST_TMPDIR.
-    flags = var_flags + ["--var-file=" + _work_tree_path(f) for f in var_files]
+    flag_lines = "".join(["    {} \\\n".format(_shell_quote(flag)) for flag in var_flags])
+    flag_lines += "".join([
+        "    --var-file=\"$R\"/{} \\\n".format(_shell_quote(work_tree_root + "/" + _work_tree_path(f)))
+        for f in var_files
+    ])
     if test_dir:
-        flags.append("--test-dir=" + test_dir)
-    flag_lines = "".join(["    {} \\\n".format(_shell_quote(flag)) for flag in flags])
+        flag_lines += "    {} \\\n".format(_shell_quote("--test-dir=" + test_dir))
     if lock:
         flag_lines += "    --lock-file=\"$R\"/{} \\\n".format(_shell_quote(_runfiles_path(workspace_name, lock)))
 
@@ -292,10 +293,11 @@ def tf_test(name, srcs, module, deps = None, data = None, providers = None, var_
     See [Tests](https://github.com/benbirt/rules_tofu#tests).
 
     `:<name>` is the only generated target. `bazel build` validates `module`
-    and `srcs` after `module` and `deps` pass their checks. `bazel test` waits
-    for validation, then copies the work tree into `$TEST_TMPDIR` and runs
-    `tofu init -backend=false` and `tofu test` offline against the vendored
-    providers.
+    and `srcs` after `module` and `deps` pass their checks. `bazel test`
+    mirrors the work tree as symlinks into a new directory under
+    `$TEST_TMPDIR` after validation passes. It then runs
+    `tofu init -backend=false` and `tofu test` offline in `module`'s package
+    directory there against the vendored providers.
 
     Args:
       name: Target name.

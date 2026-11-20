@@ -25,7 +25,11 @@
 #      app_test's runfiles manifest lists app_test.validate.stamp, ordering
 #      validation before tofu test (issue #143). `bazel test //empty:test` runs
 #      a tf_test of an empty root module whose run block loads the library
-#      beside it (issue #119).
+#      beside it (issue #119). `bazel test //provisioner:test` applies a module
+#      whose local-exec provisioner runs a script from data that writes beside
+#      itself in the run directory. Running `bazel-bin/provisioner/test.sh`
+#      directly by a relative path exercises the same test without Bazel's test
+#      environment. Neither run writes into the source tree.
 #   6. `bazel run //app:app.apply` applies a deploy with no backend block and
 #      allow_ephemeral_state = True, writing terraform.tfstate in the run
 #      directory and leaving no .terraform/terraform.tfstate backend record.
@@ -112,6 +116,12 @@ grep -q -F 'app/app_test.validate.stamp' "$(bazel info bazel-bin)/app/app_test.s
   fail "app_test.sh.runfiles_manifest lacks app/app_test.validate.stamp"
 # //empty:test has an empty root module; its run block loads ../nested.
 bazel test //empty:test --test_output=errors >&2 || fail "the test of an empty root module failed"
+# hello.sh runs through its symlink and writes ran.txt in the run directory.
+bazel test //provisioner:test --test_output=errors >&2 || fail "the test of a module with a provisioner script failed"
+# Unset this driver's Bazel test variables so the launcher resolves $0.runfiles
+# from its own relative path.
+env -u TEST_SRCDIR -u TEST_TMPDIR -u TEST_UNDECLARED_OUTPUTS_DIR bazel-bin/provisioner/test.sh >&2 || fail "the tf_test launcher failed when run directly by a relative path"
+[[ ! -e provisioner/ran.txt ]] || fail "the provisioner script wrote into the source tree"
 
 echo "--- 6. apply with no backend block ---" >&2
 out="$(bazel run //app:app.apply -- -auto-approve 2>&1)" || fail "the apply with no backend block failed: ${out}"
