@@ -380,8 +380,10 @@ _provider_tag = tag_class(
 _from_lock_tag = tag_class(
     doc = "Pin providers from a `.terraform.lock.hcl` updated by " +
           "`bazel run @tf_providers//:pin`, Renovate or Dependabot. Entries must target " +
-          "`registry.opentofu.org`; locks written by `terraform` against " +
-          "`registry.terraform.io` are rejected. `pin` reads the configuration source " +
+          "`registry.opentofu.org`: those written by `terraform` against " +
+          "`registry.terraform.io` fail a build only when a target uses them, because " +
+          "their checksums differ. Running `pin` rewrites the lock. " +
+          "`pin` reads the configuration source " +
           "files of each `tf_library`, `tf_deploy` and `tf_test` target in the workspace " +
           "and their external `deps` with OpenTofu, locking every provider they declare or " +
           "imply. A fetched module's examples are in no target, so they are left out. By " +

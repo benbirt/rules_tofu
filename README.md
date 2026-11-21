@@ -288,10 +288,10 @@ terraform {
 }
 ```
 
-Lock files written by `terraform` against `registry.terraform.io` are rejected
-until regenerated with `pin`. When `required_providers` drifts from the lock,
-`bazel build` fails and points to `pin`. Running `pin` works even while a target
-names a provider not yet in the lock.
+Entries written by `terraform` against `registry.terraform.io` fail a build only
+when a target uses them, because their checksums differ. `pin` rewrites the lock
+against `registry.opentofu.org`. Running `pin` works even while a target names a
+provider not yet in the lock.
 
 #### Keeping the lock up to date
 
