@@ -2,17 +2,13 @@ name: Pin new OpenTofu releases
 
 # Weekly, pins every unpinned stable OpenTofu release above the floor in
 # toolchain/versions.bzl via `bazel run //tools:update_versions`, which verifies
-# the cosign signature on each release's SHA256SUMS, and opens or updates one
-# pull request on the branch below. This is a custom workflow because Dependabot
-# and Renovate cannot run that verification.
+# the cosign signature on each release's SHA256SUMS. Opens or updates one pull
+# request on the branch below, leaving an open pull request alone when nothing
+# new has been released since. This is a custom workflow because Dependabot and
+# Renovate cannot run that verification.
 #
-# Authenticates with the VERSIONS_PR_TOKEN secret, a fine-grained token scoped
-# to this repository with read and write access to Contents and Pull requests.
-# Without it, the workflow falls back to GITHUB_TOKEN. The pull request still
-# opens if "Allow GitHub Actions to create and approve pull requests" is enabled
-# in the repository's Actions settings, but GitHub does not run CI on pushes or
-# pull requests made with GITHUB_TOKEN, so CI must be started by hand, for
-# example by closing and reopening the pull request.
+# Authenticates with VERSIONS_PR_TOKEN; see "Pinning OpenTofu releases" in
+# CONTRIBUTING.md for token scopes and GITHUB_TOKEN fallback behaviour.
 on:
   schedule:
     - cron: "23 4 * * 1"
@@ -49,6 +45,10 @@ jobs:
           pinned="$(sed -n 's/^    "\([0-9][0-9.]*\)": {$/\1/p' toolchain/versions.bzl | sort -V)"
           floor="$(head -n 1 <<<"$pinned")"
           default="$(sed -n 's/^DEFAULT_VERSION = "\(.*\)"$/\1/p' toolchain/versions.bzl)"
+          if [ -z "$floor" ] || [ -z "$default" ]; then
+            echo "::error::Could not read KNOWN_VERSIONS or DEFAULT_VERSION from toolchain/versions.bzl."
+            exit 1
+          fi
           new="$(
             gh api repos/opentofu/opentofu/releases --paginate \
               --jq '.[] | select(.draft == false and .prerelease == false) | .tag_name' |
@@ -93,6 +93,14 @@ jobs:
           OLD_DEFAULT: ${{ steps.find.outputs.default }}
           NEW_DEFAULT: ${{ steps.find.outputs.newest }}
         run: |
+          # An open pull request that already pins the same releases is left
+          # alone, so a weekly run does not force-push it and re-run its CI.
+          pr="$(gh pr list --base main --head "$BRANCH" --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$pr" ] && git fetch --depth=1 origin "$BRANCH" && git diff --quiet FETCH_HEAD -- toolchain/versions.bzl; then
+            echo "Pull request #$pr already pins these releases."
+            exit 0
+          fi
+
           title="chore: pin OpenTofu ${VERSIONS// /, }"
           {
             echo "Pinned in \`toolchain/versions.bzl\` via \`bazel run //tools:update_versions\`, after verifying each release's \`SHA256SUMS\` cosign signature:"
@@ -121,7 +129,6 @@ jobs:
           git commit -m "$title"
           git push --force origin "$BRANCH"
 
-          pr="$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number')"
           if [ -n "$pr" ]; then
             gh pr edit "$pr" --title "$title" --body-file "$RUNNER_TEMP/body.md"
           else

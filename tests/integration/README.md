@@ -115,10 +115,8 @@ once `state_root` points outside `bazel-out`. Because the module manifest
 (`.terraform/terraform.tfstate`) are internal OpenTofu formats and
 `tofu show -json -module` carries no `format_version`, `BUILD.bazel` generates
 one test per version returned by `tested_versions(KNOWN_VERSIONS)` in
-`versions.bzl`: the oldest pinned release and the newest patch of each minor
-release. Those formats change between minor releases rather than patches, so
-running a nested Bazel test for every pinned patch is not worth the CI cost. See
-the header of `module_dependency_test.sh` for the steps.
+`versions.bzl` (the oldest pinned release and the newest patch of each minor
+release). See the header of `module_dependency_test.sh` for the steps.
 
 `tf_modules/` (`tf_modules_test`, driven by `tf_modules_test.sh`) turns
 `fixtures/network` into a tagged git repository and `fixtures/dns` into an

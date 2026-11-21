@@ -58,8 +58,7 @@ for version in "${versions[@]}"; do
     fi
 done
 
-# Oldest first: each entry goes to the top of KNOWN_VERSIONS, so the newest
-# ends up first. --default takes the newest.
+# Sorted, so the newest is last; --default takes it.
 sorted=()
 while IFS= read -r version; do sorted+=("$version"); done < <(printf '%s\n' "${versions[@]}" | sort -u -V)
 versions=("${sorted[@]}")
@@ -74,8 +73,8 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 cp "$versions_bzl" "$tmp/versions.bzl"
 
-# Verifies the signature on release $1's SHA256SUMS and adds its entry to the
-# top of KNOWN_VERSIONS in $tmp/versions.bzl.
+# Verifies the signature on release $1's SHA256SUMS and adds its entry to
+# KNOWN_VERSIONS in $tmp/versions.bzl.
 pin() {
     local version="$1"
     local base="https://github.com/opentofu/opentofu/releases/download/v$version"
@@ -108,10 +107,24 @@ pin() {
     done
     entry+="    },"
 
-    # Insert the entry right after the opening of KNOWN_VERSIONS.
-    awk -v entry="$entry" '
+    # Insert the entry before the first older one, keeping KNOWN_VERSIONS
+    # newest first.
+    awk -v version="$version" -v entry="$entry" '
+        function older(a, b,    x, y, i) {
+            split(a, x, ".")
+            split(b, y, ".")
+            for (i = 1; i <= 3; i++) {
+                if (x[i] + 0 != y[i] + 0) return x[i] + 0 < y[i] + 0
+            }
+            return 0
+        }
+        /^KNOWN_VERSIONS = \{$/ { known = 1 }
+        known && !inserted && (/^}$/ || (/^    "[0-9.]+": \{$/ && older(substr($1, 2, length($1) - 3), version))) {
+            print entry
+            inserted = 1
+        }
+        /^}$/ { known = 0 }
         { print }
-        /^KNOWN_VERSIONS = \{$/ { print entry; inserted = 1 }
         END { if (!inserted) exit 1 }
     ' "$tmp/versions.bzl" >"$tmp/versions.bzl.next" || { echo "error: KNOWN_VERSIONS not found in $versions_bzl" >&2; exit 1; }
     mv "$tmp/versions.bzl.next" "$tmp/versions.bzl"
