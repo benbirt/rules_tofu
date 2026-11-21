@@ -457,8 +457,8 @@ func buildManifest(reader tofushow.Reader, workTree, root, label string, deps []
 		if whole, ok := read[dir]; ok {
 			for name, source := range m.LocalNames {
 				if declared := whole.LocalNames[name]; declared != "" && declared != source && !listed[source] && source == defaultProviderHost+"/hashicorp/"+name {
-					declaredElsewhere = append(declaredElsewhere, fmt.Sprintf("%q is declared as %s by another target's file in %s; put the file that declares it in the srcs of %s too.",
-						name, displayProvider(declared), displayDir(dir), label))
+					declaredElsewhere = append(declaredElsewhere, fmt.Sprintf("%q is declared as %s in another target's file in %s, and each target's files are read on their own.",
+						name, displayProvider(declared), displayDir(dir)))
 				}
 			}
 		}

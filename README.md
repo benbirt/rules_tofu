@@ -190,10 +190,9 @@ Checks follow files, not Bazel packages:
   overrides; a `module` `source` referring to a local value or variable needs
   that `locals` or `variable` block in the same target; and a provider's
   `required_providers` entry must be in the same target as the files that use
-  the provider. One file may be listed in the `srcs` of more than one target.
-  If a `.tofu` or `.tofu.json` file is in a different target from the `.tf` or
-  `.tf.json` file it shadows, the shadowed file's target must list what that
-  file requires.
+  the provider. If a `.tofu` or `.tofu.json` file is in a different target from
+  the `.tf` or `.tf.json` file it shadows, the shadowed file's target must list
+  what that file requires.
 - A relative call needs the `tf_library` whose files are in the called
   directory. Another library in the same package does not count.
 - A `tf_test` lists the libraries that the `run` blocks in its `srcs` load,
