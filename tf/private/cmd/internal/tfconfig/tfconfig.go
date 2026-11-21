@@ -58,9 +58,9 @@ func IsConfigFile(name string) bool {
 // Effective drops the files of files that tofu doesn't read: each `.tf` or
 // `.tf.json` file that a `.tofu` or `.tofu.json` file of the same path
 // shadows, and each whose name starts with a dot (see ignored). The order of
-// the rest is kept. Every reader of configuration goes through it, whether
-// its files come from a directory or, as pin's do, from a `bazel query`,
-// where a `glob` may have matched an archive's `._main.tf`.
+// the rest is kept. Every configuration reader in this package goes through
+// it, whether its files come from a directory or, as pin's do, from a
+// `bazel query`, where a `glob` may have matched an archive's `._main.tf`.
 func Effective(files []string) []string {
 	present := map[string]bool{}
 	for _, f := range files {
@@ -112,7 +112,7 @@ func ignored(name string) bool {
 // merges over the rest, from the primary ones. Each group keeps its order.
 func splitOverrides(files []string) (primary, overrides []string) {
 	for _, f := range files {
-		if isOverride(filepath.Base(f)) {
+		if IsOverride(filepath.Base(f)) {
 			overrides = append(overrides, f)
 		} else {
 			primary = append(primary, f)
@@ -469,9 +469,13 @@ func ModuleDirs(repo, moduleDir string, called ...string) ([]string, error) {
 	return dirs, nil
 }
 
-// isOverride reports whether a configuration file is an override file, which
-// tofu merges over the others.
-func isOverride(name string) bool {
+// IsOverride reports whether file base name name is an OpenTofu override file:
+// not dot-prefixed, with a configuration extension, and `override` or
+// `*_override` as its stem.
+func IsOverride(name string) bool {
+	if ignored(name) || configExt(name) == "" {
+		return false
+	}
 	stem := strings.TrimSuffix(name, configExt(name))
 	return stem == "override" || strings.HasSuffix(stem, "_override")
 }

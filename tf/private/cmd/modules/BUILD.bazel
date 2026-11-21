@@ -9,6 +9,7 @@ go_library(
     deps = [
         "//tf/private/cmd/internal/flags",
         "//tf/private/cmd/internal/tfconfig",
+        "//tf/private/cmd/internal/tofushow",
         "@com_github_hashicorp_hcl_v2//:hcl",
         "@com_github_opentofu_registry_address_v2//:registry-address",
     ],
@@ -22,7 +23,10 @@ go_binary(
 go_test(
     name = "modules_test",
     srcs = ["main_test.go"],
+    args = ["-tofu=$(rlocationpath //tofu)"],
+    data = ["//tofu"],
     embed = [":modules_lib"],
+    deps = ["//tf/private/cmd/internal/tofushow/tofutest"],
 )
 
 filegroup(

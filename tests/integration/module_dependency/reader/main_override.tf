@@ -1,0 +1,3 @@
+module "overridden" {
+  source = "./child"
+}

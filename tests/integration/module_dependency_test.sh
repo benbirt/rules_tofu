@@ -6,9 +6,11 @@
 # Steps:
 #   1. `bazel build //...` validates //app (which calls @network_module//vpc by
 #      module_source, which in turn calls @dns_module//:dns) and //app:app_test.
-#      It also builds the empty-root libraries (//empty), the library whose
-#      srcs are all in a subdirectory (//sub_only) and the deploy without srcs
-#      (//nested:no_srcs_deploy).
+#      It also builds the empty-root libraries (//empty), the `tofu show -json
+#      -module` call fixture (//reader, covering variable defaults, local
+#      values, _override files, .tofu shadowing and .tf.json; issue #153), the
+#      library whose srcs are all in a subdirectory (//sub_only) and the deploy
+#      without srcs (//nested:no_srcs_deploy).
 #   2. @network_module//vpc and @dns_module//:dns also build on their own, as
 #      root modules in their own repositories.
 #   3. `bazel run //app:app.plan` plans offline against the generated module
@@ -48,10 +50,15 @@
 #      passes again. Unformatted files behind a directory symlink, in a
 #      dot-directory or with a dot-prefixed name are neither reported nor
 #      rewritten.
+#   9. `bazel build //reader:providers` fails strict deps and names the exact
+#      providers OpenTofu reports for reader/providers/main.tf: canonical
+#      addresses, resource- and data-source-implied providers, aliased provider
+#      blocks reported once, and the built-in provider skipped (issue #153).
 #
-# Runs once per tofu version in KNOWN_VERSIONS because both the module manifest
+# Runs once per OpenTofu version in KNOWN_VERSIONS because the module manifest
 # and the .terraform/terraform.tfstate backend record read by the
-# ephemeral-state check are internal OpenTofu formats.
+# ephemeral-state check are internal OpenTofu formats, and `tofu show -json
+# -module` carries no format_version.
 
 set -euo pipefail
 
@@ -179,5 +186,19 @@ for f in linked/scratch.tf .hidden/scratch.tf app/.scratch.tf; do
   grep -q -x -F "${unformatted}" "${f}" || fail "tofu fmt rewrote ${f}, which -recursive should not reach"
 done
 rm -r "${fmt_files[@]}" linked .hidden app/.scratch.tf "${_TMPDIR}/linked"
+
+echo "--- 9. the providers tofu reports for a module ---" >&2
+if out="$(bazel build //reader:providers 2>&1)"; then
+  fail "//reader:providers built without the providers its files require: ${out}"
+fi
+echo "${out}" >&2
+want='rules_tofu: //reader:providers: its files require these providers, which are not in its providers:
+    example.com/acme/corp, required in "reader/providers"
+    hashicorp/google, required in "reader/providers"
+    hashicorp/http, required in "reader/providers"
+    hashicorp/null, required in "reader/providers"
+    hashicorp/random, required in "reader/providers"
+Add "@tf_providers//hashicorp/google", "@tf_providers//hashicorp/http", "@tf_providers//hashicorp/null", "@tf_providers//hashicorp/random" to the providers of //reader:providers.'
+grep -q -F "${want}" <<<"${out}" || fail "the strict-deps error doesn't name exactly the providers of reader/providers/main.tf"
 
 echo "OK: with tofu ${TOFU_VERSION}, modules from other Bazel modules were called by module_source, and tofu fmt formatted the workspace" >&2
