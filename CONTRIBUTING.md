@@ -32,7 +32,7 @@ bazel test //...
 | `toolchain/` | OpenTofu binary download and toolchain registration |
 | `tofu/` | `@rules_tofu//tofu`, the toolchain's runnable `tofu` (rule in `tf/private/tofu_binary.bzl`) |
 | `docs/` | `starlark_doc_extract` target per public `.bzl` file, shipped as the BCR `docs_url` archive |
-| `tools/` | Maintainer tools (excluded from releases): `update_versions` pins an OpenTofu release; `format` formats the repository; `lint` lints every Starlark file |
+| `tools/` | Maintainer tools (excluded from releases): `update_versions` pins OpenTofu releases; `format` formats the repository; `lint` lints every Starlark file |
 | `tests/integration/` | Bazel-in-Bazel integration tests ([`tests/integration/README.md`](tests/integration/README.md)) |
 | `tests/tofu/` | Tests for `//tofu` used as another target's tool |
 | `examples/` | Usage examples |
@@ -88,7 +88,7 @@ bazel test //...
 bazel test //tf/private/cmd/...
 
 # Starlark unit tests (bazel_skylib unittest):
-bazel test //toolchain/tests/... //tf/providers/tests/... //tf/modules/tests/...
+bazel test //toolchain/tests/... //tf/providers/tests/... //tf/modules/tests/... //tests/integration:versions_test
 
 # Bazel-in-Bazel integration tests:
 bazel test //tests/integration/...
@@ -153,29 +153,57 @@ When adding a nested Bazel module under `e2e/` or `tests/integration/`:
 Open PRs against `main` from a branch on a fork once the build, tests and lint
 checks pass.
 
-## Pinning a new OpenTofu release
+## Pinning OpenTofu releases
+
+[`.github/workflows/tofu_versions.yml`](.github/workflows/tofu_versions.yml)
+("Pin new OpenTofu releases") runs every Monday and pins any new stable OpenTofu
+releases from the floor in [`toolchain/versions.bzl`](toolchain/versions.bzl)
+upward, opening or updating one pull request on the `tofu-versions` branch. To
+run it between schedules, trigger it via `workflow_dispatch` from the Actions
+tab. Existing pins are kept indefinitely so workspaces pinning an older release
+with `tofu.version` keep working.
+
+The workflow authenticates with the `VERSIONS_PR_TOKEN` repository secret, a
+fine-grained token scoped to this repository with read and write access to
+Contents and Pull requests. If `VERSIONS_PR_TOKEN` is unset, it falls back to
+`GITHUB_TOKEN`: the pull request still opens when "Allow GitHub Actions to
+create and approve pull requests" is enabled in repository settings, but GitHub
+does not trigger CI on pushes or pull requests made with `GITHUB_TOKEN`, so CI
+must be started by hand, for example by closing and reopening the pull request.
+
+To pin releases by hand, pass one or more `X.Y.Z` versions:
 
 ```sh
-bazel run //tools:update_versions -- 1.12.1            # add to KNOWN_VERSIONS
-bazel run //tools:update_versions -- --default 1.12.1  # also set DEFAULT_VERSION
+bazel run //tools:update_versions -- 1.12.13 1.13.10            # add to KNOWN_VERSIONS
+bazel run //tools:update_versions -- --default 1.12.13 1.13.10  # also set DEFAULT_VERSION to the newest
 ```
 
-`update_versions` requires `curl` on `PATH`. It downloads the release's
+`update_versions` requires `curl` on `PATH`. It downloads each release's
 `SHA256SUMS`, verifies its Sigstore signature against the OpenTofu release
-workflow identity using the `cosign` binary pinned in `MODULE.bazel`, and
-writes the five platform digests into
-[`toolchain/versions.bzl`](toolchain/versions.bzl). Do not paste digests in by
+workflow identity using the `cosign` binary pinned in `MODULE.bazel`, and writes
+the five platform digests into `toolchain/versions.bzl` once every signature has
+verified, so a failure leaves the file unchanged. Do not paste digests in by
 hand.
 
-Test an entry that is not the default with its generated per-version
-integration test (dots replaced by underscores):
+`tests/integration/BUILD.bazel` generates `module_dependency_<version>_test`
+(dots replaced by underscores) for the floor and the newest patch of each minor
+release (`tested_versions` in
+[`tests/integration/versions.bzl`](tests/integration/versions.bzl)). To run one
+of the non-default entries directly:
 
 ```sh
-bazel test //tests/integration:module_dependency_1_12_1_test
+bazel test //tests/integration:module_dependency_1_12_12_test
 ```
 
 With `--default`, the examples, `e2e/smoke` and the remaining integration tests
 use the new version too.
+
+`DEFAULT_VERSION` follows the newest stable release, including across minor
+releases. Before merging a pull request that moves `DEFAULT_VERSION` to a new
+minor release, check that minor release's OpenTofu changelog for changes to what
+`rules_tofu` relies on: `tofu show -json -module`, the module manifest
+(`.terraform/modules/modules.json`), the `.terraform/terraform.tfstate` backend
+record, `tofu test -json-into`, `-plugin-dir`, `-get=false` and lock files.
 
 ## Go version floor
 

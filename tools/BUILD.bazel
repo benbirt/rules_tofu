@@ -58,8 +58,9 @@ alias(
     ]
 ]
 
-# Pins a new OpenTofu release in //toolchain:versions.bzl from its signed
-# SHA256SUMS: `bazel run //tools:update_versions -- [--default] <version>`.
+# Pins one or more OpenTofu releases in //toolchain:versions.bzl from their
+# signed SHA256SUMS:
+# `bazel run //tools:update_versions -- [--default] <version>...`.
 sh_binary(
     name = "update_versions",
     srcs = ["update_versions.sh"],

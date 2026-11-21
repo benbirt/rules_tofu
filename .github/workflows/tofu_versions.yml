@@ -1,0 +1,129 @@
+name: Pin new OpenTofu releases
+
+# Weekly, pins every unpinned stable OpenTofu release above the floor in
+# toolchain/versions.bzl via `bazel run //tools:update_versions`, which verifies
+# the cosign signature on each release's SHA256SUMS, and opens or updates one
+# pull request on the branch below. This is a custom workflow because Dependabot
+# and Renovate cannot run that verification.
+#
+# Authenticates with the VERSIONS_PR_TOKEN secret, a fine-grained token scoped
+# to this repository with read and write access to Contents and Pull requests.
+# Without it, the workflow falls back to GITHUB_TOKEN. The pull request still
+# opens if "Allow GitHub Actions to create and approve pull requests" is enabled
+# in the repository's Actions settings, but GitHub does not run CI on pushes or
+# pull requests made with GITHUB_TOKEN, so CI must be started by hand, for
+# example by closing and reopening the pull request.
+on:
+  schedule:
+    - cron: "23 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: tofu-versions
+  cancel-in-progress: false
+
+env:
+  BRANCH: tofu-versions
+
+jobs:
+  pin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          token: ${{ secrets.VERSIONS_PR_TOKEN || github.token }}
+
+      # Keep GitHub releases that are neither drafts nor prereleases and whose
+      # tag is vX.Y.Z. Some early prerelease tags (such as v1.6.0-alpha1) are
+      # not marked as prereleases, so the tag format is checked too. Skipped
+      # patch releases (such as 1.12.10) have a git tag but no GitHub release.
+      - name: Find new releases
+        id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pinned="$(sed -n 's/^    "\([0-9][0-9.]*\)": {$/\1/p' toolchain/versions.bzl | sort -V)"
+          floor="$(head -n 1 <<<"$pinned")"
+          default="$(sed -n 's/^DEFAULT_VERSION = "\(.*\)"$/\1/p' toolchain/versions.bzl)"
+          new="$(
+            gh api repos/opentofu/opentofu/releases --paginate \
+              --jq '.[] | select(.draft == false and .prerelease == false) | .tag_name' |
+              sed -n 's/^v\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$/\1/p' |
+              sort -u -V |
+              while read -r version; do
+                # At or above the floor, and not pinned.
+                [ "$(printf '%s\n%s\n' "$floor" "$version" | sort -V | head -n 1)" = "$floor" ] || continue
+                grep -q -x -F "$version" <<<"$pinned" && continue
+                echo "$version"
+              done
+          )"
+          newest="$(tail -n 1 <<<"$new")"
+          new="$(paste -s -d " " - <<<"$new")"
+          {
+            echo "versions=$new"
+            echo "default=$default"
+            # --default only when the newest new release is newer than the
+            # default, so a late patch to an older minor release never moves it
+            # back.
+            if [ -n "$newest" ] && [ "$(printf '%s\n%s\n' "$default" "$newest" | sort -V | tail -n 1)" = "$newest" ]; then
+              echo "newest=$newest"
+            fi
+          } >>"$GITHUB_OUTPUT"
+          echo "New releases: ${new:-none}"
+
+      - name: Set up Bazel
+        if: steps.find.outputs.versions != ''
+        uses: bazel-contrib/setup-bazel@0.19.2
+        with:
+          bazelisk-cache: true
+
+      - name: Pin them
+        if: steps.find.outputs.versions != ''
+        run: bazel run //tools:update_versions -- ${{ steps.find.outputs.newest && '--default' || '' }} ${{ steps.find.outputs.versions }}
+
+      - name: Open or update the pull request
+        if: steps.find.outputs.versions != ''
+        env:
+          GH_TOKEN: ${{ secrets.VERSIONS_PR_TOKEN || github.token }}
+          VERSIONS: ${{ steps.find.outputs.versions }}
+          OLD_DEFAULT: ${{ steps.find.outputs.default }}
+          NEW_DEFAULT: ${{ steps.find.outputs.newest }}
+        run: |
+          title="chore: pin OpenTofu ${VERSIONS// /, }"
+          {
+            echo "Pinned in \`toolchain/versions.bzl\` via \`bazel run //tools:update_versions\`, after verifying each release's \`SHA256SUMS\` cosign signature:"
+            echo
+            for version in $VERSIONS; do
+              echo "- [$version](https://github.com/opentofu/opentofu/releases/tag/v$version)"
+            done
+            echo
+            if [ -n "$NEW_DEFAULT" ]; then
+              echo "\`DEFAULT_VERSION\` moves from $OLD_DEFAULT to $NEW_DEFAULT, the version used when no \`tofu.version\` tag is set."
+              if [ "${OLD_DEFAULT%.*}" != "${NEW_DEFAULT%.*}" ]; then
+                echo
+                echo "**The default moves to a new minor release (${NEW_DEFAULT%.*}).** Before merging, check [the v${NEW_DEFAULT%.*} changelog](https://github.com/opentofu/opentofu/blob/v${NEW_DEFAULT%.*}/CHANGELOG.md) for changes to what \`rules_tofu\` relies on: \`tofu show -json -module\`, the module manifest, the \`.terraform/terraform.tfstate\` backend record, \`tofu test -json-into\`, \`-plugin-dir\`, \`-get=false\` and lock files."
+              fi
+            else
+              echo "\`DEFAULT_VERSION\` stays at $OLD_DEFAULT."
+            fi
+            echo
+            echo "Opened by the [Pin new OpenTofu releases](https://github.com/${GITHUB_REPOSITORY}/actions/workflows/tofu_versions.yml) workflow."
+          } >"$RUNNER_TEMP/body.md"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -C "$BRANCH"
+          git add toolchain/versions.bzl
+          git commit -m "$title"
+          git push --force origin "$BRANCH"
+
+          pr="$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number')"
+          if [ -n "$pr" ]; then
+            gh pr edit "$pr" --title "$title" --body-file "$RUNNER_TEMP/body.md"
+          else
+            gh pr create --base main --head "$BRANCH" --title "$title" --body-file "$RUNNER_TEMP/body.md"
+          fi
