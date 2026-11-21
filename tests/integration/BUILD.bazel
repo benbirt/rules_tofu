@@ -88,7 +88,7 @@ _CASES = [
     ("malformed_test_var_file", "broken_workspace", "//cases/malformed_var_file:test", "TofuValidate //cases/malformed_var_file:test failed"),
     ("vars_name_with_equals", "broken_workspace", "//cases/malformed_var_file:name_with_equals", "variable names in `vars` must not be empty or contain `=` (got `a=b`)"),
     ("vars_undeclared", "broken_workspace", "//cases/malformed_var_file:undeclared", "`vars` sets nope, which the root module does not declare as a variable"),
-    ("conflicting_providers", "broken_workspace", "//cases/conflicting_providers:lib", "conflicting versions"),
+    ("conflicting_providers", "broken_workspace", "//cases/conflicting_providers:lib", "Use one provider target across `providers` and dependencies"),
     ("conflicting_provider_platforms", "broken_workspace", "//cases/conflicting_providers:platforms", "for two execution platforms: `linux_amd64` and `linux_arm64`"),
     ("conflicting_provider_platforms_distinct", "broken_workspace", "//cases/conflicting_providers:platforms_distinct", "for two execution platforms: `linux_amd64` and `linux_arm64` (`registry.opentofu.org/hashicorp/aws` and `registry.opentofu.org/hashicorp/random`)"),
     ("missing_platform", "broken_workspace", "//cases/missing_platform:lib", "Provider `acme/windows-only@1.0.0` has packages only for `windows_amd64`, not for"),

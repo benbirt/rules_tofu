@@ -68,8 +68,8 @@ tf_deploy(
 Without a remote `backend` or `cloud` block, `apply` and `destroy` refuse to run
 unless `allow_ephemeral_state = True` is set. Real deploys declare a remote
 backend in `srcs`; see [State and backends](#state-and-backends). Configurations
-that use providers declare them in `MODULE.bazel` and list them in `providers`;
-see [Providers](#providers).
+that use providers pin them in `.terraform.lock.hcl` or `MODULE.bazel` and list
+them in `providers`; see [Providers](#providers).
 
 **3. Build, test and run.**
 
@@ -288,10 +288,10 @@ terraform {
 }
 ```
 
-Lock files written by `terraform` against `registry.terraform.io` are rejected
-until regenerated with `pin`. When `required_providers` drifts from the lock,
-`bazel build` fails and points to `pin`. Running `pin` works even while a target
-names a provider not yet in the lock.
+Entries for hosts other than `registry.opentofu.org`, such as those `terraform`
+writes against `registry.terraform.io`, fail a build only when a target uses
+them. `pin` rewrites the lock against `registry.opentofu.org`. Running `pin`
+works even while a target names a provider not yet in the lock.
 
 #### Keeping the lock up to date
 
