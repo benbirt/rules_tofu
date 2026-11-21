@@ -517,13 +517,10 @@ callers' `version` constraints accept. When `module_source` is set,
 `module_version` defaults to the version of the Bazel module that holds the
 library; setting `module_version` without `module_source` is an error.
 
-A `module` block's `source` may refer to local values and to variables that
-declare a `default`. Variables in `source` take their defaults when the module
-manifest is built; arguments passed by a calling module, `vars`, `var_files` and
-`TF_VAR_*` do not apply. A variable without a `default` fails `bazel build`. If
-`tofu init` later evaluates a different address, such as from `vars` or
-`var_files`, it fails with OpenTofu's `"Module source has changed"` error.
-Inside `run` blocks of `tf_test` files and inside modules fetched by
+`bazel build` evaluates each `module` block's `source` without `vars`,
+`var_files` or a calling module's arguments. A `source` that uses a variable
+gets the variable's `default`, and fails `bazel build` if it has none. Inside
+`run` blocks of `tf_test` files and inside modules fetched by
 `tf_modules.module`, `source` must be a literal string.
 
 Non-local calls match a `tf_library` in `deps` by `module_source`, either exact
