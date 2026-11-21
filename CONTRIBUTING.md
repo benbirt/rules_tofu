@@ -186,13 +186,13 @@ verified, so a failure leaves the file unchanged. Do not paste digests in by
 hand.
 
 `tests/integration/BUILD.bazel` generates `module_dependency_<version>_test`
-(dots replaced by underscores) for the floor and the newest patch of each minor
-release (`tested_versions` in
-[`tests/integration/versions.bzl`](tests/integration/versions.bzl)). To run one
-of the non-default entries directly:
+(dots replaced by underscores) for the floor and the newest pinned release
+(`tested_versions` in
+[`tests/integration/versions.bzl`](tests/integration/versions.bzl)). To run the
+floor test directly:
 
 ```sh
-bazel test //tests/integration:module_dependency_1_12_12_test
+bazel test //tests/integration:module_dependency_1_12_0_test
 ```
 
 With `--default`, the examples, `e2e/smoke` and the remaining integration tests

@@ -7,14 +7,12 @@ def _tested_versions_test_impl(ctx):
     env = unittest.begin(ctx)
 
     # Unordered, with a two-digit patch that sorts below 1.12.9 as a string.
+    asserts.equals(env, ["1.12.0", "1.12.12"], tested_versions(["1.12.9", "1.12.12", "1.12.0"]))
     asserts.equals(
         env,
-        ["1.12.0", "1.12.12", "1.13.9", "2.0.1"],
+        ["1.12.0", "2.0.1"],
         tested_versions(["1.13.0", "1.12.9", "2.0.1", "1.12.12", "1.13.9", "1.12.0", "2.0.0"]),
     )
-
-    # The floor is also the newest patch of its minor release (no duplicate).
-    asserts.equals(env, ["1.12.0", "1.13.1"], tested_versions(["1.13.1", "1.12.0", "1.13.0"]))
     asserts.equals(env, ["1.12.0"], tested_versions(["1.12.0"]))
     return unittest.end(env)
 

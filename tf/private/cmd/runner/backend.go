@@ -37,7 +37,7 @@ type backendRecord struct {
 // Because the previous run's record is removed before tofu init, any file
 // present was written by this run. The file format is internal to OpenTofu;
 // module_dependency_<version>_test exercises it across tested_versions (the
-// floor and the newest patch of each minor release).
+// floor and the newest pinned release).
 func recordedBackend(cwd string) (*backendRecord, error) {
 	path := backendRecordPath(cwd)
 	data, err := os.ReadFile(path)

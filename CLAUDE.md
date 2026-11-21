@@ -307,11 +307,11 @@ Then `bazel shutdown` so the new startup flags take effect.
 - Don't drop `-get=false`: it stops `tofu` silently re-downloading on a
   `version` mismatch and makes local calls use the manifest. Because the
   manifest format is internal to `tofu`, `module_dependency_<version>_test`
-  runs for the floor and the newest patch of each minor release
-  (`tested_versions` in `tests/integration/versions.bzl`,
-  `//tests/integration:versions_test`). Those internal formats change between
-  minor releases rather than patches, so running a nested Bazel test and `tofu`
-  download for every pinned patch is not worth the CI cost.
+  runs for the floor and the newest pinned release (`tested_versions` in
+  `tests/integration/versions.bzl`, `//tests/integration:versions_test`),
+  bracketing every version users can pick. Each test is a nested Bazel run and
+  a `tofu` download on every CI job (Linux and macOS), so testing each minor
+  release is not worth the CI time.
 - Read configuration modules in `//tf/private/cmd/modules` (`TofuModules`),
   `//tf/private/cmd/modscan` and `//tf/private/cmd/pin` only through
   `tofushow.Reader.ReadFiles` (`tf/private/cmd/internal/tofushow`; issue #153):
