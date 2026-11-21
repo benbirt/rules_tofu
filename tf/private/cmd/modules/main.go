@@ -439,7 +439,6 @@ func buildManifest(reader tofushow.Reader, workTree, root, label string, deps []
 	}
 	sort.Strings(dirs)
 	var missing []requirement
-	var declaredElsewhere []string
 	for _, dir := range dirs {
 		m, err := reader.ReadFiles(dir, byDir[dir])
 		if err != nil {
@@ -450,18 +449,6 @@ func buildManifest(reader tofushow.Reader, workTree, root, label string, deps []
 				missing = append(missing, requirement{dir: dir, provider: p.Source})
 			}
 		}
-		// For the error message only (never for the check, and without an
-		// extra `tofu` call): if the walk already read the whole directory and
-		// resolved a missing hashicorp/<name> local name to another address,
-		// point out that another target's file declares it there.
-		if whole, ok := read[dir]; ok {
-			for name, source := range m.LocalNames {
-				if declared := whole.LocalNames[name]; declared != "" && declared != source && !listed[source] && source == defaultProviderHost+"/hashicorp/"+name {
-					declaredElsewhere = append(declaredElsewhere, fmt.Sprintf("%q is declared as %s in another target's file in %s, and each target's files are read on their own.",
-						name, displayProvider(declared), displayDir(dir)))
-				}
-			}
-		}
 		for _, c := range m.Calls {
 			if err := direct(c.Source, callIn(c.Name, dir), dir); err != nil {
 				return nil, err
@@ -469,8 +456,7 @@ func buildManifest(reader tofushow.Reader, workTree, root, label string, deps []
 		}
 	}
 	if len(missing) > 0 {
-		sort.Strings(declaredElsewhere)
-		return nil, missingProviders(label, missing, declaredElsewhere)
+		return nil, missingProviders(label, missing)
 	}
 
 	var unused []string
@@ -537,9 +523,8 @@ func testRuns(workTree, root, testDir string) ([]testRun, error) {
 // missingProviders formats the error for providers that label's srcs require
 // and its providers attribute lacks. It names each
 // @tf_providers//<namespace>/<name> label to add, or reports that rules_tofu
-// cannot vendor providers outside registry.opentofu.org, and appends any
-// declaredElsewhere hints for local names declared in another target's file.
-func missingProviders(label string, missing []requirement, declaredElsewhere []string) error {
+// cannot vendor providers outside registry.opentofu.org.
+func missingProviders(label string, missing []requirement) error {
 	var lines, labels, foreign []string
 	seen := map[string]bool{}
 	for _, m := range missing {
@@ -562,7 +547,6 @@ func missingProviders(label string, missing []requirement, declaredElsewhere []s
 		advice = append(advice, fmt.Sprintf("rules_tofu can't vendor %s: it only vendors providers from %s.",
 			strings.Join(foreign, ", "), defaultProviderHost))
 	}
-	advice = append(advice, declaredElsewhere...)
 	return fmt.Errorf("%s: its files require these providers, which are not in its providers:\n%s\n%s",
 		label, strings.Join(lines, "\n"), strings.Join(advice, " "))
 }

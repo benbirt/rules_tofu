@@ -1066,7 +1066,7 @@ Add "@tf_providers//hashicorp/null" to the providers of //app.`,
 			},
 			own: own{srcs: []string{"app/main.tf"}, depDirs: []string{"app"}, providers: []string{"registry.opentofu.org/posthog/posthog"}},
 			want: "    hashicorp/posthog, required in \"app\"\n" +
-				`Add "@tf_providers//hashicorp/posthog" to the providers of //app. "posthog" is declared as posthog/posthog in another target's file in "app", and each target's files are read on their own.`,
+				`Add "@tf_providers//hashicorp/posthog" to the providers of //app.`,
 		},
 		{
 			name:  "a generated library is named by its hub label",

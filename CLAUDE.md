@@ -437,10 +437,8 @@ Then `bazel shutdown` so the new startup flags take effect.
       and is checked as such (`TestBuildManifest_StrictDeps`,
       `TestReadFiles_LocalNames`). If the whole directory should be considered,
       it should be one target (like `rules_go` compiling a `go_library` from
-      its own `srcs`). `read[dir]` and `tofushow.Module.LocalNames` feed only
-      `declaredElsewhere` in `missingProviders` (using the walk's cache with no
-      extra `tofu` call), never the check itself. Keep that note to stating
-      where the name is declared: how to rearrange targets is the user's call.
+      its own `srcs`). Don't add a hint drawn from the directory's other files
+      either: the error treats the target on its own, as the check does.
   - Check only a target's `srcs`, plus `run` blocks in a `tf_test`'s `srcs`,
     against `--direct-provider`, `callable` modules and `dep_dirs`. Do
     not re-check files from `deps` in the root module's directory
