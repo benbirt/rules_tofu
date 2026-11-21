@@ -92,7 +92,7 @@ def registry_location(response, context):
     Args:
         response: Decoded JSON body of the registry's download endpoint;
             non-dict values produce an error.
-        context: Description of the module version, for error messages.
+        context: Description of the module tag, for error messages.
 
     Returns:
         `struct(location, error)`.

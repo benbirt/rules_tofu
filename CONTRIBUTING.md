@@ -32,7 +32,7 @@ bazel test //...
 | `toolchain/` | OpenTofu binary download and toolchain registration |
 | `tofu/` | `@rules_tofu//tofu`, the toolchain's runnable `tofu` (rule in `tf/private/tofu_binary.bzl`) |
 | `docs/` | `starlark_doc_extract` target per public `.bzl` file, shipped as the BCR `docs_url` archive |
-| `tools/` | Maintainer tools (excluded from releases): `update_versions` pins an OpenTofu release; `format` formats the repository |
+| `tools/` | Maintainer tools (excluded from releases): `update_versions` pins an OpenTofu release; `format` formats the repository; `lint` lints every Starlark file |
 | `tests/integration/` | Bazel-in-Bazel integration tests ([`tests/integration/README.md`](tests/integration/README.md)) |
 | `tests/tofu/` | Tests for `//tofu` used as another target's tool |
 | `examples/` | Usage examples |
@@ -135,9 +135,11 @@ is their only check. It names `examples` and `e2e/smoke` to skip
 `tests/integration`, where negative-case fixtures may be malformed on purpose.
 
 `//tools:lint` checks every Starlark file under the workspace, including nested
-workspaces and untracked files, and fails on any buildifier lint warning, such
-as missing `Args:` or `Returns:` doc-string sections. Suppress a deliberate
-warning in place with `# buildifier: disable=<warning>` and a reason.
+workspaces and untracked files, and fails on any formatting diff or buildifier
+lint warning, such as missing `Args:` or `Returns:` doc-string sections. An
+unformatted untracked Starlark file fails `//tools:lint` locally because
+`//tools:format` formats git-tracked files only. Suppress a deliberate warning
+in place with `# buildifier: disable=<warning>` and a reason.
 
 When adding a nested Bazel module under `e2e/` or `tests/integration/`:
 

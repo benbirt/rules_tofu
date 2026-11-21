@@ -1,5 +1,5 @@
-# `//tofu:tofu` is the rule's only target; keeping it under `tf/private` stops
-# downstream modules instantiating it instead of running `@rules_tofu//tofu`.
+# `tofu_binary` is not public API: `//tofu:tofu` is its only target, and
+# downstream modules run `@rules_tofu//tofu` rather than instantiating it.
 # buildifier: disable=bzl-visibility
 load("//tf/private:tofu_binary.bzl", "tofu_binary")
 

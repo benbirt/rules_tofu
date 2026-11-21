@@ -186,9 +186,8 @@ jobs:
       - name: Check formatting
         run: bazel run //tools:format.check
 
-      # Checks every Starlark file in the workspace for buildifier lint
-      # warnings, including e2e/smoke and tests/integration; fails on any
-      # warning.
+      # Checks every Starlark file in the workspace, including e2e/smoke and
+      # tests/integration; fails on any buildifier warning or formatting diff.
       - name: Run buildifier (lint warnings)
         run: bazel run //tools:lint
 
