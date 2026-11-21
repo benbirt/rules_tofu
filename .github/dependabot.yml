@@ -1,31 +1,14 @@
 # Weekly version updates.
 #
 # Not covered by Dependabot: .bazelversion (and its nested copies, which must
-# stay identical), the Go SDK and the off-registry provider tag in MODULE.bazel.
-# OpenTofu versions in toolchain/versions.bzl are pinned by
-# .github/workflows/tofu_versions.yml instead, because Dependabot cannot verify
-# their cosign signatures.
+# stay identical) and the bazel_dep versions in MODULE.bazel, which
+# .github/workflows/bazel-updates.yaml advances because Dependabot cannot
+# evaluate a MODULE.bazel whose extensions read go.mod and Go sources; the Go
+# SDK; and the off-registry provider tag in MODULE.bazel. OpenTofu versions in
+# toolchain/versions.bzl are pinned by .github/workflows/tofu_versions.yml
+# instead, because Dependabot cannot verify their cosign signatures.
 version: 2
 updates:
-  # bazel_dep versions in MODULE.bazel; Dependabot runs `bazel mod tidy` to
-  # update MODULE.bazel.lock.
-  - package-ecosystem: bazel
-    directory: /
-    schedule:
-      interval: weekly
-    commit-message:
-      prefix: chore
-    ignore:
-      # The non-dev deps are floors for every downstream module: under
-      # Bazel's minimal version selection, bumping them here would force the
-      # same versions on users. Raise them only when rules_tofu needs to.
-      - dependency-name: platforms
-      - dependency-name: rules_go
-      - dependency-name: gazelle
-    groups:
-      bazel:
-        patterns: ["*"]
-
   # go.mod: the dependencies of the Go tools, two of which (lockjson and
   # modscan) downstream workspaces compile with their own host Go SDK. The
   # `go` directive is therefore a floor for users too; a bump that raises
