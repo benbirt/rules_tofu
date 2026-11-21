@@ -1,4 +1,8 @@
 load("@rules_tofu//tf:defs.bzl", "tf_library")
+
+# Instantiates `tf_provider` directly for cases `tf_providers` never declares:
+# one provider at two versions, or two execution platforms on one target.
+# buildifier: disable=bzl-visibility
 load("@rules_tofu//tf/private:provider.bzl", "tf_provider")
 
 # Stand-in provider packages under `package/<file>`, matching the layout

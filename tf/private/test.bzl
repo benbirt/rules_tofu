@@ -13,7 +13,6 @@ load(
     _materialize = "materialize",
     _materialize_plugin_tree = "materialize_plugin_tree",
     _modules_manifest = "modules_manifest",
-    _own_dirs = "own_dirs",
     _plugin_tree_root = "plugin_tree_root",
     _provider_lock = "provider_lock",
     _runfiles_path = "runfiles_path",
