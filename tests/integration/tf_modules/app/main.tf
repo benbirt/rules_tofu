@@ -32,10 +32,3 @@ module "label" {
 output "summary" {
   value = "${module.vpc.id} ${module.subnet.cidr} ${module.dns.fqdn} ${module.label.id} ${module.peering.peer} ${module.plain.name}"
 }
-
-# No required_providers entry here or anywhere else in the workspace:
-# OpenTofu implies hashicorp/local, which pin must lock.
-resource "local_file" "summary" {
-  content  = "summary"
-  filename = "${path.module}/summary.txt"
-}

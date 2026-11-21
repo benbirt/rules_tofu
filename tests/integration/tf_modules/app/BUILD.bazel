@@ -1,11 +1,34 @@
 load("@rules_tofu//tf:defs.bzl", "tf_deploy")
 
-# main.tf has no required_providers block. Its local_file resource implies
-# hashicorp/local. hashicorp/null and hashicorp/time come with the network
-# module, the latter for its `peering` submodule, and hashicorp/tls with dns.
+# Nothing in //app declares required_providers. local.tf.json is generated from
+# local_file.json and defines a local_file resource implying hashicorp/local,
+# the only reference to that provider in the workspace, so pin must build it to
+# lock hashicorp/local. hashicorp/null and hashicorp/time come from
+# @tf_modules//network (the latter from its `peering` submodule), and
+# hashicorp/tls from @tf_modules//dns.
+genrule(
+    name = "local",
+    srcs = ["local_file.json"],
+    outs = ["local.tf.json"],
+    cmd = "cp $< $@",
+)
+
+config_setting(
+    name = "alt",
+    define_values = {"app_branch": "alt"},
+)
+
+# alt.tf and default.tf both define local.branch, which OpenTofu rejects in one
+# module; pin must read each select() branch separately.
 tf_deploy(
     name = "app",
-    srcs = ["main.tf"],
+    srcs = [
+        "main.tf",
+        ":local.tf.json",
+    ] + select({
+        ":alt": ["alt.tf"],
+        "//conditions:default": ["default.tf"],
+    }),
     allow_ephemeral_state = True,
     providers = ["@tf_providers//hashicorp/local"],
     deps = [

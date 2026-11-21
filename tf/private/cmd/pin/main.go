@@ -15,50 +15,67 @@
 //     repeatable.
 //   - Trailing arguments after flags are forwarded to `tofu providers lock`.
 //   - BUILD_WORKSPACE_DIRECTORY: workspace root set by `bazel run`, required.
-//   - BAZEL: Bazel binary to run `bazel query` with, defaulting to bazel or
-//     bazelisk on PATH.
+//   - BAZEL: Bazel binary to run `bazel query` and `bazel build` with,
+//     defaulting to bazel or bazelisk on PATH.
 //
 // Locking proceeds in order:
 //   - One `bazel query` (`configQuery`, `queryFlags`) fetches every rule in
 //     `deps()` of every tf_library, tf_deploy and tf_test in the main
 //     repository across any repository, plus the configuration source files
 //     among those dependencies. Output uses --output=streamed_jsonproto with
-//     --proto:output_rule_attrs=srcs,actual,tf_modules_label and
-//     --noproto:flatten_selects so every branch of a select() appears in
-//     selectorList instead of being dropped by Bazel's default flattening.
-//     --keep_going and partial-result exit code 3 are accepted because provider
-//     packages in @tf_providers may not exist until locked. Bazel's package
-//     graph handles .bazelignore, deleted packages and nested workspaces
-//     automatically. Files outside Bazel rules are ignored, and a fetched
-//     module's examples are in no target and left out.
-//   - For each _tf_library, tf_deploy_rule and _tf_test returned, pin collects
-//     the configuration source files in its srcs, following filegroup srcs and
-//     alias actual, and groups them by directory: workspace-relative in the
-//     main repository, and external/<repo>/<dir> in external repositories. Each
-//     group is one target's configuration files in one directory, matching what
-//     strict deps reads in the build. A file in two targets' srcs belongs to
-//     both groups. Query files in no such target's srcs are ignored. A select()
-//     in srcs or in an alias's actual contributes every branch because
-//     `bazel query` is unconfigured.
-//   - Because `bazel query` knows only source files, pin cannot read generated
-//     configuration in srcs. It prints a warning for each non-source target it
-//     finds there: a srcs label that is a declared output of a queried rule
-//     with a configuration extension, the declared configuration outputs of a
-//     rule listed in srcs, or a non-filegroup, non-alias rule listed in srcs
-//     that declares no outputs (warning on the rule label, since the query
-//     cannot name its files). A source file in a package Bazel could not load
-//     is not warned about here because `bazel query` reports that package
-//     itself. Providers required only by generated files are not locked.
-//   - Each group is read on its own with tofushow.Reader.ReadFiles using the
-//     --tofu binary; groups with the same directory and files are read once.
-//     Every provider OpenTofu reports counts: required_providers entries after
-//     override files and .tofu shadowing, and providers implied by a resource,
-//     data source or provider block. Implied providers have no
+//     --proto:output_rule_attrs=srcs,actual,tf_modules_label,
+//     --noproto:flatten_selects so every branch of a select() stays distinct
+//     in selectorList instead of being dropped by Bazel's default flattening,
+//     and --consistent_labels so labels print in canonical form and match
+//     target labels in `bazel build` events. --keep_going and partial-result
+//     exit code 3 are accepted because provider packages in @tf_providers may
+//     not exist until locked. Bazel's package graph handles .bazelignore,
+//     deleted packages and nested workspaces automatically. Files outside
+//     Bazel rules are ignored, and a fetched module's examples are in no target
+//     and left out.
+//   - For each _tf_library, tf_deploy_rule and _tf_test returned, pin follows
+//     srcs through filegroup srcs and alias actual for every combination of
+//     select() branches the target reaches: unconditional labels plus one
+//     branch of each select(). select()s with the same condition set take the
+//     same branch together, since Bazel chooses the same condition for both in
+//     any configuration; select()s with different condition sets combine in
+//     full Cartesian product, including combinations no configuration selects.
+//     A single-branch select() counts as unconditional, and combinations of one
+//     target that yield the same labels are kept once. In each combination, pin
+//     collects configuration source files and any labels that require building:
+//     a declared output of a queried rule with a configuration extension (.tf,
+//     .tofu, .tf.json, .tofu.json), a rule declaring such an output, or a
+//     non-filegroup, non-alias rule declaring no outputs. A source file in a
+//     package Bazel could not load is skipped because `bazel query` reports
+//     that package itself; query files in no target's srcs are ignored.
+//   - When any combination needs generated configuration, pin runs one
+//     `bazel build --keep_going --remote_download_outputs=toplevel
+//     --build_event_json_file=<temp> -- <labels>` in the workspace directory,
+//     using the configuration of a plain `bazel build` there rather than flags
+//     passed to `bazel run`. --remote_download_outputs=toplevel ensures
+//     remote-cached outputs are on disk. From the build events, pin takes each
+//     built label's default-output configuration files: their path under the
+//     execution root and their work-tree directory under the output directory
+//     (workspace-relative in the main repository, external/<repo>/<dir> in
+//     external repositories). Exit code 1 (partial build under --keep_going) is
+//     accepted: pin warns on each label that did not build and leaves providers
+//     required only by it unlocked while locking the rest. When nothing needs
+//     building, no build runs.
+//   - Source files and built outputs are grouped by target, select() branch
+//     combination and directory, matching what strict deps reads in a build
+//     taking those branches. A file in two targets' srcs belongs to both
+//     groups; duplicate groups of one target with the same directory and files
+//     are dropped. Each group is read on its own with tofushow.Reader.ReadFiles
+//     using the --tofu binary; identical directory and file sets across groups
+//     are read once. Every provider OpenTofu reports counts: required_providers
+//     entries after override files and .tofu shadowing, and providers implied
+//     by a resource, data source or provider block. Implied providers have no
 //     required_providers entry and therefore carry no version constraint.
 //     Built-in providers are skipped via tfconfig.IsBuiltInProvider. If OpenTofu
 //     cannot load a group, pin fails with OpenTofu's diagnostics and leaves the
 //     lock unchanged. The error names a tf_modules library by its
-//     tf_modules_label (@tf_modules//<path>) and appends
+//     tf_modules_label (@tf_modules//<path>), includes the chosen select()
+//     conditions when the target reaches any, and appends
 //     tfconfig.StandAloneHint when the group includes an override file.
 //   - Providers excluded via --exclude-source are dropped. When that leaves no
 //     providers and at least one was excluded, pin writes an empty lock
@@ -79,7 +96,8 @@
 // one, so pin prints each directory's combined constraints by provider, showing
 // external repositories as external/<repo>/<dir>, unconstrained or implied
 // providers as (any), and version constraints as OpenTofu normalises them. When
-// `bazel query` fails other than with partial-result exit code 3, or when
+// `bazel query` fails other than with partial-result exit code 3, when
+// `bazel build` fails other than with build-failure exit code 1, or when
 // `tofu providers lock` exits non-zero, pin exits with that subprocess's exit
 // code. Unrecognised or malformed flags exit 2, and other errors exit 1.
 package main
@@ -91,6 +109,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path"
@@ -141,8 +160,8 @@ type module struct {
 	Reqs []tofushow.Provider
 }
 
-// bazelCommand is the Bazel to query with: $BAZEL, else bazel or bazelisk
-// from PATH.
+// bazelCommand is the Bazel binary to run `query` and `build` with: $BAZEL,
+// else bazel or bazelisk from PATH.
 func bazelCommand() string {
 	if b := os.Getenv("BAZEL"); b != "" {
 		return b
@@ -243,7 +262,7 @@ func requirements(reader tofushow.Reader, groups []group, excludedSources []stri
 		if !ok {
 			m, err := reader.ReadFiles(g.Dir, g.Files)
 			if err != nil {
-				return nil, false, fmt.Errorf("%s: %w%s", g.Label, err, tfconfig.StandAloneHint(g.Label, err, g.Files))
+				return nil, false, fmt.Errorf("%s: %w%s", g.name(), err, tfconfig.StandAloneHint(g.name(), err, g.Files))
 			}
 			for _, p := range m.Providers {
 				if !tfconfig.IsBuiltInProvider(p.Source) {
@@ -364,23 +383,40 @@ const configQuery = `let d = deps(kind("^(_tf_library|tf_deploy_rule|_tf_test) r
 // produced results despite errors.
 const queryPartialExitCode = 3
 
-// group holds the configuration source files that one target lists in one
-// directory: what strict deps reads on its own in the build.
+// group holds one target's configuration files in one directory for one
+// combination of select() branches, matching what strict deps reads when Bazel
+// builds that target under those conditions.
 type group struct {
-	// Label is the target, as Bazel prints it; a library generated by
-	// tf_modules goes by its tf_modules_label (@tf_modules//<path>).
+	// Label is the target's normalised canonical label (see mainLabel), or its
+	// tf_modules_label (@tf_modules//<path>) for a library generated by
+	// tf_modules.
 	Label string
-	// Dir is workspace-relative with "" for the workspace root in the main
-	// repository, and external/<repo>/<dir> in another, as in a work tree.
+	// Branches lists the chosen condition of each select() the target reaches
+	// (see selection.Branches), or nil when it reaches none.
+	Branches []string
+	// Dir is the work-tree directory: workspace-relative ("" for the workspace
+	// root) in the main repository, or external/<repo>/<dir> in an external
+	// repository.
 	Dir string
-	// Files holds absolute paths, sorted.
+	// Files holds sorted absolute paths on disk (source files and built
+	// outputs).
 	Files []string
 }
 
+// name formats the group's target for error messages, appending the chosen
+// select() conditions when the target reaches any select().
+func (g group) name() string {
+	if len(g.Branches) == 0 {
+		return g.Label
+	}
+	return fmt.Sprintf("%s (select() %s)", g.Label, strings.Join(g.Branches, ", "))
+}
+
 // queryGroups queries Bazel for the workspace's tf_library, tf_deploy and
-// tf_test targets and the tf_library targets they depend on in any repository.
-// It returns the configuration source files in each target's srcs, grouped by
-// target and directory, following filegroup and alias targets as Bazel does.
+// tf_test targets and any they depend on in other repositories. It returns the
+// configuration files in each target's srcs, grouped by target, combination of
+// select() branches and directory, following filegroup and alias targets as
+// Bazel does.
 //
 // A library lists the providers its srcs require, and Bazel loads each of
 // those labels with the library, whether or not anything calls the directory.
@@ -392,9 +428,10 @@ type group struct {
 // package yet, and an unusable lock entry or lock/tag conflict generates a
 // package that fails to load. Neither holds configuration, and pin fixes both.
 //
-// `bazel query` knows only source files. For each generated configuration file
-// in srcs, or any non-filegroup, non-alias rule in srcs that declares no
-// outputs, queryGroups prints a warning to log.
+// `bazel query` knows only source files. When srcs include generated
+// configuration, queryGroups runs one `bazel build` for those labels (see
+// build), merges the built outputs into their groups, and prints a warning to
+// log for each label that did not build.
 func queryGroups(bazel, workspace string, log io.Writer) ([]group, error) {
 	out, err := query(bazel, workspace, configQuery, log)
 	if err != nil {
@@ -404,11 +441,176 @@ func queryGroups(bazel, workspace string, log io.Writer) ([]group, error) {
 	if err != nil {
 		return nil, err
 	}
-	groups, generated := g.groups()
-	for _, label := range generated {
-		fmt.Fprintf(log, "rules_tofu: pin cannot read %s, which is not a source file; providers required only by generated files are not locked\n", label)
+	sels := g.selections()
+	var built map[string][]sourceFile
+	if labels := toBuild(sels); len(labels) > 0 {
+		built, err = build(bazel, workspace, labels, log)
+		if err != nil {
+			return nil, err
+		}
+		for _, label := range labels {
+			if _, ok := built[label]; !ok {
+				fmt.Fprintf(log, "rules_tofu: pin could not build %s (errors above); providers required only by its configuration are not locked. "+
+					"If the errors above name @tf_providers packages, running pin again after this run may build it; otherwise fix the failure and re-run pin.\n", label)
+			}
+		}
 	}
-	return groups, nil
+	return g.groups(sels, built), nil
+}
+
+// buildFlags allow partial build results under --keep_going and ensure
+// requested outputs cached remotely are downloaded to disk so pin can read
+// them.
+var buildFlags = []string{"--keep_going", "--remote_download_outputs=toplevel"}
+
+// buildFailedExitCode is Bazel's exit code for a failed build, including a
+// --keep_going build where only some targets succeeded.
+const buildFailedExitCode = 1
+
+// build runs one `bazel build` on labels in workspace, using the configuration
+// of a plain `bazel build` there (from the workspace's .bazelrc, not flags
+// passed to `bazel run`). It accepts exit code buildFailedExitCode and returns
+// the configuration files among each built label's default outputs, keyed by
+// normalised canonical label; labels that failed to build are omitted.
+// Building a generated file or its rule analyses only that rule and its
+// dependencies, not the tf targets listing it, so their providers need not be
+// locked yet. A generator that itself depends on a tf target fails analysis
+// while that target's providers are unlocked and builds on a subsequent pin
+// run.
+func build(bazel, workspace string, labels []string, log io.Writer) (map[string][]sourceFile, error) {
+	dir, err := os.MkdirTemp("", "rules_tofu-pin-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(dir)
+	events := filepath.Join(dir, "build_events.json")
+	args := append(append([]string{"build"}, buildFlags...), "--build_event_json_file="+events, "--")
+	cmd := exec.Command(bazel, append(args, labels...)...)
+	cmd.Dir = workspace
+	cmd.Stdout = log
+	cmd.Stderr = log
+	err = cmd.Run()
+	var exitErr *exec.ExitError
+	if err != nil && !(errors.As(err, &exitErr) && exitErr.ExitCode() == buildFailedExitCode) {
+		return nil, fmt.Errorf("bazel build: %w", err)
+	}
+	data, err := os.ReadFile(events)
+	if err != nil {
+		return nil, fmt.Errorf("bazel build: %w", err)
+	}
+	return parseBuildEvents(data)
+}
+
+// buildEvent holds the fields pin reads from a Build Event Protocol JSON event
+// written by --build_event_json_file.
+type buildEvent struct {
+	ID struct {
+		TargetCompleted *struct {
+			Label string `json:"label"`
+			// Aspect is non-empty when the event reports an aspect applied to
+			// the target (for example from `build --aspects` in .bazelrc);
+			// parseBuildEvents ignores such events so an aspect's completion
+			// never replaces or stands in for its target's.
+			Aspect string `json:"aspect"`
+		} `json:"targetCompleted"`
+		NamedSet *struct {
+			ID string `json:"id"`
+		} `json:"namedSet"`
+	} `json:"id"`
+	WorkspaceInfo *struct {
+		LocalExecRoot string `json:"localExecRoot"`
+	} `json:"workspaceInfo"`
+	NamedSetOfFiles *struct {
+		Files []struct {
+			Name       string   `json:"name"`
+			PathPrefix []string `json:"pathPrefix"`
+		} `json:"files"`
+		FileSets []struct {
+			ID string `json:"id"`
+		} `json:"fileSets"`
+	} `json:"namedSetOfFiles"`
+	Completed *struct {
+		Success     bool `json:"success"`
+		OutputGroup []struct {
+			Name     string `json:"name"`
+			FileSets []struct {
+				ID string `json:"id"`
+			} `json:"fileSets"`
+		} `json:"outputGroup"`
+	} `json:"completed"`
+}
+
+// parseBuildEvents decodes the Build Event Protocol JSON stream written by
+// `bazel build --build_event_json_file`. For each target that completed
+// successfully (ignoring aspect completions where targetCompleted.aspect is
+// set), it expands nested namedSetOfFiles entries in the "default" output
+// group and returns the configuration files keyed by normalised target label
+// (see mainLabel). Each sourceFile's Dir is its directory under the output
+// directory (matching group.Dir), and its Path is its absolute path under
+// workspaceInfo.localExecRoot.
+func parseBuildEvents(data []byte) (map[string][]sourceFile, error) {
+	var execRoot string
+	sets := map[string][]sourceFile{}
+	nested := map[string][]string{}
+	defaults := map[string][]string{}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	for dec.More() {
+		var e buildEvent
+		if err := dec.Decode(&e); err != nil {
+			return nil, fmt.Errorf("bazel build events: %w", err)
+		}
+		switch {
+		case e.WorkspaceInfo != nil:
+			execRoot = e.WorkspaceInfo.LocalExecRoot
+		case e.ID.NamedSet != nil && e.NamedSetOfFiles != nil:
+			id := e.ID.NamedSet.ID
+			sets[id] = []sourceFile{}
+			for _, f := range e.NamedSetOfFiles.Files {
+				if !tfconfig.IsConfigFile(path.Base(f.Name)) {
+					continue
+				}
+				dir := path.Dir(f.Name)
+				if dir == "." {
+					dir = ""
+				}
+				sets[id] = append(sets[id], sourceFile{Dir: dir, Path: path.Join(append(slices.Clone(f.PathPrefix), f.Name)...)})
+			}
+			for _, s := range e.NamedSetOfFiles.FileSets {
+				nested[id] = append(nested[id], s.ID)
+			}
+		case e.ID.TargetCompleted != nil && e.ID.TargetCompleted.Aspect == "" && e.Completed != nil && e.Completed.Success:
+			label := mainLabel(e.ID.TargetCompleted.Label)
+			defaults[label] = []string{}
+			for _, g := range e.Completed.OutputGroup {
+				if g.Name == "default" {
+					for _, s := range g.FileSets {
+						defaults[label] = append(defaults[label], s.ID)
+					}
+				}
+			}
+		}
+	}
+	if execRoot == "" && len(defaults) > 0 {
+		return nil, errors.New("bazel build events: no execution root")
+	}
+	built := map[string][]sourceFile{}
+	for label, ids := range defaults {
+		built[label] = []sourceFile{}
+		seen := map[string]bool{}
+		for len(ids) > 0 {
+			id := ids[0]
+			ids = ids[1:]
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+			for _, f := range sets[id] {
+				built[label] = append(built[label], sourceFile{Dir: f.Dir, Path: filepath.Join(execRoot, filepath.FromSlash(f.Path))})
+			}
+			ids = append(ids, nested[id]...)
+		}
+	}
+	return built, nil
 }
 
 // queryFlags run `bazel query` with partial results allowed, without implicit
@@ -416,11 +618,14 @@ func queryGroups(bazel, workspace string, log io.Writer) ([]group, error) {
 // attributes pin reads. --noproto:flatten_selects keeps every branch of a
 // select() in selectorList: Bazel's default flattening silently drops the
 // select() part of `srcs = [...] + select(...)` and the whole of
-// `actual = select(...)` on an alias.
+// `actual = select(...)` on an alias. --consistent_labels prints every label
+// in canonical form (@@repo+//pkg:name, or @@//pkg:name for the main
+// repository) so query labels match the canonical target labels in build
+// events.
 var queryFlags = []string{
 	"--keep_going", "--noimplicit_deps", "--notool_deps",
 	"--output=streamed_jsonproto", "--proto:output_rule_attrs=srcs,actual,tf_modules_label",
-	"--noproto:flatten_selects",
+	"--noproto:flatten_selects", "--consistent_labels",
 }
 
 // query runs a `bazel query`, accepting partial results.
@@ -466,8 +671,24 @@ type queryTarget struct {
 // queryValue holds the string or string-list value of a plain attribute or of
 // one entry in a selectorList.
 type queryValue struct {
+	// Label is the condition label of a selectorList entry, empty on a plain
+	// attribute.
+	Label           string   `json:"label"`
 	StringValue     string   `json:"stringValue"`
 	StringListValue []string `json:"stringListValue"`
+}
+
+// labels returns the labels in v normalised with mainLabel so they compare as
+// strings.
+func (v queryValue) labels() []string {
+	var labels []string
+	if v.StringValue != "" {
+		labels = append(labels, mainLabel(v.StringValue))
+	}
+	for _, s := range v.StringListValue {
+		labels = append(labels, mainLabel(s))
+	}
+	return labels
 }
 
 // graph holds the source files and rules returned by `bazel query`, keyed by
@@ -477,23 +698,72 @@ type graph struct {
 	rules map[string]rule
 }
 
-// sourceFile is a source file's directory, in the form of group.Dir, and its
-// absolute path.
+// sourceFile holds a configuration file's work-tree directory (as in
+// group.Dir) and its absolute path on disk, for both source files and built
+// outputs.
 type sourceFile struct {
 	Dir, Path string
 }
 
-// rule holds the fields pin reads from a Bazel rule: its class, the labels in
-// its srcs and actual attributes across every branch of any select(), its
+// rule holds the fields pin reads from a Bazel rule: its class, its srcs and
+// actual attributes with each select() preserved as its own element, its
 // declared outputs, and tf_modules_label if set.
 type rule struct {
 	Class   string
-	Srcs    []string
-	Actual  []string
+	Srcs    []element
+	Actual  []element
 	Outputs []string
 	// ModulesLabel is the @tf_modules//<path> label of a library generated by
 	// tf_modules, or "".
 	ModulesLabel string
+}
+
+// element is one operand of an attribute value: an unconditional value (one
+// branch) or a select() with one branch per condition. For example,
+// `["a.tf"] + select({...})` produces two elements.
+type element []branch
+
+// branch holds the labels of one select() branch, or of a plain attribute
+// value (where Condition is "").
+type branch struct {
+	Condition string
+	Labels    []string
+}
+
+// isSelect reports whether e has more than one branch. Plain values and
+// single-branch select()s are treated as unconditional because they contribute
+// the same labels in every configuration that builds.
+func (e element) isSelect() bool {
+	return len(e) > 1
+}
+
+// conditions returns the canonical key for e's condition set: its condition
+// labels sorted and joined by NUL. Two select()s with the same condition set
+// choose the same branch in any configuration, because Bazel resolves
+// conditions identically for both.
+func (e element) conditions() string {
+	conds := make([]string, len(e))
+	for i, b := range e {
+		conds[i] = b.Condition
+	}
+	sort.Strings(conds)
+	return strings.Join(conds, "\x00")
+}
+
+// pick returns the labels e contributes under choice, which maps each select()
+// key (see conditions) to its chosen condition label. Unconditional elements
+// return their sole branch.
+func (e element) pick(choice map[string]string) []string {
+	if !e.isSelect() {
+		return e[0].Labels
+	}
+	cond := choice[e.conditions()]
+	for _, b := range e {
+		if b.Condition == cond {
+			return b.Labels
+		}
+	}
+	return nil
 }
 
 // location is `<path>:<line>:<column>`.
@@ -520,8 +790,8 @@ func splitLabel(label string) (repo, pkg, name string, ok bool) {
 }
 
 // parseTargets reads `bazel query --output=streamed_jsonproto
-// --noproto:flatten_selects` output, one JSON object per target, keeping the
-// source files and rules.
+// --noproto:flatten_selects --consistent_labels` output, one JSON object per
+// target, keeping the source files and rules.
 func parseTargets(out []byte) (graph, error) {
 	g := graph{files: map[string]sourceFile{}, rules: map[string]rule{}}
 	dec := json.NewDecoder(bytes.NewReader(out))
@@ -554,29 +824,36 @@ func parseTargets(out []byte) (graph, error) {
 				r.Outputs = append(r.Outputs, mainLabel(o))
 			}
 			for _, a := range qt.Rule.Attribute {
+				if a.Name == "tf_modules_label" {
+					r.ModulesLabel = a.StringValue
+					continue
+				}
+				if a.Name != "srcs" && a.Name != "actual" {
+					continue
+				}
 				// With --noproto:flatten_selects, an attribute containing a
-				// select() carries a selectorList whose elements are the plain
-				// values and select()s concatenated together; other attributes
-				// carry a plain value.
-				values := []queryValue{a.queryValue}
+				// select() carries selectorList.elements: one element per
+				// operand concatenated with `+` (plain values appear as
+				// single-entry elements, select()s as one entry per branch).
+				// Attributes without select() carry a plain queryValue.
+				var elements []element
 				if a.SelectorList != nil {
 					for _, e := range a.SelectorList.Elements {
-						values = append(values, e.Entries...)
+						var el element
+						for _, v := range e.Entries {
+							el = append(el, branch{Condition: mainLabel(v.Label), Labels: v.labels()})
+						}
+						if len(el) > 0 {
+							elements = append(elements, el)
+						}
 					}
+				} else if labels := a.labels(); len(labels) > 0 {
+					elements = []element{{{Labels: labels}}}
 				}
-				for _, v := range values {
-					switch a.Name {
-					case "srcs":
-						for _, s := range v.StringListValue {
-							r.Srcs = append(r.Srcs, mainLabel(s))
-						}
-					case "actual":
-						if v.StringValue != "" {
-							r.Actual = append(r.Actual, mainLabel(v.StringValue))
-						}
-					case "tf_modules_label":
-						r.ModulesLabel = v.StringValue
-					}
+				if a.Name == "srcs" {
+					r.Srcs = elements
+				} else {
+					r.Actual = elements
 				}
 			}
 			g.rules[mainLabel(qt.Rule.Name)] = r
@@ -585,12 +862,30 @@ func parseTargets(out []byte) (graph, error) {
 	return g, nil
 }
 
-// groups returns the configuration source files of every tf_library, tf_deploy
-// and tf_test in g, one group per target and directory, sorted by target label
-// and directory. generated lists the sorted labels of generated configuration
-// files in their srcs, and of any non-filegroup, non-alias rules in their srcs
-// that declare no outputs.
-func (g graph) groups() (groups []group, generated []string) {
+// selection holds the source and buildable labels collected from one target's
+// srcs for one combination of select() branches, before any build runs.
+type selection struct {
+	// Label is the target label, as in group.Label.
+	Label string
+	// Branches lists the chosen condition of each distinct select() condition
+	// set the target reaches, ordered by sorted element.conditions key; nil
+	// when it reaches no multi-branch select().
+	Branches []string
+	// Sources holds sorted labels of configuration source files.
+	Sources []string
+	// Built holds sorted labels pin must build for this combination (see
+	// collect).
+	Built []string
+}
+
+// selections returns, for every tf_library, tf_deploy and tf_test in g, the
+// labels collected from its srcs (following filegroup srcs and alias actual)
+// for each combination of select() branches it reaches. Results are ordered by
+// queried target label, then by branch combination. select()s with the same
+// condition set take the same branch together; others combine in full
+// Cartesian product. Combinations of one target that yield the same Sources
+// and Built labels are kept once.
+func (g graph) selections() []selection {
 	labels := make([]string, 0, len(g.rules))
 	for label, r := range g.rules {
 		if slices.Contains(tfRules, r.Class) {
@@ -605,79 +900,179 @@ func (g graph) groups() (groups []group, generated []string) {
 			outputs[o] = true
 		}
 	}
-	notRead := map[string]bool{}
+	var sels []selection
 	for _, label := range labels {
-		files := map[string]bool{}
-		for _, src := range g.rules[label].Srcs {
-			g.collect(src, outputs, files, notRead, map[string]bool{})
-		}
-		byDir := map[string][]string{}
-		for f := range files {
-			byDir[g.files[f].Dir] = append(byDir[g.files[f].Dir], g.files[f].Path)
-		}
-		dirs := make([]string, 0, len(byDir))
-		for dir := range byDir {
-			dirs = append(dirs, dir)
-		}
-		sort.Strings(dirs)
+		r := g.rules[label]
 		name := label
-		if hub := g.rules[label].ModulesLabel; hub != "" {
-			name = hub
+		if r.ModulesLabel != "" {
+			name = r.ModulesLabel
 		}
-		for _, dir := range dirs {
-			sort.Strings(byDir[dir])
-			groups = append(groups, group{Label: name, Dir: dir, Files: byDir[dir]})
+		keySet := map[string]bool{}
+		g.selectKeys(r.Srcs, keySet, map[string]bool{})
+		keys := slices.Sorted(maps.Keys(keySet))
+		seen := map[string]bool{}
+		for _, choice := range combinations(keys) {
+			sources, built := map[string]bool{}, map[string]bool{}
+			visited := map[string]bool{}
+			for _, e := range r.Srcs {
+				for _, src := range e.pick(choice) {
+					g.collect(src, choice, outputs, sources, built, visited)
+				}
+			}
+			sel := selection{Label: name, Sources: slices.Sorted(maps.Keys(sources)), Built: slices.Sorted(maps.Keys(built))}
+			id := strings.Join(sel.Sources, "\x00") + "\x01" + strings.Join(sel.Built, "\x00")
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+			for _, k := range keys {
+				sel.Branches = append(sel.Branches, choice[k])
+			}
+			sels = append(sels, sel)
 		}
 	}
-	for label := range notRead {
-		generated = append(generated, label)
-	}
-	sort.Strings(generated)
-	return groups, generated
+	return sels
 }
 
-// collect adds to files the configuration source files that label contributes
-// to a srcs attribute: the file itself, or the files of a filegroup or alias,
-// followed as Bazel follows them. Non-source targets are recorded in
-// generated: a label in outputs with a configuration extension, the declared
-// configuration outputs of a rule, or a non-filegroup, non-alias rule that
-// declares no outputs, whose files the query cannot name.
-func (g graph) collect(label string, outputs, files, generated, seen map[string]bool) {
+// selectKeys adds to keys the element.conditions key of every multi-branch
+// select() in elements and in any filegroup or alias reachable from any
+// branch.
+func (g graph) selectKeys(elements []element, keys, seen map[string]bool) {
+	for _, e := range elements {
+		if e.isSelect() {
+			keys[e.conditions()] = true
+		}
+		for _, b := range e {
+			for _, label := range b.Labels {
+				if seen[label] {
+					continue
+				}
+				seen[label] = true
+				switch r := g.rules[label]; r.Class {
+				case "filegroup":
+					g.selectKeys(r.Srcs, keys, seen)
+				case "alias":
+					g.selectKeys(r.Actual, keys, seen)
+				}
+			}
+		}
+	}
+}
+
+// combinations returns the Cartesian product of choices across keys, each
+// entry mapping each element.conditions key to one of its condition labels.
+// When keys is empty, it returns one empty map.
+func combinations(keys []string) []map[string]string {
+	choices := []map[string]string{{}}
+	for _, key := range keys {
+		var next []map[string]string
+		for _, choice := range choices {
+			for _, cond := range strings.Split(key, "\x00") {
+				c := maps.Clone(choice)
+				c[key] = cond
+				next = append(next, c)
+			}
+		}
+		choices = next
+	}
+	return choices
+}
+
+// collect records what label contributes to srcs under choice: configuration
+// source files go to sources, filegroup srcs and alias actual are followed
+// recursively, and targets that require building go to built. A label goes to
+// built if it is a declared output in outputs with a configuration extension,
+// a rule declaring such an output, or a non-filegroup, non-alias rule that
+// declares no outputs (since `bazel query` cannot name its outputs).
+func (g graph) collect(label string, choice map[string]string, outputs, sources, built, seen map[string]bool) {
 	if seen[label] {
 		return
 	}
 	seen[label] = true
 	if _, ok := g.files[label]; ok {
-		files[label] = true
+		sources[label] = true
 		return
 	}
 	r, ok := g.rules[label]
+	var next []element
 	switch {
 	case !ok:
 		// Not a source file the query returned: a declared rule output, a file
 		// without a configuration extension, or a file in a package Bazel
 		// could not load, which the query reports itself. Only declared
-		// configuration outputs are recorded as generated.
+		// configuration outputs are built.
 		if outputs[label] && isConfigLabel(label) {
-			generated[label] = true
+			built[label] = true
 		}
 	case r.Class == "filegroup":
-		for _, src := range r.Srcs {
-			g.collect(src, outputs, files, generated, seen)
-		}
+		next = r.Srcs
 	case r.Class == "alias":
-		for _, actual := range r.Actual {
-			g.collect(actual, outputs, files, generated, seen)
-		}
-	case len(r.Outputs) == 0:
-		generated[label] = true
-	default:
-		for _, o := range r.Outputs {
-			if isConfigLabel(o) {
-				generated[o] = true
-			}
+		next = r.Actual
+	case len(r.Outputs) == 0 || slices.ContainsFunc(r.Outputs, isConfigLabel):
+		built[label] = true
+	}
+	for _, e := range next {
+		for _, l := range e.pick(choice) {
+			g.collect(l, choice, outputs, sources, built, seen)
 		}
 	}
+}
+
+// toBuild returns the sorted, deduplicated union of Built labels across sels.
+func toBuild(sels []selection) []string {
+	labels := map[string]bool{}
+	for _, s := range sels {
+		for _, l := range s.Built {
+			labels[l] = true
+		}
+	}
+	return slices.Sorted(maps.Keys(labels))
+}
+
+// groups turns sels into per-directory groups, ordered as sels and then by
+// directory. built maps each built label to the configuration files it
+// produced; labels absent from built contribute nothing. Within each directory,
+// files are deduplicated by base name (keeping source paths before built
+// outputs). For a given target, duplicate groups with the same directory and
+// file set are dropped.
+func (g graph) groups(sels []selection, built map[string][]sourceFile) []group {
+	var groups []group
+	seen := map[string]bool{}
+	for _, s := range sels {
+		// byDir keys each directory's files by base name, adding source paths
+		// before built outputs. A rule with undeclared outputs can forward a
+		// source file the target also lists, producing two paths to the same
+		// file; two distinct files cannot share a directory and base name in a
+		// build, and ReadFiles stages files by base name so a duplicate would
+		// fail.
+		byDir := map[string]map[string]string{}
+		add := func(f sourceFile) {
+			if byDir[f.Dir] == nil {
+				byDir[f.Dir] = map[string]string{}
+			}
+			if _, ok := byDir[f.Dir][filepath.Base(f.Path)]; !ok {
+				byDir[f.Dir][filepath.Base(f.Path)] = f.Path
+			}
+		}
+		for _, label := range s.Sources {
+			add(g.files[label])
+		}
+		for _, label := range s.Built {
+			for _, f := range built[label] {
+				add(f)
+			}
+		}
+		for _, dir := range slices.Sorted(maps.Keys(byDir)) {
+			files := slices.Sorted(maps.Values(byDir[dir]))
+			id := s.Label + "\x00" + dir + "\x00" + strings.Join(files, "\x00")
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+			groups = append(groups, group{Label: s.Label, Branches: s.Branches, Dir: dir, Files: files})
+		}
+	}
+	return groups
 }
 
 // isConfigLabel reports whether label names a configuration file.

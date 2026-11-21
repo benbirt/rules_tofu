@@ -836,10 +836,6 @@ follows it.
   calls enter one, fetching fails and names the submodule. A submodule reached
   only via `file()` or an external `//<subdir>` call is omitted at fetch time
   and fails when read or called.
-- `@tf_providers//:pin` reads source files only. It skips configuration files in
-  `srcs` that a rule generates and prints a warning, so a provider required only
-  by generated files must also be required in a source file. With `select()` in
-  `srcs`, `pin` reads the files of every branch together.
 
 ## Contributing
 

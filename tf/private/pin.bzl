@@ -3,10 +3,11 @@
 Always instantiated in `@tf_providers` by the `tf_providers` extension. When
 the root module uses `tf_providers.from_lock`, running `:pin` rewrites the lock
 with `tofu providers lock` using the toolchain's `tofu` for the providers
-required by the configuration source files of the workspace's `tf_library`,
-`tf_deploy` and `tf_test` targets and their external `deps`, found with
-`bazel query` and read with `tofu` (see `//tf/private/cmd/pin`). Otherwise
-`:pin` explains how to enable `from_lock` and exits 1.
+required by the configuration files in `srcs` of the workspace's `tf_library`,
+`tf_deploy` and `tf_test` targets and their external `deps`, discovered with
+`bazel query`, built with `bazel build` when generated, and read with `tofu`
+(see `//tf/private/cmd/pin`). Otherwise `:pin` explains how to enable
+`from_lock` and exits 1.
 """
 
 load("//toolchain:toolchain.bzl", "TOOLCHAIN_TYPE")

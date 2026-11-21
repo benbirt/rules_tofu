@@ -118,12 +118,12 @@ header of `module_dependency_test.sh` for the steps.
 `tf_modules/` (`tf_modules_test`, driven by `tf_modules_test.sh`) turns
 `fixtures/network` into a tagged git repository and `fixtures/dns` into an
 archive at test time alongside `cloudposse/label/null` from the OpenTofu
-registry. It covers `pin` for providers required by fetched modules and
-providers only implied by configuration, offline planning, OpenTofu-evaluated
-module sources and implied providers in generated libraries (dropping built-in
-providers), tree tidying, commit and registry facts, fetch-time error
-diagnostics, and adding a module without re-fetching existing ones; see the
-header of `tf_modules_test.sh` for the steps.
+registry. It covers `pin` across fetched modules, implied providers, generated
+configuration built on demand and `select()` branches read separately, offline
+planning, OpenTofu-evaluated module sources and implied providers in generated
+libraries (dropping built-in providers), tree tidying, commit and registry
+facts, fetch-time error diagnostics, and adding a module without re-fetching
+existing ones; see the header of `tf_modules_test.sh` for the steps.
 
 `run_directory/` (`run_directory_test`, driven by `run_directory_test.sh`)
 exercises `tf_deploy` launchers under `bazel run` and direct execution from
