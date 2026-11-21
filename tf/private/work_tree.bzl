@@ -314,8 +314,8 @@ def materialize_plugin_tree(ctx, providers_depset):
             if prior.version != prov.version:
                 fail(
                     ("`{label}` has conflicting versions for provider `{addr}`: `{a}` and `{b}`. " +
-                     "Provider targets reached through `providers` or `deps` supply different " +
-                     "versions; remove all but one or make them agree on one version.").format(
+                     "Use one provider target across `providers` and dependencies, or make them " +
+                     "supply the same version.").format(
                         label = ctx.label,
                         addr = prov.address,
                         a = prior.version,
