@@ -44,8 +44,8 @@ BUILD files reference each provider as `@tf_providers//<namespace>/<name>`.
 # package whose BUILD file calls `fail()`. The extension itself still succeeds,
 # keeping `@tf_providers//:pin` runnable. The hub is always created; `:pin`
 # runs `tofu providers lock` for the providers required by the configuration
-# source files of the workspace's tf_library, tf_deploy and tf_test targets
-# and their external deps.
+# files in `srcs` of the workspace's tf_library, tf_deploy and tf_test targets
+# and their external deps, building generated configuration files when present.
 
 load("//tf/private:fetched_tree.bzl", "walk")
 load("//tf/private:repo_metadata.bzl", "reproducible")
@@ -383,9 +383,10 @@ _from_lock_tag = tag_class(
           "other than `registry.opentofu.org`, such as those `terraform` writes against " +
           "`registry.terraform.io`, fail a build only when a target uses them; run `pin` " +
           "to rewrite the lock against `registry.opentofu.org`. " +
-          "`pin` reads the configuration source " +
-          "files of each `tf_library`, `tf_deploy` and `tf_test` target in the workspace " +
-          "and their external `deps` with OpenTofu, locking every provider they declare or " +
+          "`pin` reads the configuration files " +
+          "in `srcs` of each `tf_library`, `tf_deploy` and `tf_test` target in the " +
+          "workspace and their external `deps` with OpenTofu (building generated " +
+          "configuration files when present), locking every provider they declare or " +
           "imply. A fetched module's examples are in no target, so they are left out. By " +
           "default `pin` locks the five platforms `from_lock` resolves: `linux_amd64`, " +
           "`linux_arm64`, `darwin_amd64`, `darwin_arm64` and `windows_amd64`. Pass " +

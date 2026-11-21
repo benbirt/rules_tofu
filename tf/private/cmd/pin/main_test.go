@@ -3,10 +3,12 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -183,12 +185,12 @@ func TestParseTargets(t *testing.T) {
 		moduleLibrary("@@m+//:_rules_tofu_module", "@tf_modules//m", "@@m+//:main.tf") + "\n" +
 		ruleTarget("alias", "//net:alias", "//net:files") + "\n" +
 		generatingRule("genrule", "//net:gen", "//net:gen.tf") + "\n" +
-		// As Bazel 9.1.0 prints `srcs = ["a.tf", ":al"] + select({":opt":
-		// ["b.tf"], "//conditions:default": [":fg"]})` and `actual =
-		// select({":opt": ":fg", "//conditions:default": "e.tf"})` with
-		// --noproto:flatten_selects.
-		`{"type":"RULE","rule":{"name":"//sel:lib","ruleClass":"_tf_library","attribute":[{"name":"srcs","type":"SELECTOR_LIST","explicitlySpecified":true,"nodep":false,"selectorList":{"type":"LABEL_LIST","elements":[{"entries":[{"label":"//conditions:default","stringListValue":["//sel:a.tf","//sel:al"],"isDefaultValue":false}],"hasDefaultValue":true,"noMatchError":""},{"entries":[{"label":"//sel:opt","stringListValue":["//sel:b.tf"],"isDefaultValue":false},{"label":"//conditions:default","stringListValue":["//sel:fg"],"isDefaultValue":false}],"hasDefaultValue":true,"noMatchError":""}]}},{"name":"tf_modules_label","type":"STRING","stringValue":"","explicitlySpecified":false,"nodep":false}]}}` + "\n" +
-		`{"type":"RULE","rule":{"name":"//sel:al","ruleClass":"alias","attribute":[{"name":"actual","type":"SELECTOR_LIST","explicitlySpecified":true,"nodep":false,"selectorList":{"type":"LABEL","elements":[{"entries":[{"label":"//sel:opt","stringValue":"//sel:fg","isDefaultValue":false},{"label":"//conditions:default","stringValue":"//sel:e.tf","isDefaultValue":false}],"hasDefaultValue":true,"noMatchError":""}]}}]}}` + "\n" +
+		// Captured from Bazel 9.1.0 with --noproto:flatten_selects and
+		// --consistent_labels for `srcs = ["a.tf", ":al"] + select({":opt":
+		// ["b.tf"], "//conditions:default": [":fg"]})` and
+		// `actual = select({":opt": ":fg", "//conditions:default": "e.tf"})`.
+		`{"type":"RULE","rule":{"name":"@@//sel:lib","ruleClass":"_tf_library","location":"/ws/sel/BUILD.bazel:9:11","attribute":[{"name":"srcs","type":"SELECTOR_LIST","explicitlySpecified":true,"nodep":false,"selectorList":{"type":"LABEL_LIST","elements":[{"entries":[{"label":"@@//conditions:default","stringListValue":["@@//sel:a.tf","@@//sel:al"],"isDefaultValue":false}],"hasDefaultValue":true,"noMatchError":""},{"entries":[{"label":"@@//sel:opt","stringListValue":["@@//sel:b.tf"],"isDefaultValue":false},{"label":"@@//conditions:default","stringListValue":["@@//sel:fg"],"isDefaultValue":false}],"hasDefaultValue":true,"noMatchError":""}]}},{"name":"tf_modules_label","type":"STRING","stringValue":"","explicitlySpecified":false,"nodep":false},{"name":"$rule_implementation_hash","type":"STRING","stringValue":"d6c0cb8335c8da7bc86c9c8fa28004382f3b7f3869924f36fc1e5e1344179336"}],"ruleInput":["@@//sel:a.tf","@@//sel:al","@@//sel:b.tf","@@//sel:fg","@@//sel:opt"]}}` + "\n" +
+		`{"type":"RULE","rule":{"name":"@@//sel:al","ruleClass":"alias","location":"/ws/sel/BUILD.bazel:7:6","attribute":[{"name":"actual","type":"SELECTOR_LIST","explicitlySpecified":true,"nodep":false,"selectorList":{"type":"LABEL","elements":[{"entries":[{"label":"@@//sel:opt","stringValue":"@@//sel:fg","isDefaultValue":false},{"label":"@@//conditions:default","stringValue":"@@//sel:e.tf","isDefaultValue":false}],"hasDefaultValue":true,"noMatchError":""}]}}],"ruleInput":["@@//sel:e.tf","@@//sel:fg","@@//sel:opt"]}}` + "\n" +
 		`{"type":"PACKAGE_GROUP","packageGroup":{"name":"//:pkgs"}}` + "\n"))
 	if err != nil {
 		t.Fatal(err)
@@ -202,12 +204,17 @@ func TestParseTargets(t *testing.T) {
 			"@@m+//:main.tf":     {Dir: "external/m+", Path: "/ext/m+/main.tf"},
 		},
 		rules: map[string]rule{
-			"@@dep+//lib:lib":           {Class: "_tf_library", Srcs: []string{"@@dep+//lib:main.tf", "//dash:main.tf"}},
-			"@@m+//:_rules_tofu_module": {Class: "_tf_library", Srcs: []string{"@@m+//:main.tf"}, ModulesLabel: "@tf_modules//m"},
-			"//net:alias":               {Class: "alias", Actual: []string{"//net:files"}},
+			"@@dep+//lib:lib":           {Class: "_tf_library", Srcs: []element{plain("@@dep+//lib:main.tf", "//dash:main.tf")}},
+			"@@m+//:_rules_tofu_module": {Class: "_tf_library", Srcs: []element{plain("@@m+//:main.tf")}, ModulesLabel: "@tf_modules//m"},
+			"//net:alias":               {Class: "alias", Actual: []element{plain("//net:files")}},
 			"//net:gen":                 {Class: "genrule", Outputs: []string{"//net:gen.tf"}},
-			"//sel:lib":                 {Class: "_tf_library", Srcs: []string{"//sel:a.tf", "//sel:al", "//sel:b.tf", "//sel:fg"}},
-			"//sel:al":                  {Class: "alias", Actual: []string{"//sel:fg", "//sel:e.tf"}},
+			"//sel:lib": {Class: "_tf_library", Srcs: []element{
+				{{Condition: "//conditions:default", Labels: []string{"//sel:a.tf", "//sel:al"}}},
+				{{Condition: "//sel:opt", Labels: []string{"//sel:b.tf"}}, {Condition: "//conditions:default", Labels: []string{"//sel:fg"}}},
+			}},
+			"//sel:al": {Class: "alias", Actual: []element{
+				{{Condition: "//sel:opt", Labels: []string{"//sel:fg"}}, {Condition: "//conditions:default", Labels: []string{"//sel:e.tf"}}},
+			}},
 		},
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -218,8 +225,14 @@ func TestParseTargets(t *testing.T) {
 	}
 }
 
-// Files are grouped by target and directory, through filegroups and aliases,
-// so each group is what strict deps reads for that target in the build.
+// plain builds a single-branch srcs or actual element without select().
+func plain(labels ...string) element {
+	return element{{Labels: labels}}
+}
+
+// Files are grouped by target and directory through filegroups and aliases,
+// merging built outputs with source files and omitting labels that did not
+// build, so each group matches what strict deps reads in the build.
 func TestGroups(t *testing.T) {
 	module := "@@rules_tofu++tf_modules+tf_modules_vpc"
 	lines := []string{
@@ -231,13 +244,15 @@ func TestGroups(t *testing.T) {
 		ruleTarget("filegroup", "//stacks:files", "//stacks:common.tf", "//stacks:nested", "//stacks:README.md"),
 		ruleTarget("filegroup", "//stacks:nested", "//stacks:sub/extra.tf.json", "//stacks:files"),
 		// A library over two directories, with generated configuration: a
-		// declared output named by its label, a rule with declared outputs,
-		// and a rule that declares none. //missing:main.tf is in a package
+		// declared output named by its label, a rule with a declared
+		// configuration output, a rule that declares none, and a rule
+		// declaring only other outputs. //missing:main.tf is in a package
 		// Bazel could not load, which the query reports itself.
-		ruleTarget("_tf_library", "//lib:lib", "//lib:main.tofu", "//lib:modules/a/main.tf", "//lib:gen.tf", "//lib:written", "//lib:template.tftpl", "//lib:rendered", "//missing:main.tf"),
+		ruleTarget("_tf_library", "//lib:lib", "//lib:main.tofu", "//lib:modules/a/main.tf", "//lib:gen.tf", "//lib:written", "//lib:template.tftpl", "//lib:rendered", "//lib:docs", "//missing:main.tf"),
 		generatingRule("genrule", "//lib:gen", "//lib:gen.tf"),
 		generatingRule("write_file", "//lib:written", "//lib:written.tf.json", "//lib:written.txt"),
 		generatingRule("render", "//lib:rendered"),
+		generatingRule("genrule", "//lib:docs", "//lib:docs.md"),
 		// Test files are not configuration.
 		ruleTarget("_tf_test", "//lib:test", "//lib:main.tftest.hcl"),
 		// A fetched module goes by its tf_modules_label in the hub.
@@ -262,10 +277,19 @@ func TestGroups(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	groups, generated := g.groups()
+	sels := g.selections()
+	if got, want := toBuild(sels), []string{"//lib:gen.tf", "//lib:rendered", "//lib:written"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("toBuild = %q, want %q", got, want)
+	}
+	// //lib:written did not build.
+	built := map[string][]sourceFile{
+		"//lib:gen.tf":   {{Dir: "lib", Path: "/out/lib/gen.tf"}},
+		"//lib:rendered": {{Dir: "lib/rendered", Path: "/out/lib/rendered/main.tf"}},
+	}
 	want := []group{
-		{Label: "//lib:lib", Dir: "lib", Files: []string{"/ws/lib/main.tofu"}},
+		{Label: "//lib:lib", Dir: "lib", Files: []string{"/out/lib/gen.tf", "/ws/lib/main.tofu"}},
 		{Label: "//lib:lib", Dir: "lib/modules/a", Files: []string{"/ws/lib/modules/a/main.tf"}},
+		{Label: "//lib:lib", Dir: "lib/rendered", Files: []string{"/out/lib/rendered/main.tf"}},
 		{Label: "//stacks:dev", Dir: "stacks", Files: []string{"/ws/stacks/common.tf", "/ws/stacks/dev.tf"}},
 		{Label: "//stacks:dev", Dir: "stacks/sub", Files: []string{"/ws/stacks/sub/extra.tf.json"}},
 		{Label: "//stacks:prod", Dir: "stacks", Files: []string{"/ws/stacks/common.tf", "/ws/stacks/prod.tf"}},
@@ -273,33 +297,75 @@ func TestGroups(t *testing.T) {
 		{Label: "@tf_modules//vpc", Dir: "external/rules_tofu++tf_modules+tf_modules_vpc", Files: []string{"/ext/vpc/main.tf"}},
 		{Label: "@tf_modules//vpc", Dir: "external/rules_tofu++tf_modules+tf_modules_vpc/modules/sub", Files: []string{"/ext/vpc/modules/sub/main.tf"}},
 	}
-	if !reflect.DeepEqual(groups, want) {
-		t.Errorf("groups =\n%+v, want\n%+v", groups, want)
-	}
-	if want := []string{"//lib:gen.tf", "//lib:rendered", "//lib:written.tf.json"}; !reflect.DeepEqual(generated, want) {
-		t.Errorf("generated = %q, want %q", generated, want)
+	if got := g.groups(sels, built); !reflect.DeepEqual(got, want) {
+		t.Errorf("groups =\n%+v, want\n%+v", got, want)
 	}
 }
 
-// A select() in srcs or in an alias's actual contributes every branch: the
-// query does not know the build's configuration.
+// Each combination of select() branches forms its own group: unconditional
+// files plus one branch of each select(). select()s with the same condition
+// set take the same branch together, as Bazel chooses one condition for both;
+// select()s with different condition sets combine in full Cartesian product.
 func TestGroups_Select(t *testing.T) {
+	const opt, def = "//sel:opt", "//conditions:default"
+	const aws, gcp, big = "//cfg:aws", "//cfg:gcp", "//cfg:big"
 	g := graph{
 		files: map[string]sourceFile{},
 		rules: map[string]rule{
-			"//sel:lib": {Class: "_tf_library", Srcs: []string{"//sel:a.tf", "//sel:al", "//sel:b.tf", "//sel:fg"}},
-			"//sel:al":  {Class: "alias", Actual: []string{"//sel:fg", "//sel:e.tf"}},
-			"//sel:fg":  {Class: "filegroup", Srcs: []string{"//sel:c.tf", "//sel:d.tf"}},
+			// `["a.tf", ":al"] + select({":opt": ["b.tf"], default: [":fg"]})`,
+			// where :al is `alias(actual = select({":opt": ":fg", default:
+			// "e.tf"}))`: same condition set, so two groups rather than four.
+			"//sel:lib": {Class: "_tf_library", Srcs: []element{
+				plain("//sel:a.tf", "//sel:al"),
+				{{Condition: opt, Labels: []string{"//sel:b.tf"}}, {Condition: def, Labels: []string{"//sel:fg"}}},
+			}},
+			"//sel:al": {Class: "alias", Actual: []element{{{Condition: opt, Labels: []string{"//sel:fg"}}, {Condition: def, Labels: []string{"//sel:e.tf"}}}}},
+			"//sel:fg": {Class: "filegroup", Srcs: []element{plain("//sel:c.tf", "//sel:d.tf")}},
+			// Three select()s: two over {aws, gcp} (in different branch orders)
+			// and one over {big, default}, giving four combinations.
+			"//multi:lib": {Class: "_tf_library", Srcs: []element{
+				plain("//multi:m.tf"),
+				{{Condition: aws, Labels: []string{"//multi:aws.tf"}}, {Condition: gcp, Labels: []string{"//multi:gcp.tf"}}},
+				{{Condition: big, Labels: []string{"//multi:big.tf"}}, {Condition: def}},
+				{{Condition: gcp, Labels: []string{"//multi:gcp2.tf"}}, {Condition: aws, Labels: []string{"//multi:aws2.tf"}}},
+			}},
+			// A filegroup with two select()s: one includes a generated file in
+			// one branch, and the other lists y.tf in both branches.
+			// Combinations producing the same files collapse into one group
+			// under the first combination.
+			"//fg:lib": {Class: "_tf_library", Srcs: []element{plain("//fg:files")}},
+			"//fg:files": {Class: "filegroup", Srcs: []element{
+				{{Condition: opt, Labels: []string{"//fg:gen.tf"}}, {Condition: def, Labels: []string{"//fg:x.tf"}}},
+				{{Condition: aws, Labels: []string{"//fg:y.tf"}}, {Condition: def, Labels: []string{"//fg:y.tf"}}},
+			}},
+			"//fg:gen": {Class: "genrule", Outputs: []string{"//fg:gen.tf"}},
 		},
 	}
-	var want []string
-	for _, name := range []string{"a", "b", "c", "d", "e"} {
-		g.files["//sel:"+name+".tf"] = sourceFile{Dir: "sel", Path: "/ws/sel/" + name + ".tf"}
-		want = append(want, "/ws/sel/"+name+".tf")
+	for _, label := range []string{
+		"//sel:a.tf", "//sel:b.tf", "//sel:c.tf", "//sel:d.tf", "//sel:e.tf",
+		"//multi:m.tf", "//multi:aws.tf", "//multi:gcp.tf", "//multi:big.tf", "//multi:aws2.tf", "//multi:gcp2.tf",
+		"//fg:x.tf", "//fg:y.tf",
+	} {
+		pkg, name, _ := strings.Cut(strings.TrimPrefix(label, "//"), ":")
+		g.files[label] = sourceFile{Dir: pkg, Path: "/ws/" + pkg + "/" + name}
 	}
-	groups, generated := g.groups()
-	if want := []group{{Label: "//sel:lib", Dir: "sel", Files: want}}; !reflect.DeepEqual(groups, want) || generated != nil {
-		t.Errorf("groups = %+v, generated = %q, want %+v", groups, generated, want)
+	sels := g.selections()
+	if got, want := toBuild(sels), []string{"//fg:gen.tf"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("toBuild = %q, want %q", got, want)
+	}
+	got := g.groups(sels, map[string][]sourceFile{"//fg:gen.tf": {{Dir: "fg", Path: "/out/fg/gen.tf"}}})
+	want := []group{
+		{Label: "//fg:lib", Branches: []string{aws, def}, Dir: "fg", Files: []string{"/ws/fg/x.tf", "/ws/fg/y.tf"}},
+		{Label: "//fg:lib", Branches: []string{aws, opt}, Dir: "fg", Files: []string{"/out/fg/gen.tf", "/ws/fg/y.tf"}},
+		{Label: "//multi:lib", Branches: []string{aws, big}, Dir: "multi", Files: []string{"/ws/multi/aws.tf", "/ws/multi/aws2.tf", "/ws/multi/big.tf", "/ws/multi/m.tf"}},
+		{Label: "//multi:lib", Branches: []string{aws, def}, Dir: "multi", Files: []string{"/ws/multi/aws.tf", "/ws/multi/aws2.tf", "/ws/multi/m.tf"}},
+		{Label: "//multi:lib", Branches: []string{gcp, big}, Dir: "multi", Files: []string{"/ws/multi/big.tf", "/ws/multi/gcp.tf", "/ws/multi/gcp2.tf", "/ws/multi/m.tf"}},
+		{Label: "//multi:lib", Branches: []string{gcp, def}, Dir: "multi", Files: []string{"/ws/multi/gcp.tf", "/ws/multi/gcp2.tf", "/ws/multi/m.tf"}},
+		{Label: "//sel:lib", Branches: []string{def}, Dir: "sel", Files: []string{"/ws/sel/a.tf", "/ws/sel/c.tf", "/ws/sel/d.tf", "/ws/sel/e.tf"}},
+		{Label: "//sel:lib", Branches: []string{opt}, Dir: "sel", Files: []string{"/ws/sel/a.tf", "/ws/sel/b.tf", "/ws/sel/c.tf", "/ws/sel/d.tf"}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("groups =\n%+v, want\n%+v", got, want)
 	}
 }
 
@@ -648,25 +714,6 @@ func TestRun_TargetCannotLoad(t *testing.T) {
 	}
 }
 
-// pin cannot read a generated configuration file, and says so.
-func TestRun_WarnsAboutGeneratedFiles(t *testing.T) {
-	ws := t.TempDir()
-	writeFile(t, filepath.Join(ws, "app/main.tf"), nullFloor)
-	bazel := fakeBazelOutput(t,
-		ruleTarget("_tf_library", "//app:app", "//app:main.tf", "//app:gen.tf"),
-		fileTarget("//app:main.tf", filepath.Join(ws, "app/main.tf")),
-		generatingRule("genrule", "//app:gen", "//app:gen.tf"))
-	tofu, _, _ := fakeTofu(t)
-
-	var log strings.Builder
-	if err := run(ws, "", tofu, bazel, nil, nil, nil, &log); err != nil {
-		t.Fatalf("run: %v\n%s", err, log.String())
-	}
-	if !strings.Contains(log.String(), "pin cannot read //app:gen.tf, which is not a source file") {
-		t.Errorf("expected a warning about //app:gen.tf:\n%s", log.String())
-	}
-}
-
 // When every required provider is one the root module tags, there is nothing
 // to lock: pin writes an empty lock (`tofu`'s header, no providers) over the
 // old one without running `tofu providers lock`, so a stale entry can't
@@ -850,5 +897,195 @@ func TestRun_ReadsEachFileSetOnce(t *testing.T) {
 	shows, _ := os.ReadFile(showLog)
 	if got := strings.Count(string(shows), "\n"); got != 2 {
 		t.Errorf("tofu show ran %d times, want 2:\n%s", got, shows)
+	}
+}
+
+// fakeBazelBuild writes a bazel stand-in whose `query` prints targets and whose
+// `build` writes events to --build_event_json_file, logs its arguments to
+// buildLog and exits with exitCode.
+func fakeBazelBuild(t *testing.T, events string, exitCode int, targets ...string) (path, buildLog string) {
+	t.Helper()
+	dir := t.TempDir()
+	path = filepath.Join(dir, "bazel")
+	buildLog = filepath.Join(dir, "build.log")
+	writeFile(t, filepath.Join(dir, "events.json"), events)
+	writeFile(t, path, `#!/bin/sh
+if [ "$1" = query ]; then
+  cat <<'EOF'
+`+strings.Join(targets, "\n")+`
+EOF
+  exit 0
+fi
+[ "$1" = build ] || exit 2
+echo "$@" >> "`+buildLog+`"
+for a in "$@"; do
+  case "$a" in --build_event_json_file=*) cp "`+filepath.Join(dir, "events.json")+`" "${a#--build_event_json_file=}" ;; esac
+done
+exit `+fmt.Sprint(exitCode)+`
+`)
+	if err := os.Chmod(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path, buildLog
+}
+
+// selectRule encodes a rule as `bazel query --noproto:flatten_selects` prints
+// it for `srcs = plain + select(branches)`.
+func selectRule(class, label string, plain []string, branches map[string][]string) string {
+	var entries []any
+	for _, cond := range slices.Sorted(maps.Keys(branches)) {
+		entries = append(entries, map[string]any{"label": cond, "stringListValue": branches[cond]})
+	}
+	elements := []any{
+		map[string]any{"entries": []any{map[string]any{"label": "//conditions:default", "stringListValue": plain}}},
+		map[string]any{"entries": entries},
+	}
+	return marshalRule(map[string]any{"name": label, "ruleClass": class, "attribute": []any{
+		map[string]any{"name": "srcs", "type": "SELECTOR_LIST", "selectorList": map[string]any{"type": "LABEL_LIST", "elements": elements}},
+	}})
+}
+
+// buildEvents is trimmed Build Event Protocol JSON from Bazel 9.1.0 for
+// `bazel build --keep_going //gen:gen.tf.json //gen:und //gen:from_tf.tf`,
+// with @EXECROOT@ standing in for workspaceInfo.localExecRoot. The first two
+// targets built (//gen:und spans two nested namedSetOfFiles, including a
+// non-configuration .txt file); //gen:from_tf.tf failed analysis.
+const buildEvents = `{"id":{"pattern":{"pattern":["//gen:gen.tf.json","//gen:und","//gen:from_tf.tf"]}},"children":[{"targetConfigured":{"label":"//gen:gen.tf.json"}}],"expanded":{}}
+{"id":{"workspace":{}},"workspaceInfo":{"localExecRoot":"@EXECROOT@"}}
+{"id":{"targetConfigured":{"label":"//gen:gen.tf.json"}},"children":[{"targetCompleted":{"label":"//gen:gen.tf.json","configuration":{"id":"91e2"}}}],"configured":{"targetKind":"generated file"}}
+{"id":{"namedSet":{"id":"2"}},"namedSetOfFiles":{"files":[{"name":"gen/und/extra.tf","uri":"file:///x","pathPrefix":["bazel-out","k8-fastbuild","bin"]}]}}
+{"id":{"namedSet":{"id":"0"}},"namedSetOfFiles":{"files":[{"name":"gen/und.txt","uri":"file:///x","pathPrefix":["bazel-out","k8-fastbuild","bin"]}],"fileSets":[{"id":"2"}]}}
+{"id":{"targetCompleted":{"label":"//gen:und","configuration":{"id":"91e2"}}},"completed":{"success":true,"outputGroup":[{"name":"default","fileSets":[{"id":"0"}]}]}}
+{"id":{"namedSet":{"id":"1"}},"namedSetOfFiles":{"files":[{"name":"gen/gen.tf.json","uri":"file:///x","pathPrefix":["bazel-out","k8-fastbuild","bin"]}]}}
+{"id":{"targetCompleted":{"label":"//gen:gen.tf.json","configuration":{"id":"91e2"}}},"completed":{"success":true,"outputGroup":[{"name":"default","fileSets":[{"id":"1"}]}]}}
+{"id":{"configuredLabel":{"label":"@@rules_tofu++tf_providers+tf_providers//hashicorp/null:null","configuration":{"id":"91e2"}}},"aborted":{"reason":"ANALYSIS_FAILURE","description":"no such package"}}
+{"id":{"targetConfigured":{"label":"//gen:from_tf.tf"}},"children":[],"aborted":{"reason":"ANALYSIS_FAILURE"}}
+`
+
+// parseBuildEvents extracts configuration files from default outputs across
+// nested file sets, skips non-configuration files and failed targets, and
+// rejects malformed JSON.
+func TestParseBuildEvents(t *testing.T) {
+	got, err := parseBuildEvents([]byte(strings.ReplaceAll(buildEvents, "@EXECROOT@", "/exec")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string][]sourceFile{
+		"//gen:gen.tf.json": {{Dir: "gen", Path: "/exec/bazel-out/k8-fastbuild/bin/gen/gen.tf.json"}},
+		"//gen:und":         {{Dir: "gen/und", Path: "/exec/bazel-out/k8-fastbuild/bin/gen/und/extra.tf"}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("parseBuildEvents = %+v, want %+v", got, want)
+	}
+	if _, err := parseBuildEvents([]byte("not JSON\n")); err == nil {
+		t.Error("expected an error for events that aren't JSON")
+	}
+}
+
+// pin builds generated configuration in srcs (both declared outputs and rules
+// without declared outputs) in one `bazel build`, merges built outputs into
+// their target's directory groups, locks their providers, and warns on labels
+// that fail to build while locking the rest.
+func TestRun_BuildsGeneratedFiles(t *testing.T) {
+	ws := t.TempDir()
+	writeFile(t, filepath.Join(ws, "gen/main.tf"), nullFloor)
+	exec := t.TempDir()
+	bin := filepath.Join(exec, "bazel-out/k8-fastbuild/bin")
+	writeFile(t, filepath.Join(bin, "gen/gen.tf.json"), `{"resource": {"random_id": {"x": {"byte_length": 1}}}}`)
+	writeFile(t, filepath.Join(bin, "gen/und/extra.tf"), `resource "time_static" "t" {}`)
+	writeFile(t, filepath.Join(bin, "gen/und.txt"), "not configuration")
+	bazel, buildLog := fakeBazelBuild(t, strings.ReplaceAll(buildEvents, "@EXECROOT@", exec), 1,
+		ruleTarget("_tf_library", "//gen:lib", "//gen:main.tf", "//gen:gen.tf.json", "//gen:und", "//gen:from_tf.tf"),
+		fileTarget("//gen:main.tf", filepath.Join(ws, "gen/main.tf")),
+		generatingRule("genrule", "//gen:gen", "//gen:gen.tf.json"),
+		generatingRule("undeclared", "//gen:und"),
+		generatingRule("genrule", "//gen:from_tf", "//gen:from_tf.tf"))
+	tofu, _, showLog := fakeTofu(t)
+
+	var log strings.Builder
+	if err := run(ws, "", tofu, bazel, nil, nil, nil, &log); err != nil {
+		t.Fatalf("run: %v\n%s", err, log.String())
+	}
+	got := lockedProviders(t, filepath.Join(ws, ".terraform.lock.hcl"))
+	want := map[string]tofushow.Provider{
+		"null":   {Source: nullSource, Version: ">= 3.0.0"},
+		"random": {Source: hashicorp("random")},
+		"time":   {Source: hashicorp("time")},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("locked against %v, want %v", got, want)
+	}
+	builds, _ := os.ReadFile(buildLog)
+	if !regexp.MustCompile(`^build --keep_going --remote_download_outputs=toplevel --build_event_json_file=\S+ -- //gen:from_tf.tf //gen:gen.tf.json //gen:und\n$`).Match(builds) {
+		t.Errorf("bazel build calls = %q", builds)
+	}
+	// gen.tf.json is read with main.tf, in their directory.
+	if shows, _ := os.ReadFile(showLog); strings.Count(string(shows), "\n") != 2 {
+		t.Errorf("tofu show ran other than twice:\n%s", shows)
+	}
+	if !strings.Contains(log.String(), "pin could not build //gen:from_tf.tf") {
+		t.Errorf("expected a warning about //gen:from_tf.tf:\n%s", log.String())
+	}
+	if strings.Contains(log.String(), "//gen:und") || strings.Contains(log.String(), "//gen:gen.tf.json") {
+		t.Errorf("warned about a target that built:\n%s", log.String())
+	}
+}
+
+// A `bazel build` exit code other than 0 or 1 fails pin and leaves the lock
+// unchanged.
+func TestRun_BuildFailure(t *testing.T) {
+	ws := t.TempDir()
+	writeFile(t, filepath.Join(ws, "gen/main.tf"), nullFloor)
+	writeFile(t, filepath.Join(ws, ".terraform.lock.hcl"), "# old\n")
+	bazel, _ := fakeBazelBuild(t, "", 2,
+		ruleTarget("_tf_library", "//gen:lib", "//gen:main.tf", "//gen:gen.tf"),
+		fileTarget("//gen:main.tf", filepath.Join(ws, "gen/main.tf")),
+		generatingRule("genrule", "//gen:gen", "//gen:gen.tf"))
+	tofu, _, _ := fakeTofu(t)
+	var log strings.Builder
+	if err := run(ws, "", tofu, bazel, nil, nil, nil, &log); err == nil || !strings.Contains(err.Error(), "bazel build") {
+		t.Errorf("expected the build's failure to surface, got %v\n%s", err, log.String())
+	}
+	if lock, _ := os.ReadFile(filepath.Join(ws, ".terraform.lock.hcl")); string(lock) != "# old\n" {
+		t.Errorf("a failed pin must leave the lock alone, got %q", lock)
+	}
+}
+
+// Each select() branch is read separately alongside unconditional files, so
+// branches may declare the same names and every branch's providers are locked.
+// A combination OpenTofu cannot load fails pin naming the target and chosen
+// branch conditions.
+func TestRun_SelectBranches(t *testing.T) {
+	ws := t.TempDir()
+	writeFile(t, filepath.Join(ws, "net/main.tf"), `resource "null_resource" "x" {}`)
+	requiring(t, filepath.Join(ws, "net/aws.tf"), `null = { source = "hashicorp/null", version = "~> 3.2" }`, `aws = { source = "hashicorp/aws" }`)
+	requiring(t, filepath.Join(ws, "net/gcp.tf"), `null = { source = "hashicorp/null", version = ">= 3.2.3" }`, `google = { source = "hashicorp/google" }`)
+	targets := []string{
+		selectRule("_tf_library", "//net:lib", []string{"//net:main.tf"}, map[string][]string{"//cfg:aws": {"//net:aws.tf"}, "//cfg:gcp": {"//net:gcp.tf"}}),
+	}
+	for _, name := range []string{"main.tf", "aws.tf", "gcp.tf"} {
+		targets = append(targets, fileTarget("//net:"+name, filepath.Join(ws, "net", name)))
+	}
+	bazel := fakeBazelOutput(t, targets...)
+	tofu, _, _ := fakeTofu(t)
+
+	var log strings.Builder
+	if err := run(ws, "", tofu, bazel, nil, nil, nil, &log); err != nil {
+		t.Fatalf("run: %v\n%s", err, log.String())
+	}
+	got := lockedProviders(t, filepath.Join(ws, ".terraform.lock.hcl"))
+	want := map[string]tofushow.Provider{
+		"aws":    {Source: hashicorp("aws")},
+		"google": {Source: hashicorp("google")},
+		"null":   {Source: nullSource, Version: ">= 3.2.3, ~> 3.2"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("locked against %v, want %v", got, want)
+	}
+
+	writeFile(t, filepath.Join(ws, "net/gcp.tf"), `resource "null_resource" "x" {}`)
+	err := run(ws, "", tofu, bazel, nil, nil, nil, &log)
+	if err == nil || !strings.Contains(err.Error(), "//net:lib (select() //cfg:gcp): ") || !strings.Contains(err.Error(), "Duplicate resource") {
+		t.Errorf("expected a load failure naming the gcp branch, got %v", err)
 	}
 }

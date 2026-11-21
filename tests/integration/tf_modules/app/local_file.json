@@ -1,0 +1,10 @@
+{
+  "resource": {
+    "local_file": {
+      "summary": {
+        "content": "summary",
+        "filename": "${path.module}/summary.txt"
+      }
+    }
+  }
+}
