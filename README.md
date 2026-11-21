@@ -517,10 +517,7 @@ callers' `version` constraints accept. When `module_source` is set,
 `module_version` defaults to the version of the Bazel module that holds the
 library; setting `module_version` without `module_source` is an error.
 
-`bazel build` evaluates each `module` block's `source` without `vars`,
-`var_files` or a calling module's arguments. A `source` that uses a variable
-gets the variable's `default`, and fails `bazel build` if it has none. Inside
-`run` blocks of `tf_test` files and inside modules fetched by
+Inside `run` blocks of `tf_test` files and inside modules fetched by
 `tf_modules.module`, `source` must be a literal string.
 
 Non-local calls match a `tf_library` in `deps` by `module_source`, either exact
