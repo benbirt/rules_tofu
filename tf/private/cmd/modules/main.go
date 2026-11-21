@@ -77,10 +77,7 @@
 //
 // Missing-provider errors name the @tf_providers//<namespace>/<name> label to
 // add to providers, or report that a provider outside registry.opentofu.org
-// cannot be vendored. If the walk already read the directory and another
-// target's file there declares a missing hashicorp/<name> local name under a
-// different address, the error also points to putting that file in this
-// target's srcs. Built-in providers under terraform.io/builtin/ and
+// cannot be vendored. Built-in providers under terraform.io/builtin/ and
 // opentofu.org/builtin/ need no plugin and are skipped.
 //
 // Files from deps are not checked here, whether in --root or in modules
