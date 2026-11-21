@@ -140,6 +140,9 @@ func TestReadRequirements(t *testing.T) {
 
 func writeFiles(t *testing.T, dir string, files map[string]string) {
 	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	for name, content := range files {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
 			t.Fatal(err)
@@ -242,30 +245,6 @@ func TestHasConfig_TofuOnly(t *testing.T) {
 	}
 }
 
-func TestReadCalls_Tofu(t *testing.T) {
-	dir := t.TempDir()
-	writeFiles(t, dir, map[string]string{
-		// Shadowed by main.tofu, so neither its call nor the duplicate counts.
-		"main.tf":         `module "a" { source = "acme/tf/aws" }`,
-		"main.tofu":       `module "a" { source = "acme/tofu/aws" }`,
-		"b.tofu.json":     `{"module": {"b": {"source": "./b"}}}`,
-		"c.tofu":          `module "c" { source = "./c" }`,
-		"c_override.tofu": `module "c" { source = "./c2" }`,
-	})
-	calls, err := ReadCalls(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := map[string]string{}
-	for _, c := range calls {
-		got[c.Name] = c.Source
-	}
-	want := map[string]string{"a": "acme/tofu/aws", "b": "./b", "c": "./c2"}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("got %v, want %v", got, want)
-	}
-}
-
 // pin hands ReadRequirements the files Bazel lists, both halves of a shadowed
 // pair included; the .tf one must not count.
 func TestReadRequirements_TofuShadowsTf(t *testing.T) {
@@ -287,32 +266,40 @@ func TestReadRequirements_TofuShadowsTf(t *testing.T) {
 	}
 }
 
+// writeModules creates an empty main.tf under repo for each directory in calls
+// and returns a `sources` callback for ModuleDirs that returns calls[dir] or
+// os.Stat's not-exist error when main.tf is absent.
+func writeModules(t *testing.T, repo string, calls map[string][]string) func(string) ([]string, error) {
+	t.Helper()
+	for dir := range calls {
+		writeFiles(t, filepath.Join(repo, filepath.FromSlash(dir)), map[string]string{"main.tf": ``})
+	}
+	return func(dir string) ([]string, error) {
+		if _, err := os.Stat(filepath.Join(repo, filepath.FromSlash(dir), "main.tf")); err != nil {
+			return nil, err
+		}
+		return calls[dir], nil
+	}
+}
+
 // ModuleDirs lists the module's directory, the configured directories under
 // its modules/, the called directories that hold configuration and what local
 // calls reach, backslash paths included; a call out of the repository is
 // ignored, and examples count only when called.
 func TestModuleDirs(t *testing.T) {
 	repo := t.TempDir()
-	for name, content := range map[string]string{
-		"main.tf":                  `module "a" { source = ".\\lib\\a" }`,
-		"lib/a/main.tf":            `module "out" { source = "..\\..\\..\\outside" }`,
-		"modules/sub/main.tf":      `module "ex" { source = "../../examples/called" }`,
-		"modules/README.md":        ``,
-		"examples/called/main.tf":  ``,
-		"examples/ignored/main.tf": ``,
-		"tools/main.tf":            `module "deep" { source = "./deep" }`,
-		"tools/deep/main.tf":       ``,
-		"docs/README.md":           ``,
-	} {
-		p := filepath.Join(repo, filepath.FromSlash(name))
-		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	got, err := ModuleDirs(repo, "")
+	sources := writeModules(t, repo, map[string][]string{
+		"":                 {`.\lib\a`, "acme/dns/aws"},
+		"lib/a":            {`..\..\..\outside`},
+		"modules/sub":      {"../../examples/called"},
+		"examples/called":  nil,
+		"examples/ignored": nil,
+		"tools":            {"./deep"},
+		"tools/deep":       nil,
+	})
+	writeFiles(t, filepath.Join(repo, "modules"), map[string]string{"README.md": ``})
+	writeFiles(t, filepath.Join(repo, "docs"), map[string]string{"README.md": ``})
+	got, err := ModuleDirs(repo, "", nil, sources)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -322,7 +309,7 @@ func TestModuleDirs(t *testing.T) {
 	}
 	// Called directories are followed too; one without configuration is
 	// skipped, and the module's own among them changes nothing.
-	got, err = ModuleDirs(repo, "", "", "tools/", "docs", "examples/called")
+	got, err = ModuleDirs(repo, "", []string{"", "tools/", "docs", "examples/called"}, sources)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,23 +324,15 @@ func TestModuleDirs(t *testing.T) {
 // neither it serves nothing, and that is no error.
 func TestModuleDirs_NoRootConfiguration(t *testing.T) {
 	repo := t.TempDir()
-	for name, content := range map[string]string{
-		"bundle/README.md":           ``,
-		"bundle/modules/dns/main.tf": `module "shared" { source = "../../shared" }`,
-		"bundle/shared/main.tf":      ``,
-		"bundle/vpc/main.tf":         `module "peer" { source = "../peering" }`,
-		"bundle/peering/main.tf":     ``,
-		"bundle/examples/main.tf":    ``,
-		"bare/BUILD.bazel":           ``,
-	} {
-		p := filepath.Join(repo, filepath.FromSlash(name))
-		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
+	sources := writeModules(t, repo, map[string][]string{
+		"bundle/modules/dns": {"../../shared"},
+		"bundle/shared":      nil,
+		"bundle/vpc":         {"../peering"},
+		"bundle/peering":     nil,
+		"bundle/examples":    nil,
+	})
+	writeFiles(t, filepath.Join(repo, "bundle"), map[string]string{"README.md": ``})
+	writeFiles(t, filepath.Join(repo, "bare"), map[string]string{"BUILD.bazel": ``})
 	for name, tc := range map[string]struct {
 		moduleDir string
 		called    []string
@@ -369,7 +348,7 @@ func TestModuleDirs_NoRootConfiguration(t *testing.T) {
 		"called, no config there": {"bare", []string{"bundle/examples/none"}, []string{}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			got, err := ModuleDirs(repo, tc.moduleDir, tc.called...)
+			got, err := ModuleDirs(repo, tc.moduleDir, tc.called, sources)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -380,7 +359,7 @@ func TestModuleDirs_NoRootConfiguration(t *testing.T) {
 	}
 
 	// A module directory that isn't there is not a bundle: that is an error.
-	if got, err := ModuleDirs(repo, "nowhere", "bundle/vpc"); !errors.Is(err, fs.ErrNotExist) {
+	if got, err := ModuleDirs(repo, "nowhere", []string{"bundle/vpc"}, sources); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("ModuleDirs of a missing directory = %v, %v, want a not-exist error", got, err)
 	}
 }

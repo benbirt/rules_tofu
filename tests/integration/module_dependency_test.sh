@@ -54,6 +54,13 @@
 #      providers OpenTofu reports for reader/providers/main.tf: canonical
 #      addresses, resource- and data-source-implied providers, aliased provider
 #      blocks reported once, and the built-in provider skipped (issue #153).
+#  10. Pack reader/ as an archive, declare it with tf_modules.module and run
+#      `bazel build @tf_modules//reader`. Fetching runs modscan with the host's
+#      download of TOFU_VERSION and succeeds only if OpenTofu resolves the
+#      calls from step 1 to ./child rather than the missing ./absent. Also
+#      checks that @tofu_toolchains//:version equals TOFU_VERSION and that
+#      the generated library's srcs serve only the module root and ./child,
+#      leaving out ./providers.
 #
 # Runs once per OpenTofu version in KNOWN_VERSIONS because the module manifest
 # and the .terraform/terraform.tfstate backend record read by the
@@ -200,5 +207,34 @@ want='rules_tofu: //reader:providers: its files require these providers, which a
     hashicorp/random, required in "reader/providers"
 Add "@tf_providers//hashicorp/google", "@tf_providers//hashicorp/http", "@tf_providers//hashicorp/null", "@tf_providers//hashicorp/random" to the providers of //reader:providers.'
 grep -q -F "${want}" <<<"${out}" || fail "the strict-deps error doesn't name exactly the providers of reader/providers/main.tf"
+
+echo "--- 10. a fetched module, scanned with tofu ${TOFU_VERSION} ---" >&2
+# Pack reader/ as an archive. Fetching runs modscan with the host's download
+# of TOFU_VERSION; if OpenTofu does not resolve the calls from step 1 to
+# ./child, the scan fails on the missing ./absent directory.
+tar -czf "${_TMPDIR}/reader.tar.gz" -C reader .
+# macOS has shasum but not sha256sum; some Linux PATHs have only sha256sum.
+if command -v sha256sum >/dev/null; then
+  reader_sha256="$(sha256sum "${_TMPDIR}/reader.tar.gz" | cut -d' ' -f1)"
+else
+  reader_sha256="$(shasum -a 256 "${_TMPDIR}/reader.tar.gz" | cut -d' ' -f1)"
+fi
+cat >>MODULE.bazel <<MODULE
+tf_modules = use_extension("@rules_tofu//tf/modules:extensions.bzl", "tf_modules")
+tf_modules.module(
+    name = "reader",
+    sha256 = "${reader_sha256}",
+    source = "file://${_TMPDIR}/reader.tar.gz",
+)
+use_repo(tf_modules, "tf_modules")
+MODULE
+bazel build @tf_modules//reader >&2 || fail "the fetched reader module doesn't build"
+external="$(bazel info output_base)/external"
+scanned_with="$(cat "${external}"/*tofu_toolchains/version)"
+[[ "${scanned_with}" == "${TOFU_VERSION}" ]] ||
+  fail "fetched modules are scanned with tofu '${scanned_with}', not ${TOFU_VERSION}"
+reader_library="$(find "${external}" -maxdepth 1 -name '*tf_modules_reader')/BUILD.bazel"
+grep -q -F 'srcs = ["calls.tf.json", "child/main.tf", "main.tf", "main_override.tf", "shadow.tf", "shadow.tofu"],' "${reader_library}" ||
+  fail "the fetched reader module's library doesn't serve the module and ./child alone: $(cat "${reader_library}")"
 
 echo "OK: with tofu ${TOFU_VERSION}, modules from other Bazel modules were called by module_source, and tofu fmt formatted the workspace" >&2

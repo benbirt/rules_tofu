@@ -53,5 +53,7 @@ starlark_doc_extract(
     deps = [
         "//tf/modules:all_files",
         "//tf/private:all_files",
+        "//toolchain:all_files",
+        "@tofu_toolchains//:binaries.bzl",
     ],
 )

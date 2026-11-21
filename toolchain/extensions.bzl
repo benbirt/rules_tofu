@@ -98,7 +98,7 @@ _tofu_download = repository_rule(
 
 def _tofu_hub_impl(repository_ctx):
     repository_ctx.file("WORKSPACE", "")
-    lines = ["package(default_visibility = [\"//visibility:public\"])", ""]
+    lines = ["package(default_visibility = [\"//visibility:public\"])", "", "exports_files([\"binaries.bzl\", \"version\"])", ""]
 
     # tofu runs only on the execution platform across validation, launchers,
     # tests and pin, and rules select provider packages for that platform
@@ -120,8 +120,23 @@ def _tofu_hub_impl(repository_ctx):
         ])
     repository_ctx.file("BUILD.bazel", "\n".join(lines), executable = False)
 
+    # Exposed for repository rules, which run on the host and cannot resolve
+    # toolchains, such as `_tf_module_repo` in //tf/modules:extensions.bzl.
+    # Label() resolves in this hub's repo mapping, where the per-platform
+    # repositories are visible. `binaries.bzl` omits the version so loading it
+    # fetches no binary and a `tofu.version` change does not alter the `.bzl`
+    # digest that `_tf_module_files` depends on. Watch `version` instead to
+    # re-run local scans on a version change.
+    binaries = ["TOFU_BINARIES = {"]
+    for platform_key, _, _, exe_suffix in PLATFORMS:
+        binaries.append("    \"{key}\": Label(\"@tofu_{key}//:tofu{exe}\"),".format(key = platform_key, exe = exe_suffix))
+    binaries.extend(["}", ""])
+    repository_ctx.file("binaries.bzl", "\n".join(binaries), executable = False)
+    repository_ctx.file("version", repository_ctx.attr.version + "\n", executable = False)
+
 _tofu_hub = repository_rule(
     implementation = _tofu_hub_impl,
+    attrs = {"version": attr.string(mandatory = True)},
 )
 
 # ---- Module extension --------------------------------------------------------
@@ -173,14 +188,15 @@ def _tofu_extension_impl(module_ctx):
             exe_suffix = exe_suffix,
         )
 
-    _tofu_hub(name = "tofu_toolchains")
+    _tofu_hub(name = "tofu_toolchains", version = version)
 
     # The hub is the only repo a downstream `use_repo`s; the per-platform
-    # `tofu_<platform>` repos are an implementation detail the hub's
-    # `toolchain()` entries reference by name and must stay off the root's
-    # direct-dep list. `reproducible = True`: the repos are a pure function of
-    # the module graph and the sha256 table in //toolchain:versions.bzl, so a
-    # lockfile copy of them would pin nothing the source does not already.
+    # `tofu_<platform>` repos are an implementation detail referenced by the
+    # hub's `toolchain()` entries and `binaries.bzl`, and must stay off the
+    # root's direct-dep list. `reproducible = True`: the repos are a pure
+    # function of the module graph and the sha256 table in
+    # //toolchain:versions.bzl, so a lockfile copy of them would pin nothing
+    # the source does not already.
     hub = ["tofu_toolchains"]
     non_dev = module_ctx.root_module_has_non_dev_dependency
     return module_ctx.extension_metadata(

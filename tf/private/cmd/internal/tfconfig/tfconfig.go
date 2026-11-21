@@ -1,7 +1,7 @@
-// Package tfconfig reads the parts of OpenTofu configuration and test files
-// that rules_tofu needs before tofu runs: configuration and test file sets,
-// module calls, required_providers blocks, module directories and module
-// source addresses.
+// Package tfconfig handles the OpenTofu file, address and HCL work that
+// rules_tofu does without running `tofu`: configuration and test file sets,
+// test-file `run` block calls, `required_providers` blocks for `pin`, module
+// directory traversal and module source addresses.
 package tfconfig
 
 import (
@@ -19,9 +19,8 @@ import (
 	regaddr "github.com/opentofu/registry-address/v2"
 )
 
-// Call is a module call from a `module` block or a test file's `run` block.
-// Name is the module or run label, and Range is the source attribute's
-// location.
+// Call is a module call from a test file's `run` block. Name is the run label
+// and Range is the source attribute's location.
 type Call struct {
 	Name   string
 	Source string
@@ -29,7 +28,6 @@ type Call struct {
 }
 
 var (
-	moduleSchema    = &hcl.BodySchema{Blocks: []hcl.BlockHeaderSchema{{Type: "module", LabelNames: []string{"name"}}}}
 	sourceSchema    = &hcl.BodySchema{Attributes: []hcl.AttributeSchema{{Name: "source"}}}
 	terraformSchema = &hcl.BodySchema{Blocks: []hcl.BlockHeaderSchema{{Type: "terraform"}}}
 	requiredSchema  = &hcl.BodySchema{Blocks: []hcl.BlockHeaderSchema{{Type: "required_providers"}}}
@@ -55,12 +53,12 @@ func IsConfigFile(name string) bool {
 	return configExt(name) != ""
 }
 
-// Effective drops the files of files that tofu doesn't read: each `.tf` or
-// `.tf.json` file that a `.tofu` or `.tofu.json` file of the same path
-// shadows, and each whose name starts with a dot (see ignored). The order of
-// the rest is kept. Every configuration reader in this package goes through
-// it, whether its files come from a directory or, as pin's do, from a
-// `bazel query`, where a `glob` may have matched an archive's `._main.tf`.
+// Effective drops the files in files that `tofu` ignores: each `.tf` or
+// `.tf.json` file shadowed by a `.tofu` or `.tofu.json` file of the same path,
+// and each whose base name starts with a dot (see ignored). The order of the
+// remaining files is kept. Both ConfigFiles and ReadRequirements filter
+// through it, since `pin` passes paths from `bazel query` where a `glob` may
+// match files such as an archive's `._main.tf`.
 func Effective(files []string) []string {
 	present := map[string]bool{}
 	for _, f := range files {
@@ -143,86 +141,6 @@ func parse(parser *hclparse.Parser, file string) (*hcl.File, error) {
 		return nil, diags
 	}
 	return f, nil
-}
-
-// ReadCalls parses the module blocks of the configuration files in dir. An
-// _override file's source replaces the one in the primary file, as tofu
-// merges it. Duplicate primary calls and missing or non-literal source
-// attributes return an error.
-func ReadCalls(dir string) ([]Call, error) {
-	files, err := ConfigFiles(dir)
-	if err != nil {
-		return nil, err
-	}
-	return readCalls(splitOverrides(files))
-}
-
-func readCalls(primary, overrides []string) ([]Call, error) {
-	parser := hclparse.NewParser()
-	var calls []Call
-	index := map[string]int{}
-	for pass, group := range [][]string{primary, overrides} {
-		isOverride := pass == 1
-		for _, file := range group {
-			found, err := parseCalls(parser, file)
-			if err != nil {
-				return nil, err
-			}
-			for _, c := range found {
-				i, seen := index[c.Name]
-				switch {
-				case isOverride && seen:
-					if c.Source != "" {
-						calls[i].Source = c.Source
-						calls[i].Range = c.Range
-					}
-				case isOverride:
-					// An override of a call that doesn't exist; tofu reports it.
-				case seen:
-					return nil, fmt.Errorf("%s: duplicate module call %q", c.Range, c.Name)
-				default:
-					index[c.Name] = len(calls)
-					calls = append(calls, c)
-				}
-			}
-		}
-	}
-	for _, c := range calls {
-		if c.Source == "" {
-			return nil, fmt.Errorf("%s: module %q has no source", c.Range, c.Name)
-		}
-	}
-	return calls, nil
-}
-
-func parseCalls(parser *hclparse.Parser, file string) ([]Call, error) {
-	f, err := parse(parser, file)
-	if err != nil {
-		return nil, err
-	}
-	content, _, diags := f.Body.PartialContent(moduleSchema)
-	if diags.HasErrors() {
-		return nil, diags
-	}
-	var calls []Call
-	for _, block := range content.Blocks {
-		attrs, _, diags := block.Body.PartialContent(sourceSchema)
-		if diags.HasErrors() {
-			return nil, diags
-		}
-		c := Call{Name: block.Labels[0], Range: block.DefRange}
-		if attr, ok := attrs.Attributes["source"]; ok {
-			source, ok := LiteralString(attr.Expr)
-			if !ok {
-				return nil, fmt.Errorf("%s: module %q: rules_tofu needs `source` to be a literal string",
-					attr.Range, c.Name)
-			}
-			c.Source = source
-			c.Range = attr.Range
-		}
-		calls = append(calls, c)
-	}
-	return calls, nil
 }
 
 // Requirement is a required_providers entry.
@@ -367,6 +285,13 @@ func NormalizeProvider(source string) (string, error) {
 	return p.String(), nil
 }
 
+// IsBuiltInProvider reports whether source is a provider built into OpenTofu
+// (`terraform.io/builtin/*` or `opentofu.org/builtin/*`), which has no plugin.
+func IsBuiltInProvider(source string) bool {
+	p, err := regaddr.ParseProviderSource(source)
+	return err == nil && p.IsBuiltIn()
+}
+
 // LiteralString evaluates expr with no variables in scope as a string,
 // returning ("", false) if expr is null, unknown, not a string or references
 // variables. The context is empty rather than nil: with a nil one the JSON
@@ -398,7 +323,12 @@ func LiteralString(expr hcl.Expression) (string, bool) {
 // and serves the rest all the same. Whether such a module is acceptable is the
 // caller's to say: modscan refuses a fetched one. A missing or unreadable
 // moduleDir returns an error.
-func ModuleDirs(repo, moduleDir string, called ...string) ([]string, error) {
+//
+// sources returns the `source` of every module call in dir, where dir is
+// relative to repo and "" is repo itself. ModuleDirs calls sources once per
+// visited directory, including targets of local paths whose existence it has
+// not checked, and returns any error unchanged.
+func ModuleDirs(repo, moduleDir string, called []string, sources func(dir string) ([]string, error)) ([]string, error) {
 	moduleDir = strings.Trim(moduleDir, "/")
 	// The directory itself must be there and readable: a module that isn't
 	// is an error, not a bundle.
@@ -447,16 +377,16 @@ func ModuleDirs(repo, moduleDir string, called ...string) ([]string, error) {
 			continue
 		}
 		seen[dir] = true
-		calls, err := ReadCalls(filepath.Join(repo, filepath.FromSlash(dir)))
+		found, err := sources(dir)
 		if err != nil {
 			return nil, err
 		}
-		for _, c := range calls {
-			if !IsLocal(c.Source) {
+		for _, source := range found {
+			if !IsLocal(source) {
 				continue
 			}
 			// A path out of the repository fails in tofu; it isn't ours to report.
-			if child := ResolveLocal(dir, c.Source); child != ".." && !strings.HasPrefix(child, "../") {
+			if child := ResolveLocal(dir, source); child != ".." && !strings.HasPrefix(child, "../") {
 				pending = append(pending, child)
 			}
 		}

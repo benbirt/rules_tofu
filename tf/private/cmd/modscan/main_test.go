@@ -1,11 +1,15 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/benbirt/rules_tofu/tf/private/cmd/internal/tofushow"
+	"github.com/benbirt/rules_tofu/tf/private/cmd/internal/tofushow/tofutest"
 )
 
 func writeTree(t *testing.T, files map[string]string) string {
@@ -48,7 +52,7 @@ terraform {
 }`,
 		"unrelated/main.tf": `module "y" { source = "acme/other/aws" }`,
 	})
-	got, err := scan(repo, "vpc", []Module{
+	got, err := scan(tofutest.Reader(t, *tofu), repo, "vpc", []Module{
 		{Label: "@tf_modules//acme/dns/aws", Source: "Acme/DNS/aws"},
 		{Label: "@tf_modules//unused", Source: "git::https://e.com/unused.git"},
 	}, "", nil, nil)
@@ -61,7 +65,7 @@ terraform {
 		Deps:      []string{"@tf_modules//acme/dns/aws"},
 		Undeclared: []Call{
 
-			{Source: "git::https://e.com/label.git?ref=v1", Where: "shared/main.tf:1", Tag: `tf_modules.module(name = "...", source = "git::https://e.com/label.git?ref=v1")`},
+			{Source: "git::https://e.com/label.git?ref=v1", Where: `module "label" in "shared"`, Tag: `tf_modules.module(name = "...", source = "git::https://e.com/label.git?ref=v1")`},
 		},
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -69,31 +73,134 @@ terraform {
 	}
 }
 
-// An _override entry replaces earlier entries with the same local name. Two
-// primary entries with the same local name are both recorded in Providers.
-// Reporting the duplicate is left to tofu.
-func TestScan_ProviderOverridesAndDuplicates(t *testing.T) {
+// Providers come from OpenTofu for the served directories: override files
+// replace primary entries, resources and data sources without a
+// required_providers entry imply hashicorp/<prefix>, and built-in providers
+// under both terraform.io/builtin/ and opentofu.org/builtin/ are omitted.
+func TestScan_Providers(t *testing.T) {
 	requires := func(name, source string) string {
 		return "terraform {\n  required_providers {\n    " + name + " = { source = \"" + source + "\" }\n  }\n}\n"
 	}
 	repo := writeTree(t, map[string]string{
-		"a.tf":          requires("null", "hashicorp/null") + requires("x", "hashicorp/aws"),
-		"b.tf":          requires("x", "hashicorp/random"),
-		"c_override.tf": requires("null", "acme/null"),
+		"a.tf":          requires("null", "hashicorp/null"),
+		"c_override.tf": requires("null", "Acme/Null"),
+		"main.tf": `
+resource "random_id" "implied" {}
+data "http" "implied" { url = "https://example.com" }
+resource "terraform_data" "builtin" {}
+`,
+		// OpenTofu reports this one as opentofu.org/builtin/terraform.
+		"modules/renamed/main.tf": requires("tf", "opentofu.org/builtin/terraform") + "resource \"terraform_data\" \"builtin\" {\n  provider = tf\n}\n",
 	})
-	got, err := scan(repo, "", nil, "", nil, nil)
+	got, err := scan(tofutest.Reader(t, *tofu), repo, "", nil, "", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"registry.opentofu.org/acme/null", "registry.opentofu.org/hashicorp/aws", "registry.opentofu.org/hashicorp/random"}
+	want := []string{
+		"registry.opentofu.org/acme/null",
+		"registry.opentofu.org/hashicorp/http",
+		"registry.opentofu.org/hashicorp/random",
+	}
 	if !reflect.DeepEqual(got.Providers, want) {
 		t.Errorf("got %v, want %v", got.Providers, want)
 	}
 }
 
+// Module calls come from OpenTofu: sources built from local values or variable
+// defaults work for local paths, self-calls and external modules; override
+// files replace primary sources; and .tofu files shadow .tf files of the same
+// name. Auto-loaded .tfvars files in the fetched tree and TF_VAR_* in the
+// environment have no effect.
+func TestScan_SourcesFromTofu(t *testing.T) {
+	const self = "@tf_modules//net"
+	modules := []Module{
+		{Label: self, Source: "git::https://e.com/net.git?ref=v1"},
+		{Label: "@tf_modules//acme/dns/aws", Source: "acme/dns/aws"},
+	}
+	repo := writeTree(t, map[string]string{
+		"main.tf": `
+variable "dir" { default = "./local" }
+variable "ref" { default = "v1" }
+locals { net = "git::https://e.com/net.git" }
+module "local" { source = var.dir }
+module "own" { source = "${local.net}//own?ref=${var.ref}" }
+module "replaced" { source = "acme/unused/aws" }
+`,
+		"main_override.tf":     `module "replaced" { source = "acme/dns/aws" }`,
+		"shadowed.tf":          `module "shadowed" { source = "acme/shadowed/aws" }`,
+		"shadowed.tofu":        ``,
+		"terraform.tfvars":     `dir = "./elsewhere"`,
+		"local/main.tf":        ``,
+		"own/main.tf":          ``,
+		"elsewhere/main.tf":    `module "x" { source = "acme/elsewhere/aws" }`,
+		"examples/own/main.tf": `module "x" { source = "acme/example/aws" }`,
+	})
+	t.Setenv("TF_VAR_dir", "./elsewhere")
+	t.Setenv("TF_VAR_ref", "v2")
+	got, err := scan(tofutest.Reader(t, *tofu), repo, "", modules, self, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := &Result{
+		Dirs:       []string{"", "local", "own"},
+		Providers:  []string{},
+		Deps:       []string{"@tf_modules//acme/dns/aws"},
+		Undeclared: []Call{},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+}
+
+// A served directory that OpenTofu cannot load fails the scan with OpenTofu's
+// diagnostics, naming files relative to the fetched tree. This covers checks
+// only OpenTofu performs, such as a source referencing a variable with no
+// default or duplicate required_providers local names. Unserved directories are
+// not read.
+func TestScan_LoadError(t *testing.T) {
+	for name, tc := range map[string]struct {
+		files map[string]string
+		want  []string
+	}{
+		"a source that has no value": {
+			files: map[string]string{"vpc/modules/sub/main.tf": "variable \"dir\" {}\nmodule \"a\" {\n  source = var.dir\n}\n"},
+			want:  []string{`tofu cannot load the module in "vpc/modules/sub"`, "on vpc/modules/sub/main.tf line 3"},
+		},
+		"a duplicate required_providers entry": {
+			files: map[string]string{
+				"vpc/a.tf": "terraform {\n  required_providers {\n    x = { source = \"hashicorp/aws\" }\n  }\n}\n",
+				"vpc/b.tf": "terraform {\n  required_providers {\n    x = { source = \"hashicorp/random\" }\n  }\n}\n",
+			},
+			want: []string{`tofu cannot load the module in "vpc"`, "vpc/b.tf"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			files := map[string]string{
+				"vpc/main.tf":               ``,
+				"vpc/examples/bad/main.tf":  `module "broken" {`,
+				"vpc/modules/README.md":     ``,
+				"unrelated/modules/main.tf": `module "broken" {`,
+			}
+			for name, content := range tc.files {
+				files[name] = content
+			}
+			_, err := scan(tofutest.Reader(t, *tofu), writeTree(t, files), "vpc", nil, "", nil, nil)
+			var load *tofushow.LoadError
+			if !errors.As(err, &load) {
+				t.Fatalf("got %v, want a *tofushow.LoadError", err)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("got %v, want an error containing %q", err, want)
+				}
+			}
+		})
+	}
+}
+
 func TestScan_Root(t *testing.T) {
 	repo := writeTree(t, map[string]string{"main.tf": `output "x" { value = 1 }`})
-	got, err := scan(repo, "", nil, "", nil, nil)
+	got, err := scan(tofutest.Reader(t, *tofu), repo, "", nil, "", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +249,7 @@ module "label" { source = "git::https://e.com/label.git?ref=v1" }
 		"vpc/examples/demo/main.tf":   `module "x" { source = "acme/unused/aws" }`,
 		"vpc/examples/demo/extras.tf": "terraform {\n  required_providers {\n    tls = {}\n  }\n}\n",
 	})
-	got, err := scan(repo, "vpc", modules, self, nil, nil)
+	got, err := scan(tofutest.Reader(t, *tofu), repo, "vpc", modules, self, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +277,7 @@ module "b" { source = "acme/net/aws//parts/b" }
 		"parts/a/main.tf": "terraform {\n  required_providers {\n    tls = {}\n  }\n}\n",
 		"parts/b/main.tf": "terraform {\n  required_providers {\n    random = {}\n  }\n}\n",
 	})
-	got, err := scan(repo, "", []Module{
+	got, err := scan(tofutest.Reader(t, *tofu), repo, "", []Module{
 		// The longer string, and the less specific address.
 		{Label: self, Source: "registry.opentofu.org/acme/net/aws"},
 		{Label: "@tf_modules//a", Source: "acme/net/aws//parts/a"},
@@ -191,7 +298,7 @@ module "b" { source = "acme/net/aws//parts/b" }
 
 func TestScan_NoConfig(t *testing.T) {
 	repo := writeTree(t, map[string]string{"README.md": ``})
-	_, err := scan(repo, "vpc", nil, "", nil, nil)
+	_, err := scan(tofutest.Reader(t, *tofu), repo, "vpc", nil, "", nil, nil)
 	if err == nil || !strings.Contains(err.Error(), `"/vpc" holds no .tf`) {
 		t.Errorf("got %v", err)
 	}
@@ -220,12 +327,12 @@ func TestScan_GitSubmodule(t *testing.T) {
 
 	t.Run("an uncalled submodule is nobody's business", func(t *testing.T) {
 		repo := tree(t, `module "vpc" { source = "./vpc" }`)
-		if _, err := scan(repo, "", modules, self, nil, submodules); err != nil {
+		if _, err := scan(tofutest.Reader(t, *tofu), repo, "", modules, self, nil, submodules); err != nil {
 			t.Fatal(err)
 		}
 		// Nor is a sibling whose name only starts like the submodule's.
 		repo = writeTree(t, map[string]string{"vendor/shared-not/main.tf": ``})
-		if _, err := scan(repo, "vendor/shared-not", modules, self, nil, submodules); err != nil {
+		if _, err := scan(tofutest.Reader(t, *tofu), repo, "vendor/shared-not", modules, self, nil, submodules); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -243,11 +350,11 @@ func TestScan_GitSubmodule(t *testing.T) {
 		},
 		"a local call leads to one": {
 			mainTF: "\nmodule \"shared\" { source = \"./vendor/shared\" }",
-			want:   `main.tf:2: module source "./vendor/shared" leads into the git submodule "vendor/shared", and rules_tofu does not fetch git submodules`,
+			want:   `module "shared" in ".": source "./vendor/shared" leads into the git submodule "vendor/shared", and rules_tofu does not fetch git submodules`,
 		},
 		"a call by its own address leads to one": {
 			mainTF: `module "shared" { source = "git::https://e.com/net.git//vendor/shared" }`,
-			want:   `main.tf:1: module source "git::https://e.com/net.git//vendor/shared" leads into the git submodule "vendor/shared"`,
+			want:   `module "shared" in ".": source "git::https://e.com/net.git//vendor/shared" leads into the git submodule "vendor/shared"`,
 		},
 		"a call by its own address leads inside one": {
 			mainTF: `module "shared" { source = "git::https://e.com/net.git//vendor/shared/nested" }`,
@@ -262,7 +369,7 @@ func TestScan_GitSubmodule(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			repo := tree(t, tc.mainTF)
-			_, err := scan(repo, tc.moduleDir, modules, self, nil, submodules)
+			_, err := scan(tofutest.Reader(t, *tofu), repo, tc.moduleDir, modules, self, nil, submodules)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Errorf("got %v, want an error containing %q", err, tc.want)
 			}
@@ -292,7 +399,7 @@ func TestScan_GitSubmodule(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			repo := tree(t, tc.mainTF)
-			_, err := scan(repo, tc.moduleDir, modules, self, nil, submodules)
+			_, err := scan(tofutest.Reader(t, *tofu), repo, tc.moduleDir, modules, self, nil, submodules)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("got %v, want an error containing %q", err, tc.want)
 			}
@@ -327,7 +434,7 @@ func TestScan_Subdir(t *testing.T) {
 		"other/main.tf":       ``,
 	})
 	modules := []Module{{Label: "@tf_modules//acme/dns/aws", Source: "acme/dns/aws"}}
-	got, err := scan(repo, "vpc", modules, "", []string{"peering"}, nil)
+	got, err := scan(tofutest.Reader(t, *tofu), repo, "vpc", modules, "", []string{"peering"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -349,7 +456,7 @@ func TestScan_Subdir(t *testing.T) {
 		".":         `"." is not a directory below the module's own`,
 		"/vpc":      `"/vpc" is not a directory below the module's own`,
 	} {
-		if _, err := scan(repo, "vpc", modules, "", []string{dir}, nil); err == nil || !strings.Contains(err.Error(), fragment) {
+		if _, err := scan(tofutest.Reader(t, *tofu), repo, "vpc", modules, "", []string{dir}, nil); err == nil || !strings.Contains(err.Error(), fragment) {
 			t.Errorf("subdir %q: got %v, want an error containing %q", dir, err, fragment)
 		}
 	}

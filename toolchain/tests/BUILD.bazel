@@ -1,3 +1,6 @@
+load(":host_test.bzl", "host_test_suite")
 load(":version_resolution_test.bzl", "version_resolution_test_suite")
+
+host_test_suite(name = "host_test")
 
 version_resolution_test_suite(name = "version_resolution_test")
