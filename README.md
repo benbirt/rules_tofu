@@ -437,11 +437,13 @@ submodules are not fetched; see [Known gaps](#known-gaps).
 
 Each generated `tf_library` lists as `srcs` the configuration files of the
 module's root, its `modules/` subdirectories and directories it calls itself,
-and carries the providers they require. Configuration files in other
-directories, such as examples, are left out and cannot be called. Upstream test
-files are also left out. To call a `//<subdir>` outside `modules/` that the
-module does not call itself, name it in `subdirs`, which adds it to the
-library:
+and carries the non-built-in providers OpenTofu reports for them, whether
+declared in `required_providers` or implied by resources, data sources or
+`provider` blocks. A served directory that OpenTofu cannot load fails the fetch
+with OpenTofu's diagnostics. Configuration files in other directories, such as
+examples, are left out and cannot be called. Upstream test files are also left
+out. To call a `//<subdir>` outside `modules/` that the module does not call
+itself, name it in `subdirs`, which adds it to the library:
 
 ```python
 tf_modules.module(
@@ -517,8 +519,7 @@ callers' `version` constraints accept. When `module_source` is set,
 `module_version` defaults to the version of the Bazel module that holds the
 library; setting `module_version` without `module_source` is an error.
 
-Inside `run` blocks of `tf_test` files and inside modules fetched by
-`tf_modules.module`, `source` must be a literal string.
+Inside `run` blocks of `tf_test` files, `source` must be a literal string.
 
 Non-local calls match a `tf_library` in `deps` by `module_source`, either exact
 or leaving the shortest `//<subdir>` suffix. A direct `module_source` dependency
@@ -722,6 +723,11 @@ toolchain(
 )
 ```
 
+Modules declared with `tf_modules.module` are still scanned with the pinned
+OpenTofu release selected by `tofu.version`, or the default in
+[`toolchain/versions.bzl`](toolchain/versions.bzl), so Bazel downloads that
+release on the first module fetch.
+
 When building `github.com/opentofu/opentofu/cmd/tofu` with `rules_go`, set
 `pure = "on"` and `x_defs = {"github.com/opentofu/opentofu/version.dev": "no"}`;
 without `x_defs`, `tofu version` reports `-dev` and fails `required_version`
@@ -793,6 +799,9 @@ follows it.
   `tf_providers.provider`.
 - `tf_modules.module` does not support S3, GCS, Bitbucket, Mercurial or
   `X-Terraform-Get` module sources.
+- `tf_modules.module` requires a host platform with a pinned OpenTofu release in
+  [`toolchain/versions.bzl`](toolchain/versions.bzl) (`linux_amd64`,
+  `linux_arm64`, `darwin_amd64`, `darwin_arm64` or `windows_amd64`).
 - `tf_providers.from_lock` and `tf_modules.module` compile Go helpers with
   `rules_go`'s host Go SDK and fetch Go module dependencies via `GOPROXY`;
   honoured proxy variables are listed in the

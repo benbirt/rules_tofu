@@ -10,11 +10,12 @@
 // command. The extension uses it to tell registry, git and archive sources
 // apart and to find where each is fetched from.
 //
-//	modscan [--module=<label>=<source>...] [--self=<label>] [--subdir=<dir>...] [--git-submodule=<path>...] <repository dir> <module dir>
+//	modscan --tofu=<path> [--module=<label>=<source>...] [--self=<label>] [--subdir=<dir>...] [--git-submodule=<path>...] <repository dir> <module dir>
 //
 // Inspects a fetched module to generate its tf_library. <module dir> is
 // relative to <repository dir>, or "" for its root, and must contain
 // configuration files.
+//   - --tofu=<path>: path to the `tofu` binary, required.
 //   - --module=<label>=<source>: a declared tf_modules.module tag, repeatable.
 //   - --self=<label>: label of the module being scanned, so calls to
 //     <self>//<subdir> are scanned as internal submodules rather than deps.
@@ -30,22 +31,31 @@
 //
 // modscan walks the directories returned by tfconfig.ModuleDirs together with
 // each --subdir and any subdirectories reached by <self>//<subdir> calls,
-// leaving uncalled examples and tests out. It writes a JSON Result to stdout:
+// leaving uncalled examples and tests out. Each served directory is read once
+// via tofushow.Reader.ReadFiles (`tofu show -json -module`, staged under its
+// repository-relative path with a stripped environment), so OpenTofu applies
+// override files, .tofu shadowing, .tf.json and `source` expressions using
+// local values or variable defaults. A served directory that OpenTofu cannot
+// load fails the scan with OpenTofu's diagnostics.
+//
+// Scan mode writes a JSON Result to stdout:
 //   - dirs: the directories walked, relative to <repository dir> and sorted,
 //     with "" for its root. Their configuration files are the library's srcs.
-//   - providers: sorted canonical <host>/<namespace>/<name> addresses of
-//     required providers, or [] when none.
+//   - providers: sorted canonical <host>/<namespace>/<name> addresses of every
+//     provider OpenTofu reports for the served directories (required_providers,
+//     implied providers and built-in providers), or [] when none.
 //   - deps: sorted labels of other declared modules that calls match via
 //     tfconfig.BestMatch, as the modules manifest resolves each call, or []
 //     when none. Self-calls add no dep.
 //   - undeclared: non-local calls that no declared module matches, sorted by
-//     source, each with source, where and a suggested tf_modules.module tag,
-//     or [] when none.
+//     source, each with source, where (`module "<name>" in "<dir>"`, with "."
+//     for the repository root) and a suggested tf_modules.module tag, or []
+//     when none.
 //
-// Scan mode exits 2 on unrecognised or malformed flags, the wrong number of
-// arguments or a --module value without =. Either mode prints the error to
-// stderr and exits 1 on a scan or I/O error; `modscan parse` exits 0 even when
-// sources fail to parse.
+// Scan mode exits 2 on unrecognised or malformed flags, a missing --tofu, the
+// wrong number of arguments or a --module value without =. Either mode prints
+// the error to stderr and exits 1 on a scan or I/O error; `modscan parse`
+// exits 0 even when sources fail to parse.
 package main
 
 import (
@@ -62,9 +72,11 @@ import (
 
 	"github.com/benbirt/rules_tofu/tf/private/cmd/internal/flags"
 	"github.com/benbirt/rules_tofu/tf/private/cmd/internal/tfconfig"
+	"github.com/benbirt/rules_tofu/tf/private/cmd/internal/tofushow"
 )
 
 var (
+	tofu     = flag.String("tofu", "", "`path` of the tofu binary that reads the module")
 	declared = flags.StringList("module", "`<label>=<source>` of a declared module (repeatable)")
 	self     = flag.String("self", "", "`label` of the declared module being described")
 	extra    = flags.StringList("subdir", "`dir` of the module, relative to it, that callers reach with //<subdir> (repeatable)")
@@ -100,8 +112,8 @@ func main() {
 		return
 	}
 	flag.Parse()
-	if flag.NArg() != 2 {
-		fmt.Fprintln(os.Stderr, "usage: modscan [--module=<label>=<source>...] [--self=<label>] [--subdir=<dir>...] [--git-submodule=<path>...] <repository dir> <module dir>")
+	if flag.NArg() != 2 || *tofu == "" {
+		fmt.Fprintln(os.Stderr, "usage: modscan --tofu=<path> [--module=<label>=<source>...] [--self=<label>] [--subdir=<dir>...] [--git-submodule=<path>...] <repository dir> <module dir>")
 		os.Exit(2)
 	}
 	var modules []Module
@@ -113,7 +125,7 @@ func main() {
 		}
 		modules = append(modules, Module{Label: label, Source: source})
 	}
-	result, err := scan(flag.Arg(0), flag.Arg(1), modules, *self, *extra, *gitlinks)
+	result, err := scan(tofushow.Reader{Tofu: *tofu}, flag.Arg(0), flag.Arg(1), modules, *self, *extra, *gitlinks)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -127,12 +139,13 @@ func main() {
 // notFetched is what every error about a git submodule ends with.
 const notFetched = "rules_tofu does not fetch git submodules (OpenTofu does)"
 
-// scan describes the module at moduleDir in repo, where "" is repo's root.
-// modules lists the declared modules, and self is the label of the one being
-// described, or "" if it is not among them. extra lists directories of the
-// module, relative to moduleDir, that only its callers reach. submodules lists
-// the paths in repo of git submodules that the fetch left out.
-func scan(repo, moduleDir string, modules []Module, self string, extra, submodules []string) (*Result, error) {
+// scan describes the module at moduleDir in repo using reader, where "" is
+// repo's root. modules lists the declared modules, and self is the label of
+// the one being described, or "" if it is not among them. extra lists
+// directories of the module, relative to moduleDir, that only its callers
+// reach. submodules lists the paths in repo of git submodules that the fetch
+// left out.
+func scan(reader tofushow.Reader, repo, moduleDir string, modules []Module, self string, extra, submodules []string) (*Result, error) {
 	moduleDir = strings.Trim(moduleDir, "/")
 	var gitlinks []string
 	for _, s := range submodules {
@@ -199,11 +212,40 @@ func scan(repo, moduleDir string, modules []Module, self string, extra, submodul
 		}
 		called[dir] = true
 	}
+	// readDir reads one directory of repo with `tofu` at most once, caching the
+	// result for the duration of the scan.
+	read := map[string]*tofushow.Module{}
+	readDir := func(dir string) (*tofushow.Module, error) {
+		if m, ok := read[dir]; ok {
+			return m, nil
+		}
+		files, err := configFiles(filepath.Join(repo, filepath.FromSlash(dir)))
+		if err != nil {
+			return nil, err
+		}
+		m, err := reader.ReadFiles(dir, files)
+		if err != nil {
+			return nil, err
+		}
+		read[dir] = m
+		return m, nil
+	}
+	callSources := func(dir string) ([]string, error) {
+		m, err := readDir(dir)
+		if err != nil {
+			return nil, err
+		}
+		found := make([]string, len(m.Calls))
+		for i, c := range m.Calls {
+			found[i] = c.Source
+		}
+		return found, nil
+	}
 	var served []string
 	var providers map[string]bool
 	var calls map[string]Call
 	for {
-		dirs, err := tfconfig.ModuleDirs(repo, moduleDir, sorted(called)...)
+		dirs, err := tfconfig.ModuleDirs(repo, moduleDir, sorted(called), callSources)
 		if err != nil {
 			// A local path that leads below a submodule's own directory,
 			// which is all a checkout leaves of it, is a directory that
@@ -222,34 +264,20 @@ func scan(repo, moduleDir string, modules []Module, self string, extra, submodul
 		providers = map[string]bool{}
 		calls = map[string]Call{}
 		for _, dir := range dirs {
-			abs := filepath.Join(repo, filepath.FromSlash(dir))
-			files, err := tfconfig.ConfigFiles(abs)
+			m, err := readDir(dir)
 			if err != nil {
 				return nil, err
 			}
-			declared, err := tfconfig.ReadRequirements(files)
-			if err != nil {
-				return nil, err
+			for _, p := range m.Providers {
+				providers[p.Source] = true
 			}
-			// Duplicate primary entries are left to tofu.
-			for _, d := range tfconfig.ApplyOverrides(declared) {
-				providers[d.Source] = true
-			}
-			found, err := tfconfig.ReadCalls(abs)
-			if err != nil {
-				return nil, err
-			}
-			for _, c := range found {
-				where := c.Range.Filename
-				if rel, err := filepath.Rel(repo, where); err == nil {
-					where = filepath.ToSlash(rel)
-				}
-				where = fmt.Sprintf("%s:%d", where, c.Range.Start.Line)
+			for _, c := range m.Calls {
+				where := callIn(c.Name, dir)
 				if tfconfig.IsLocal(c.Source) {
 					// The submodule's directory is there, and empty, so
 					// ModuleDirs made nothing of the call.
 					if s := submodule(tfconfig.ResolveLocal(dir, c.Source)); s != "" {
-						return nil, fmt.Errorf("%s: module source %q leads into the git submodule %q, and %s", where, c.Source, s, notFetched)
+						return nil, fmt.Errorf("%s: source %q leads into the git submodule %q, and %s", where, c.Source, s, notFetched)
 					}
 					continue
 				}
@@ -266,7 +294,7 @@ func scan(repo, moduleDir string, modules []Module, self string, extra, submodul
 			}
 			dir := path.Join(moduleDir, subdir)
 			if s := submodule(dir); s != "" {
-				return nil, fmt.Errorf("%s: module source %q leads into the git submodule %q, and %s", c.Where, c.Source, s, notFetched)
+				return nil, fmt.Errorf("%s: source %q leads into the git submodule %q, and %s", c.Where, c.Source, s, notFetched)
 			}
 			if !called[dir] {
 				called[dir] = true
@@ -337,4 +365,30 @@ func tagFor(source string) string {
 		return fmt.Sprintf(`tf_modules.module(source = %q, version = "...")`, base)
 	}
 	return fmt.Sprintf(`tf_modules.module(name = "...", source = %q)`, source)
+}
+
+// callIn formats a module call as `module "<name>" in "<dir>"`, matching the
+// manifest tool's diagnostics, using "." when dir is "" for the repository
+// root.
+func callIn(name, dir string) string {
+	if dir == "" {
+		dir = "."
+	}
+	return fmt.Sprintf("module %q in %q", name, dir)
+}
+
+// configFiles lists the non-directory files in dir with a configuration
+// extension. Dot-prefixed files and .tofu shadowing are left to OpenTofu.
+func configFiles(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var files []string
+	for _, e := range entries {
+		if !e.IsDir() && tfconfig.IsConfigFile(e.Name()) {
+			files = append(files, filepath.Join(dir, e.Name()))
+		}
+	}
+	return files, nil
 }

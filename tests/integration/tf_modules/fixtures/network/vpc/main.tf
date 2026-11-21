@@ -20,10 +20,20 @@ module "shared" {
   source = "../shared"
 }
 
-# By the module's own address, as some modules call their submodules: the
-# test driver fills in @FIXTURES@ before it commits this file.
+# Calls a submodule by the module's own address, built from a local value and
+# a variable default so the fetched-module scan exercises OpenTofu evaluation.
+# The test driver fills in @FIXTURES@ before committing this file.
+locals {
+  repository = "git::file://@FIXTURES@/network.git"
+}
+
+variable "ref" {
+  type    = string
+  default = "v1.0.0"
+}
+
 module "tags" {
-  source = "git::file://@FIXTURES@/network.git//vpc/tags?ref=v1.0.0"
+  source = "${local.repository}//vpc/tags?ref=${var.ref}"
   name   = var.name
 }
 

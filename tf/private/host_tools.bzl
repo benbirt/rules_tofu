@@ -9,7 +9,8 @@ compiles the Go tools they need with `rules_go`'s host Go SDK, as Gazelle's
 
 - `lockjson` (`//tf/private/cmd/lockjson`) parses `.terraform.lock.hcl`.
 - `modscan` (`//tf/private/cmd/modscan`) parses module `source` strings and
-  lists a module's `required_providers` and module calls.
+  inspects fetched modules via `tofu` to list their served directories,
+  providers and module calls.
 
 Go module dependencies such as `hashicorp/hcl` and OpenTofu's
 `registry-address` are downloaded via the Go module proxy, honouring `GOPROXY`,
@@ -31,6 +32,7 @@ _SOURCES = [
     Label("//tf/private/cmd/internal/tfconfig:source.go"),
     Label("//tf/private/cmd/internal/tfconfig:tests.go"),
     Label("//tf/private/cmd/internal/tfconfig:tfconfig.go"),
+    Label("//tf/private/cmd/internal/tofushow:tofushow.go"),
     Label("//tf/private/cmd/lockjson:main.go"),
     Label("//tf/private/cmd/modscan:main.go"),
 ]

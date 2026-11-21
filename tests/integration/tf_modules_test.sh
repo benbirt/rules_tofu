@@ -7,8 +7,9 @@
 #   1. Turn fixtures/network into a git repository with an annotated tag v1.0.0
 #      and fixtures/dns into dns.tar.gz, then fill in @FIXTURES@ and
 #      @DNS_SHA256@. In network.git:
-#      - vpc calls its own //vpc/tags submodule by its full git URL, which the
-#        module provides itself (issue #95).
+#      - vpc calls its own //vpc/tags submodule by its full git URL built from
+#        a local value and a variable default, which OpenTofu evaluates during
+#        the scan and the module provides itself (issue #95).
 #      - Files named "files" at the root and "module" in vpc/ check against
 #        target-name collisions (issue #61), and vpc/examples/BUILD.bazel
 #        checks that upstream BUILD files are removed.
@@ -27,6 +28,10 @@
 #        not fetched (issue #94).
 #      - plain holds only main.tf, so its library's data glob matches nothing
 #        (issue #164).
+#      In dns.tar.gz:
+#      - dns declares null_resource and terraform_data with no
+#        required_providers block, so OpenTofu implies hashicorp/null and the
+#        built-in terraform provider.
 #   2. `@tf_providers//:pin` writes the initial .terraform.lock.hcl. Nothing in
 #      the main repository requires a provider: the lock records hashicorp/null
 #      (from the git module) and hashicorp/time (from //vpc/peering), and omits
@@ -34,10 +39,12 @@
 #      plans offline across the git module (which calls a registry module
 #      and requires a provider only the module names), a submodule under
 #      modules/, one outside modules/ via //<subdir>, the configuration-only
-#      module, the archive, and the registry module directly. Checks the
-#      fetched network repository: the file symlink and the files named "files"
-#      and "module" remain, while .bazelignore, vpc/examples/BUILD.bazel and
-#      all other symlinks were removed.
+#      module, the archive, and the registry module directly. Checks that the
+#      generated dns library lists exactly @tf_providers//hashicorp/null
+#      (dropping the built-in provider), and that the fetched network
+#      repository keeps the file symlink and the files named "files" and
+#      "module" while removing .bazelignore, vpc/examples/BUILD.bazel and all
+#      other symlinks.
 #   3. Removing `subdirs` from the network module's tag fails
 #      `bazel build //app` naming the attribute: the library leaves out the
 #      configuration of a directory outside modules/ that the module never
@@ -51,7 +58,8 @@
 #   5. Moving v1.0.0 to a new commit and running `bazel clean --expunge` still
 #      plans the old commit's content and passes with --lockfile_mode=error.
 #   6. Building //bad, which calls a fetched module that calls an undeclared
-#      one, fails during fetch naming the tf_modules.module tag to add.
+#      one, fails during fetch naming the tf_modules.module tag to add and the
+#      caller (`module "missing" in "caller"`).
 #   7. Declaring a module by a //<subdir> (peering_link) that is a symlink
 #      fails during fetch naming the directory the link points to.
 #   8. Declaring a module by a //<subdir> (vendor/shared) inside a git
@@ -96,7 +104,7 @@ mv "${FIXTURES}/network" "${FIXTURES}/network.git"
 # The module's call to its own address must name this repository.
 sed -i.bak "s|@FIXTURES@|${FIXTURES}|g" "${FIXTURES}/network.git/vpc/main.tf"
 rm "${FIXTURES}/network.git/vpc/main.tf.bak"
-grep -q -F "git::file://${FIXTURES}/network.git//vpc/tags?ref=v1.0.0" "${FIXTURES}/network.git/vpc/main.tf" ||
+grep -q -F "repository = \"git::file://${FIXTURES}/network.git\"" "${FIXTURES}/network.git/vpc/main.tf" ||
   fail "couldn't fill in the git module's call to its own address"
 # Files named like the generated targets, a Bazel file, and symlinks. The
 # subnet submodule's outputs come through the one symlink that must survive;
@@ -180,6 +188,12 @@ if grep -q 'hashicorp/random' .terraform.lock.hcl; then
   fail "the lock covers hashicorp/random, which only the git module's examples require"
 fi
 plan "app-v1 10.0.0.0/24 www.example.com direct hub-peered only-plain"
+# dns declares no required_providers. Its generated library must list
+# hashicorp/null, implied by null_resource, and omit the built-in provider
+# implied by terraform_data; strict deps would otherwise fail the plan above.
+dns_library="$(find "$(bazel info output_base)/external" -maxdepth 1 -name '*tf_modules_dns')/BUILD.bazel"
+grep -q -F 'providers = ["@tf_providers//hashicorp/null"],' "${dns_library}" ||
+  fail "the dns module's library doesn't list exactly hashicorp/null, which its null_resource implies: $(cat "${dns_library}")"
 network_repo="$(find "$(bazel info output_base)/external" -maxdepth 1 -name '*tf_modules_network')"
 [[ -d "${network_repo}" ]] || fail "can't find the network module's repository: '${network_repo}'"
 [[ -L "${network_repo}/vpc/modules/subnet/outputs.tf" ]] || fail "the symlink to a file of the module was removed"
@@ -266,7 +280,7 @@ if out="$(bazel build //bad 2>&1)"; then
   fail "//bad built, but it calls a module MODULE.bazel doesn't declare"
 fi
 echo "${out}" >&2
-grep -q -F 'tf_modules.module(source = "acme/missing/null", version = "...")' <<<"${out}" ||
+grep -q -F 'tf_modules.module(source = "acme/missing/null", version = "...")  # called by module "missing" in "caller"' <<<"${out}" ||
   fail "the failure doesn't name the tag to add"
 
 echo "--- 7. a module directory that is a symlink ---" >&2

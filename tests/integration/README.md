@@ -99,7 +99,9 @@ packages for module and test edge cases:
   using a variable default, a local value, `_override`, `.tofu` shadowing and
   `.tf.json`, plus a `manual` `:providers` target covering canonical addresses,
   providers implied by a resource and a data source, aliased `provider` blocks
-  and a skipped built-in provider.
+  and a skipped built-in provider. Step 10 also packs `reader/` as an archive
+  and fetches it via `tf_modules.module` to verify fetched-module scanning with
+  the selected `TOFU_VERSION` release.
 - `sub_only`: a library whose `srcs` are all in a subdirectory.
 
 It also applies `//app:app` with no backend block and
@@ -117,9 +119,11 @@ header of `module_dependency_test.sh` for the steps.
 `fixtures/network` into a tagged git repository and `fixtures/dns` into an
 archive at test time alongside `cloudposse/label/null` from the OpenTofu
 registry. It covers `pin` for providers required only by fetched modules,
-offline planning, tree tidying, commit and registry facts, fetch-time error
-diagnostics, and adding a module without re-fetching existing ones; see the
-header of `tf_modules_test.sh` for the steps.
+offline planning, OpenTofu-evaluated module sources and implied providers in
+generated libraries (dropping built-in providers), tree tidying, commit and
+registry facts, fetch-time error diagnostics, and adding a module without
+re-fetching existing ones; see the header of `tf_modules_test.sh` for the
+steps.
 
 `run_directory/` (`run_directory_test`, driven by `run_directory_test.sh`)
 exercises `tf_deploy` launchers under `bazel run` and direct execution from

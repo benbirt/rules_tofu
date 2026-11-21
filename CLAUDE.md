@@ -63,12 +63,12 @@ Then `bazel shutdown` so the new startup flags take effect.
   network and is unaffected.
 - Outside Bazel, run Go unit tests with `go test ./tf/private/cmd/...` (in
   Bazel: `bazel test //tf/private/cmd/...`). Plain `go test` skips the `runner`,
-  `dupcheck`, `modules` and `tofushow` tests and still reports `ok` unless
-  `-runner=<path>`, `-dupcheck=<path>` and `-tofu=<absolute path>`
+  `dupcheck`, `modules`, `modscan` and `tofushow` tests and still reports `ok`
+  unless `-runner=<path>`, `-dupcheck=<path>` and `-tofu=<absolute path>`
   (`tofutest.Reader`) are passed:
   - `go build -o /tmp/runner ./tf/private/cmd/runner && go test ./tf/private/cmd/runner -runner=/tmp/runner`
   - `go build -o /tmp/dupcheck ./tf/private/cmd/dupcheck && go test ./tf/private/cmd/dupcheck -dupcheck=/tmp/dupcheck`
-  - `go test ./tf/private/cmd/internal/tofushow ./tf/private/cmd/modules -tofu=/abs/path/to/tofu`
+  - `go test ./tf/private/cmd/internal/tofushow ./tf/private/cmd/modules ./tf/private/cmd/modscan -tofu=/abs/path/to/tofu`
 
 ## Where things are documented
 
@@ -171,8 +171,9 @@ Then `bazel shutdown` so the new startup flags take effect.
 - Compile `lockjson` and `modscan` with the host Go SDK in
   `tf/private/host_tools.bzl` (`@rules_tofu_host_tools`), a non-dev
   `use_repo_rule`, because extensions cannot run Bazel-built targets. The rule
-  watches `_SOURCES` and builds under `-mod=readonly` via `GOPROXY`, verifying
-  Go modules against `rules_tofu`'s `go.sum`, so keep `_SOURCES`, `go.mod` and
+  watches `_SOURCES` (including `//tf/private/cmd/internal/tofushow:tofushow.go`,
+  stdlib only) and builds under `-mod=readonly` via `GOPROXY`, verifying Go
+  modules against `rules_tofu`'s `go.sum`, so keep `_SOURCES`, `go.mod` and
   `go.sum` tidy.
 - `@tf_providers//:pin` (`tf/private/cmd/pin`; `README.md`, "Providers"):
   - Discover `required_providers` with one `bazel query`, never a filesystem
@@ -245,14 +246,15 @@ Then `bazel shutdown` so the new startup flags take effect.
   `version` mismatch and makes local calls use the manifest. Because the
   manifest format is internal to `tofu`, `module_dependency_<version>_test`
   runs for every entry in `KNOWN_VERSIONS`.
-- Read configuration modules in `//tf/private/cmd/modules` (`TofuModules`) only
-  through `tofushow.Reader.ReadFiles` (`tf/private/cmd/internal/tofushow`;
-  issue #153):
-  - Never use `tfconfig.ReadCalls` or `tfconfig.ReadRequirements` in the
-    manifest tool; those stay in `tfconfig` only for `modscan` and `pin` until
-    stages 2 and 3 of issue #153. Test files' `run` blocks still use
-    `tfconfig.TestFiles` and `ReadTestCalls` because OpenTofu has no command
-    that reports them.
+- Read configuration modules in `//tf/private/cmd/modules` (`TofuModules`) and
+  `//tf/private/cmd/modscan` only through `tofushow.Reader.ReadFiles`
+  (`tf/private/cmd/internal/tofushow`; issue #153):
+  - Never add back `tfconfig.ReadCalls` (deleted in stage 2) or use
+    `tfconfig.ReadRequirements` outside `pin`; `ReadRequirements` and
+    `ApplyOverrides` stay in `tfconfig` only for `pin` until stage 3 of issue
+    #153. `tfconfig.ModuleDirs` takes a `sources` callback instead of reading
+    HCL. Test files' `run` blocks still use `tfconfig.TestFiles` and
+    `ReadTestCalls` because OpenTofu has no command that reports them.
   - Always stage into a fresh scratch directory under `<scratch>/<dir>` and run
     `tofu show -json -no-color -module=<dir>` with `<scratch>` as the working
     directory, stripping every `TF_*` variable, `HOME` and `XDG_CONFIG_HOME`
@@ -263,8 +265,8 @@ Then `bazel shutdown` so the new startup flags take effect.
     directory) and applies `TF_VAR_*` to the shown module, which would alter an
     evaluated `source`, while `TF_LOG*` and CLI config in `HOME` or
     `TF_CLI_CONFIG_FILE` would pollute or alter output (especially outside
-    Bazel actions in stages 2 and 3). Keep `ReadFiles`'s guards rejecting bad
-    `dir` paths and `*.tfvars[.json]` files
+    Bazel actions in `modscan` and stage 3 `pin`). Keep `ReadFiles`'s guards
+    rejecting bad `dir` paths and `*.tfvars[.json]` files
     (`TestReadFiles_RejectsBadArguments`): when `dir` is `""`, the staged
     directory is `tofu`'s working directory. Staging under `<dir>` also makes
     diagnostics name `<dir>/<file>`.
@@ -282,8 +284,9 @@ Then `bazel shutdown` so the new startup flags take effect.
     per local name, and agreeing `version_constraint` values per `full_name`),
     `//tf/private/cmd/internal/tofushow:tofushow_test` (`TestReadFiles_Facts`,
     `TestReadFiles_LocalNames`, `TestParse`), and per-version coverage in
-    `module_dependency_<version>_test` (`//reader` and `//reader:providers` in
-    `tests/integration/module_dependency_test.sh` step 9).
+    `module_dependency_<version>_test` (`//reader`, `//reader:providers` in
+    step 9, and fetched `@tf_modules//reader` in step 10 of
+    `tests/integration/module_dependency_test.sh`).
 - Parse module `source` strings only with `tfconfig.ParseSource` in Go
   (`modscan parse`), matching OpenTofu's `addrs.ParseModuleSource` via
   `registry-address/v2` and hand-written git and archive parsers.
@@ -322,15 +325,57 @@ Then `bazel shutdown` so the new startup flags take effect.
       and tidies `tree/`, writes `metadata.json` and an empty `BUILD.bazel`,
       and takes only `source` and the module's pin.
     - `_tf_module_repo` (`repo_name`, `tf_modules_<name>`) reads
-      `metadata.json` via `files` so changes to that file re-trigger it, runs
-      `_check_directories` and `modscan`, symlinks `tree/` in (`_link_files`)
-      and writes the `BUILD` files.
+      `metadata.json` via `files` so changes to that file re-trigger it,
+      watches `_TOFU_VERSION`, runs `_check_directories` and
+      `modscan --tofu=...`, symlinks `tree/` in (`_link_files`) and writes the
+      `BUILD` files.
     Keep `modules` (label to `source`), `subdir` and `subdirs` off
     `_tf_module_files`. Attributes are part of Bazel's rule key and Bazel 9's
     contents-cache key, so putting them on `_tf_module_files` would re-fetch a
     module when its `subdirs` changed or when another module was declared,
-    removed or changed `source`. Regenerating `_tf_module_repo` reads local
-    files and downloads nothing.
+    removed or changed `source`. Regenerating `_tf_module_repo` re-scans local
+    files without re-fetching module files (fetching a module downloads only
+    the host's `tofu` binary if the build has not already fetched it).
+  - Obtain `tofu` for `modscan` in `_host_tofu` via `TOFU_BINARIES` loaded from
+    `@tofu_toolchains//:binaries.bzl` and
+    `host_platform_key(repository_ctx.os.name, repository_ctx.os.arch)`
+    (`toolchain/host.bzl`, `//toolchain/tests:host_test`):
+    - Don't import per-platform `tofu_<platform>` repositories with `use_repo`
+      in `MODULE.bazel`: `bazel mod tidy` would strip them unless
+      `extension_metadata` listed them as direct deps, which would put them in
+      every consumer's `MODULE.bazel`. `Label()` values in `binaries.bzl`
+      resolve in `@tofu_toolchains`'s own repo mapping, where they are visible.
+    - Choose the host platform inside `_tf_module_repo` at fetch time, never in
+      the `tf_modules` extension or a repository attribute: host-dependent
+      attributes would break `reproducible = True` and `MODULE.bazel.lock`
+      stability across hosts.
+    - Loading `binaries.bzl` fetches only the cheap hub; no `tofu_<platform>`
+      download happens unless a module is fetched, and
+      `repository_ctx.path(TOFU_BINARIES[key])` fetches only the host's
+      repository (reusing the default toolchain's download).
+    - Keep the OpenTofu version out of `binaries.bzl` so its `.bzl` digest does
+      not change with `tofu.version` and invalidate `_tf_module_files` (in the
+      same `.bzl` file). Watch `@tofu_toolchains//:version` (`_TOFU_VERSION`)
+      in `_host_tofu` instead so changing `tofu.version` regenerates
+      `_tf_module_repo` locally without re-fetching module files;
+      `repository_ctx.path` alone does not watch.
+    - Fetched modules always scan with the `tofu` extension's resolved release
+      even when a root registers a custom `opentofu_toolchain` (toolchains
+      resolve after `BUILD` files load); hosts absent from `TOFU_BINARIES` fail
+      in `_host_tofu`.
+  - Emit in generated `providers` every non-built-in provider `modscan` reports
+    from OpenTofu (both `required_providers` and implied providers);
+    `_provider_label` drops `terraform.io/builtin/*` and rejects hosts other
+    than `registry.opentofu.org`. A served directory OpenTofu cannot load fails
+    the fetch with `*tofushow.LoadError`; unserved directories (examples,
+    tests) are not read.
+  - Known trap until stage 3 of issue #153: `@tf_providers//:pin` still reads
+    `required_providers` via `tfconfig`, so it does not lock a provider that a
+    fetched module only implies. The generated library then names
+    `@tf_providers//hashicorp/<name>`, which fails to load until locked
+    (workaround: declare the provider in `required_providers` and `providers`
+    on a workspace target and run `pin`). Stage 3 fixes this by reading
+    provider requirements via `tofushow`.
   - Keep `pin` in `metadata.json` even though nothing reads it
     (`tf_modules_test.sh`, step 10). `_tf_module_repo` has no pin attributes
     and Bazel does not track the files `modscan` reads. Without `pin`, a new
@@ -487,6 +532,11 @@ Then `bazel shutdown` so the new startup flags take effect.
   non-dev deps split on `root_module_has_non_dev_dependency`, listing only the
   hubs (`tofu_toolchains`, `tf_providers`, `tf_modules`) so `bazel mod tidy`
   leaves `MODULE.bazel` unchanged.
+- Keep `@tofu_toolchains` (`_tofu_hub` in `toolchain/extensions.bzl`) writing
+  `binaries.bzl` (`TOFU_BINARIES`, version-independent) and `version` (the
+  resolved OpenTofu version) alongside its `toolchain()` entries, while
+  `extension_metadata` still lists only `tofu_toolchains` (see `tf_modules`
+  above).
 - Arbitrate `tofu.version` from the root module: multiple root tags fail, one
   root tag wins, agreeing non-root tags win, disagreeing non-root tags fail
   naming the modules, and zero tags select `DEFAULT_VERSION`. `tofu` is one
@@ -580,8 +630,10 @@ Then `bazel shutdown` so the new startup flags take effect.
     and leaves the lock unpruned against an empty `.terraform/providers`.
   - Keep `runValidate`'s missing-provider guidance when an empty-root `tf_test`
     fails validation (`empty_root_test_provider`).
-  - Don't make `tfconfig` treat missing directories as empty: `modscan` relies
-    on the error.
+  - Don't make `tfconfig.ConfigFiles` or `modscan`'s `configFiles`/`readDir`
+    treat missing directories as empty: `ModuleDirs` rejects a missing
+    `moduleDir`, and `modscan` relies on `*fs.PathError` for a missing called
+    directory to report git-submodule errors.
 - Reject an empty root in `tf_deploy` at analysis (`check_has_configuration`;
   `deploy_deps_only`, `deploy_subdirectory_only`), because `tofu` validates an
   empty directory and then refuses to plan it.

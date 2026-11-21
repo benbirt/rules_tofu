@@ -20,8 +20,10 @@ BUILD files then reference each module in `deps`, for example
 `@tf_modules//terraform-aws-modules/vpc/aws` or `@tf_modules//acme_vpc`.
 """
 
+load("@tofu_toolchains//:binaries.bzl", "TOFU_BINARIES")
 load("//tf/private:fetched_tree.bzl", "walk", "within")
 load("//tf/private:repo_metadata.bzl", "reproducible")
+load("//toolchain:host.bzl", "host_platform_key")
 load(
     ":source.bzl",
     "check_name",
@@ -47,6 +49,10 @@ _PROVIDERS_HUB = "tf_providers"
 
 # Compiled by //tf/private:host_tools.bzl; see //tf/private/cmd/modscan.
 _MODSCAN = Label("@rules_tofu_host_tools//:bin/modscan")
+
+# Resolved OpenTofu version written by the `tofu` extension into its hub
+# (//toolchain:extensions.bzl); watched so a version change re-scans modules.
+_TOFU_VERSION = Label("@tofu_toolchains//:version")
 
 def _parse_sources(module_ctx, sources):
     """Read module source addresses as OpenTofu does, with `modscan parse`.
@@ -396,11 +402,37 @@ def _child(directory, rel):
     """Path at slash-separated `rel` below `directory`, or `directory` for `""`."""
     return directory.get_child(*rel.split("/")) if rel else directory
 
+def _host_tofu(repository_ctx):
+    """Return the host's pinned `tofu` binary for `modscan`.
+
+    Resolving `TOFU_BINARIES[key]` fetches only this host's `tofu_<platform>`
+    repository, which the default toolchain also uses on the host. A root
+    module's custom `opentofu_toolchain` cannot be used here because
+    toolchains resolve after `BUILD` files load, and this rule writes them.
+    """
+    key = host_platform_key(repository_ctx.os.name, repository_ctx.os.arch)
+    if key not in TOFU_BINARIES:
+        fail(("tf_modules.module `{}`: rules_tofu scans fetched modules with a pinned OpenTofu release, " +
+              "and has none for this host (`{}`). Releases are pinned for: {}").format(
+            repository_ctx.attr.source,
+            key,
+            ", ".join(sorted(TOFU_BINARIES)),
+        ))
+
+    # `repository_ctx.path` does not watch; watch `version` so a `tofu.version`
+    # change triggers a local re-scan without altering `binaries.bzl`'s digest.
+    repository_ctx.watch(_TOFU_VERSION)
+    return repository_ctx.path(TOFU_BINARIES[key])
+
 def _scan(repository_ctx, tree, submodules):
     # Every declared module, this one included: it may call its own address
     # for a submodule, and another tag may declare one of its subdirectories,
     # which then provides the calls into it.
-    args = [repository_ctx.path(_MODSCAN), "--self=" + repository_ctx.attr.label]
+    args = [
+        repository_ctx.path(_MODSCAN),
+        "--tofu={}".format(_host_tofu(repository_ctx)),
+        "--self=" + repository_ctx.attr.label,
+    ]
     for label, source in repository_ctx.attr.modules.items():
         args.append("--module={}={}".format(label, source))
     for directory in repository_ctx.attr.subdirs:
@@ -455,7 +487,7 @@ def _tf_module_repo_impl(repository_ctx):
     if scanned["undeclared"]:
         fail("{} calls modules that MODULE.bazel doesn't declare. Add:\n{}".format(
             context,
-            "\n".join(["    {}  # called at {}".format(c["tag"], c["where"]) for c in scanned["undeclared"]]),
+            "\n".join(["    {}  # called by {}".format(c["tag"], c["where"]) for c in scanned["undeclared"]]),
         ))
 
     providers = [p for p in [_provider_label(p, context) for p in scanned["providers"]] if p]
@@ -551,13 +583,16 @@ tf_library(
     )
 
     # Omit `reproducible`: `_link_files` writes absolute symlinks into this
-    # output base. Regenerating this repository downloads nothing.
+    # output base. Regenerating this repository re-scans the local tree and
+    # fetches no module files.
 
 # Generates a module's BUILD files over symlinks to its `_tf_module_files`
 # tree. `modules` maps each declared label to `source`, so Bazel regenerates
 # this repository when a module is declared, removed or changes `source`, or
-# when this module's `subdir`, `subdirs`, `version` or metadata.json changes.
-# Regeneration scans the local tree and downloads nothing.
+# when this module's `subdir`, `subdirs`, `version`, `metadata.json` or
+# `@tofu_toolchains//:version` changes. Regeneration re-scans the local tree
+# without re-fetching module files; fetching a module downloads the host's
+# `tofu` binary if the build has not already fetched it.
 _tf_module_repo = repository_rule(
     implementation = _tf_module_repo_impl,
     attrs = {
@@ -898,24 +933,31 @@ submodules are not fetched.
 
 Each generated `tf_library` lists as `srcs` the configuration files of the
 module's root, its `modules/` subdirectories, directories it calls itself and
-directories named in `subdirs`, and carries the providers they require. Other
-files are `data`, except `.tftest.hcl`, `.tofutest.hcl`, `.tftest.json` and
-`.tofutest.json` test files, which are left out. Configuration files in other
-directories, such as examples, are also left out and cannot be called.
-External modules called transitively must also be declared with
-`tf_modules.module`. Each fetched module is validated at its root directory
-before anything that depends on it, failing in
-`TofuValidate @tf_modules//<path>` even if callers use only a `//<subdir>`.
+directories named in `subdirs`, and carries the non-built-in providers OpenTofu
+reports for them, whether declared in `required_providers` or implied by
+resources, data sources or `provider` blocks. A served directory that OpenTofu
+cannot load fails the fetch with OpenTofu's diagnostics. Other files are `data`,
+except `.tftest.hcl`, `.tofutest.hcl`, `.tftest.json` and `.tofutest.json` test
+files, which are left out. Configuration files in other directories, such as
+examples, are also left out and cannot be called. External modules called
+transitively must also be declared with `tf_modules.module`. Each fetched
+module is validated at its root directory before anything that depends on it,
+failing in `TofuValidate @tf_modules//<path>` even if callers use only a
+`//<subdir>`.
 
 Across the module graph, each `@tf_modules` path resolves once. For registry
 modules, the root module's tag wins, else the highest version. Git and archive
 declarations sharing a `name` must agree on `source` and must not disagree on
 `commit` or `sha256`; an explicit `commit` wins over an unset one.
 
-`tf_modules` scans sources and fetched modules with a Go helper compiled by
-`rules_go`'s host Go SDK, honouring `GOPROXY`, `GONOSUMDB`, `GOPRIVATE`,
-`GONOPROXY` and `GOSUMDB`; workspaces that register a Go SDK must select a
-version at least as new as the `go` directive in `rules_tofu`'s `go.mod`.
+`tf_modules` parses source addresses and scans fetched modules with a Go helper
+compiled by `rules_go`'s host Go SDK, honouring `GOPROXY`, `GONOSUMDB`,
+`GOPRIVATE`, `GONOPROXY` and `GOSUMDB`; workspaces that register a Go SDK must
+select a version at least as new as the `go` directive in `rules_tofu`'s
+`go.mod`. Scanning fetched modules also runs the pinned OpenTofu release
+selected by `tofu.version`, or the default in `toolchain/versions.bzl`, even
+when the build uses a custom `opentofu_toolchain`, so the host must be a
+platform with a pinned release.
 
 Import only `tf_modules` with `use_repo`. See
 [From a registry, git or an archive](https://github.com/benbirt/rules_tofu#from-a-registry-git-or-an-archive).
