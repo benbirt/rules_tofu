@@ -32,7 +32,7 @@ bazel test //...
 | `toolchain/` | OpenTofu binary download and toolchain registration |
 | `tofu/` | `@rules_tofu//tofu`, the toolchain's runnable `tofu` (rule in `tf/private/tofu_binary.bzl`) |
 | `docs/` | `starlark_doc_extract` target per public `.bzl` file, shipped as the BCR `docs_url` archive |
-| `tools/` | Maintainer tools (excluded from releases): `update_versions` pins an OpenTofu release; `format` formats the repository |
+| `tools/` | Maintainer tools (excluded from releases): `update_versions` pins an OpenTofu release; `format` formats the repository; `lint` lints every Starlark file |
 | `tests/integration/` | Bazel-in-Bazel integration tests ([`tests/integration/README.md`](tests/integration/README.md)) |
 | `tests/tofu/` | Tests for `//tofu` used as another target's tool |
 | `examples/` | Usage examples |
@@ -116,14 +116,13 @@ On the pinned Bazel version, CI runs builds, tests and example plans with
 ## Formatting and lint
 
 No `bazel test` target checks formatting. CI's `lint` job runs
-`bazel run //tools:format.check`,
-`bazel run @buildifier_prebuilt//:buildifier -- -lint=warn -r .` and
+`bazel run //tools:format.check`, `bazel run //tools:lint` and
 `bazel run //tofu -- fmt -check -diff -recursive examples e2e/smoke`, plus
 `bazel mod tidy` to check that `MODULE.bazel` is unchanged. Run locally:
 
 ```sh
 bazel run //tools:format
-bazel run @buildifier_prebuilt//:buildifier -- -lint=warn -r .
+bazel run //tools:lint
 bazel run //tofu -- fmt -recursive examples e2e/smoke
 bazel mod tidy
 ```
@@ -134,6 +133,13 @@ and `.tfvars` files, including `tests/integration` and nested workspaces. Set
 skips `.tofu`, `.tftest.hcl` and `.tofutest.hcl` files, so the `tofu fmt` step
 is their only check. It names `examples` and `e2e/smoke` to skip
 `tests/integration`, where negative-case fixtures may be malformed on purpose.
+
+`//tools:lint` checks every Starlark file under the workspace, including nested
+workspaces and untracked files, and fails on any formatting diff or buildifier
+lint warning, such as missing `Args:` or `Returns:` doc-string sections. An
+unformatted untracked Starlark file fails `//tools:lint` locally because
+`//tools:format` formats git-tracked files only. Suppress a deliberate warning
+in place with `# buildifier: disable=<warning>` and a reason.
 
 When adding a nested Bazel module under `e2e/` or `tests/integration/`:
 

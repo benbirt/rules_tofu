@@ -1,5 +1,0 @@
-# The conflicting_providers test fixture loads @rules_tofu//tf/private:provider.bzl
-# directly (a private API). This triggers buildifier's bzl-visibility lint warning,
-# but it is intentional: the whole point of the test is to exercise what happens
-# when a user illegally instantiates tf_provider outside of the tf_providers extension.
-tests/integration/broken_workspace/cases/conflicting_providers

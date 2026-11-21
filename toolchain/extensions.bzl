@@ -30,6 +30,9 @@ version:
 # branching lives in //toolchain:version_resolution.bzl so it is unit-testable
 # without a module graph; this file collects the tags and owns the `fail()`.
 
+# `reproducible` is shared by rules_tofu's repository rules in `//tf` and
+# `//toolchain` and is not public API.
+# buildifier: disable=bzl-visibility
 load("//tf/private:repo_metadata.bzl", "reproducible")
 load("//toolchain:version_resolution.bzl", "resolve_version")
 load("//toolchain:versions.bzl", "DEFAULT_VERSION", "KNOWN_VERSIONS", "PLATFORMS")

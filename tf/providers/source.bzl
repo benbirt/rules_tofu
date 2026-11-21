@@ -220,7 +220,14 @@ def registry_shasum(response, context):
     return struct(sha256 = shasum, error = None)
 
 def is_sha256(value):
-    """Whether `value` is a lower-case hex SHA256 digest."""
+    """Whether `value` is a lower-case hex SHA256 digest.
+
+    Args:
+        value: Value to check; non-strings return False.
+
+    Returns:
+        A bool.
+    """
     if type(value) != "string" or len(value) != 64:
         return False
     for c in value.elems():

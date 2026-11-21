@@ -1,3 +1,6 @@
+# `tofu_binary` is not public API: `//tofu:tofu` is its only target, and
+# downstream modules run `@rules_tofu//tofu` rather than instantiating it.
+# buildifier: disable=bzl-visibility
 load("//tf/private:tofu_binary.bzl", "tofu_binary")
 
 # Runs the `tofu` binary the build uses, for OpenTofu commands the rules have
