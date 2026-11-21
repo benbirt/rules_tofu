@@ -62,10 +62,11 @@
 #      the generated library's srcs serve only the module root and ./child,
 #      leaving out ./providers.
 #
-# Runs once per OpenTofu version in KNOWN_VERSIONS because the module manifest
-# and the .terraform/terraform.tfstate backend record read by the
-# ephemeral-state check are internal OpenTofu formats, and `tofu show -json
-# -module` carries no format_version.
+# Runs for the oldest and the newest pinned OpenTofu release (`tested_versions`
+# in versions.bzl) because the module manifest and the
+# .terraform/terraform.tfstate backend record read by the ephemeral-state check
+# are internal OpenTofu formats, and `tofu show -json -module` carries no
+# format_version.
 
 set -euo pipefail
 

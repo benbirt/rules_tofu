@@ -12,6 +12,8 @@ tests/integration/
 │                            per negative case in other workspaces, positive tests
 ├── cases.bzl                name|command|target|fragment line encoding
 ├── running_bazel.bzl        exposes the outer Bazel's version to nested builds
+├── versions.bzl             `tested_versions` selection for per-version tests
+├── versions_test.bzl        unit tests for `tested_versions`
 ├── nested_bazel.sh          sourced by every driver: nested caches and `bazel`
 ├── assert_bazel_fails.sh    negative-test driver: runs `bazel build` or `run`
 │                            and checks for a non-zero exit and stderr substring
@@ -112,8 +114,9 @@ once `state_root` points outside `bazel-out`. Because the module manifest
 (`.terraform/modules/modules.json`) and backend record
 (`.terraform/terraform.tfstate`) are internal OpenTofu formats and
 `tofu show -json -module` carries no `format_version`, `BUILD.bazel` generates
-one test per version in `KNOWN_VERSIONS` (`toolchain/versions.bzl`). See the
-header of `module_dependency_test.sh` for the steps.
+one test per version returned by `tested_versions(KNOWN_VERSIONS)` in
+`versions.bzl` (the oldest and the newest pinned release). See the header of
+`module_dependency_test.sh` for the steps.
 
 `tf_modules/` (`tf_modules_test`, driven by `tf_modules_test.sh`) turns
 `fixtures/network` into a tagged git repository and `fixtures/dns` into an

@@ -1,8 +1,10 @@
 # Weekly version updates.
 #
-# Not covered: .bazelversion (and its nested copies, which must stay
-# identical), the Go SDK and the off-registry provider tag in MODULE.bazel,
-# and the OpenTofu versions in toolchain/; Dependabot updates none of them.
+# Not covered by Dependabot: .bazelversion (and its nested copies, which must
+# stay identical), the Go SDK and the off-registry provider tag in MODULE.bazel.
+# OpenTofu versions in toolchain/versions.bzl are pinned by
+# .github/workflows/tofu_versions.yml instead, because Dependabot cannot verify
+# their cosign signatures.
 version: 2
 updates:
   # bazel_dep versions in MODULE.bazel; Dependabot runs `bazel mod tidy` to

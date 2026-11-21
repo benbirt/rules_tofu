@@ -77,7 +77,7 @@ Then `bazel shutdown` so the new startup flags take effect.
   runner ("How it works"), "Restrictions", "Non-goals" and "Known gaps".
 - `CONTRIBUTING.md` is the maintainer documentation: repository layout, short
   hard invariants and public `.bzl` entry points, running tests, formatting
-  and lint checks, pinning an OpenTofu release, the Go version floor, and
+  and lint checks, pinning OpenTofu releases, the Go version floor, and
   releasing to the BCR.
 - This file holds only what belongs in neither: the sandbox bootstrap above,
   the reasons behind the invariants, and traps earlier changes hit. Move
@@ -307,7 +307,11 @@ Then `bazel shutdown` so the new startup flags take effect.
 - Don't drop `-get=false`: it stops `tofu` silently re-downloading on a
   `version` mismatch and makes local calls use the manifest. Because the
   manifest format is internal to `tofu`, `module_dependency_<version>_test`
-  runs for every entry in `KNOWN_VERSIONS`.
+  runs for the floor and the newest pinned release (`tested_versions` in
+  `tests/integration/versions.bzl`, `//tests/integration:versions_test`),
+  bracketing every version users can pick. Each test is a nested Bazel run and
+  a `tofu` download on every CI job (Linux and macOS), so testing each minor
+  release is not worth the CI time.
 - Read configuration modules in `//tf/private/cmd/modules` (`TofuModules`),
   `//tf/private/cmd/modscan` and `//tf/private/cmd/pin` only through
   `tofushow.Reader.ReadFiles` (`tf/private/cmd/internal/tofushow`; issue #153):
@@ -616,8 +620,13 @@ Then `bazel shutdown` so the new startup flags take effect.
   Don't add a from-source TODO.
 - Let digests enter `toolchain/versions.bzl` only through
   `bazel run //tools:update_versions` after `cosign` verification of
-  `SHA256SUMS` (`CONTRIBUTING.md`, "Pinning a new OpenTofu release"); don't
-  paste digests in by hand.
+  `SHA256SUMS` (`CONTRIBUTING.md`, "Pinning OpenTofu releases"); don't paste
+  digests in by hand. `.github/workflows/tofu_versions.yml` runs the same
+  command weekly to pin new stable releases from the floor upward. Keep
+  existing pins indefinitely: removing a pin breaks workspaces that set it in
+  `tofu.version`. `DEFAULT_VERSION` follows the newest stable release,
+  including across minor releases; the workflow's PR says so when the default
+  moves to a new minor.
 - Root modules needing a custom binary register `opentofu_toolchain`
   (`README.md`, "The `tofu` binary";
   `//tests/integration:custom_toolchain_test`).
@@ -867,7 +876,8 @@ Then `bazel shutdown` so the new startup flags take effect.
     means no `backend` or `cloud` block; a `cloud` block has type `"cloud"`.
     Reading the record uses OpenTofu's own result after merging `_override`
     files and evaluating variables. Because the format is internal to OpenTofu,
-    `module_dependency_<version>_test` covers it across `KNOWN_VERSIONS`.
+    `module_dependency_<version>_test` covers it across `tested_versions` (see
+    `-get=false` under "Modules" above).
   - Run the check in the Go runner (`checkStateDurable`) after `tofu init` and
     before `tofu apply` or `tofu destroy`, refuse when the record cannot be
     parsed, leave `plan` ungated, and don't weaken the refusal to a warning.

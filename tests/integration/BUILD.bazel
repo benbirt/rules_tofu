@@ -29,6 +29,8 @@ load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load("@running_bazel//:version.bzl", "RUNNING_BAZEL_VERSION")
 load("//toolchain:versions.bzl", "KNOWN_VERSIONS")
 load(":cases.bzl", "case_line")
+load(":versions.bzl", "tested_versions")
+load(":versions_test.bzl", "versions_test_suite")
 
 sh_binary(
     name = "assert_bazel_fails",
@@ -226,12 +228,14 @@ bazel_integration_test(
     workspace_path = "lock_update",
 )
 
+versions_test_suite(name = "versions_test")
+
 # Cross-module module_source dependencies: //app calls a tf_library in another
 # Bazel module by module_source, which calls one in a third. The driver builds,
 # plans and runs tf_test offline, exercises apply with no backend block and
 # with a backend "local", and fetches `reader/` via `tf_modules` to verify
-# fetched-module scanning with the selected `tofu` release. Runs for every
-# version in KNOWN_VERSIONS because the module manifest and the
+# fetched-module scanning with the selected `tofu` release. Runs for
+# `tested_versions` (versions.bzl) because the module manifest and the
 # .terraform/terraform.tfstate backend record are internal OpenTofu formats,
 # `tofu show -json -module` carries no format_version, and tf_test uses flags
 # added in OpenTofu 1.12. See module_dependency_test.sh.
@@ -255,7 +259,7 @@ sh_binary(
         ],
         workspace_path = "module_dependency",
     )
-    for version in KNOWN_VERSIONS
+    for version in tested_versions(KNOWN_VERSIONS)
 ]
 
 # The launchers a tf_deploy generates, run for real: .apply under `bazel run`,
