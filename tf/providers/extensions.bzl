@@ -43,8 +43,9 @@ BUILD files reference each provider as `@tf_providers//<namespace>/<name>`.
 # provider tagged only by dependencies) gets a `@tf_providers//<ns>/<name>`
 # package whose BUILD file calls `fail()`. The extension itself still succeeds,
 # keeping `@tf_providers//:pin` runnable. The hub is always created; `:pin`
-# runs `tofu providers lock` across `required_providers` of the workspace's
-# tf_library, tf_deploy and tf_test targets and their external deps.
+# runs `tofu providers lock` for the providers required by the configuration
+# source files of the workspace's tf_library, tf_deploy and tf_test targets
+# and their external deps.
 
 load("//tf/private:fetched_tree.bzl", "walk")
 load("//tf/private:repo_metadata.bzl", "reproducible")
@@ -382,12 +383,12 @@ _from_lock_tag = tag_class(
     doc = "Pin providers from a `.terraform.lock.hcl` updated by " +
           "`bazel run @tf_providers//:pin`, Renovate or Dependabot. Entries must target " +
           "`registry.opentofu.org`; locks written by `terraform` against " +
-          "`registry.terraform.io` are rejected. `pin` collects `required_providers` across " +
-          "the workspace's `tf_library`, `tf_deploy` and `tf_test` targets and their " +
-          "external `deps`. A fetched module's examples are in no target, so they are " +
-          "left out. By default `pin` locks " +
-          "the five platforms `from_lock` resolves: `linux_amd64`, `linux_arm64`, " +
-          "`darwin_amd64`, `darwin_arm64` and `windows_amd64`. Pass " +
+          "`registry.terraform.io` are rejected. `pin` reads the configuration source " +
+          "files of each `tf_library`, `tf_deploy` and `tf_test` target in the workspace " +
+          "and their external `deps` with OpenTofu, locking every provider they declare or " +
+          "imply. A fetched module's examples are in no target, so they are left out. By " +
+          "default `pin` locks the five platforms `from_lock` resolves: `linux_amd64`, " +
+          "`linux_arm64`, `darwin_amd64`, `darwin_arm64` and `windows_amd64`. Pass " +
           "`-- -platform=<os>_<arch>` to replace that list when a provider omits one of " +
           "them. Providers record nothing in `MODULE.bazel.lock`. Only the root " +
           "module's `from_lock` is read, at most once; `from_lock` in dependencies is " +

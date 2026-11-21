@@ -29,22 +29,22 @@
 #      - plain holds only main.tf, so its library's data glob matches nothing
 #        (issue #164).
 #      In dns.tar.gz:
-#      - dns declares null_resource and terraform_data with no
-#        required_providers block, so OpenTofu implies hashicorp/null and the
+#      - dns declares tls_private_key and terraform_data with no
+#        required_providers block, so OpenTofu implies hashicorp/tls and the
 #        built-in terraform provider.
 #   2. `@tf_providers//:pin` writes the initial .terraform.lock.hcl. Nothing in
-#      the main repository requires a provider: the lock records hashicorp/null
-#      (from the git module) and hashicorp/time (from //vpc/peering), and omits
-#      hashicorp/random, which is used only under examples/. //app then
-#      plans offline across the git module (which calls a registry module
-#      and requires a provider only the module names), a submodule under
-#      modules/, one outside modules/ via //<subdir>, the configuration-only
-#      module, the archive, and the registry module directly. Checks that the
-#      generated dns library lists exactly @tf_providers//hashicorp/null
-#      (dropping the built-in provider), and that the fetched network
-#      repository keeps the file symlink and the files named "files" and
-#      "module" while removing .bazelignore, vpc/examples/BUILD.bazel and all
-#      other symlinks.
+#      the main repository has a required_providers block: the lock records
+#      hashicorp/null from the git module, hashicorp/time from //vpc/peering,
+#      hashicorp/tls implied by the dns module, and hashicorp/local implied by
+#      //app, while omitting hashicorp/random from examples/. //app then plans
+#      offline across the git module (which calls a registry module and
+#      requires a provider only the module names), a submodule under modules/,
+#      one outside modules/ via //<subdir>, the configuration-only module, the
+#      archive, and the registry module directly. Also checks that the
+#      generated dns library lists only @tf_providers//hashicorp/tls (dropping
+#      the built-in provider), and that the fetched network repository keeps
+#      the file symlink and the files named "files" and "module" while removing
+#      .bazelignore, vpc/examples/BUILD.bazel and all other symlinks.
 #   3. Removing `subdirs` from the network module's tag fails
 #      `bazel build //app` naming the attribute: the library leaves out the
 #      configuration of a directory outside modules/ that the module never
@@ -168,9 +168,11 @@ plan() {
 
 echo "--- 2. pin and plan ---" >&2
 # The workspace starts with from_lock and no lock file. Main-repository files
-# declare no providers; pin discovers hashicorp/null from the git module and
-# hashicorp/time from //vpc/peering, and runs `bazel query` via $BAZEL so it
-# shares the nested output base.
+# have no required_providers block; pin discovers hashicorp/null from the git
+# module, hashicorp/time from //vpc/peering, and two providers that
+# configuration only implies: hashicorp/tls from the dns module and
+# hashicorp/local from //app. It runs `bazel query` via $BAZEL so it shares
+# the nested output base.
 BAZEL="${_TMPDIR}/bazel"
 cat >"${BAZEL}" <<EOF
 #!/usr/bin/env bash
@@ -184,16 +186,20 @@ grep -q 'provider "registry.opentofu.org/hashicorp/null"' .terraform.lock.hcl ||
   fail "the lock doesn't cover hashicorp/null, which the git module requires"
 grep -q 'provider "registry.opentofu.org/hashicorp/time"' .terraform.lock.hcl ||
   fail "the lock doesn't cover hashicorp/time, which the submodule //app calls by //vpc/peering requires"
+grep -q 'provider "registry.opentofu.org/hashicorp/tls"' .terraform.lock.hcl ||
+  fail "the lock doesn't cover hashicorp/tls, which the dns module's tls_private_key implies"
+grep -q 'provider "registry.opentofu.org/hashicorp/local"' .terraform.lock.hcl ||
+  fail "the lock doesn't cover hashicorp/local, which //app's local_file implies"
 if grep -q 'hashicorp/random' .terraform.lock.hcl; then
   fail "the lock covers hashicorp/random, which only the git module's examples require"
 fi
 plan "app-v1 10.0.0.0/24 www.example.com direct hub-peered only-plain"
 # dns declares no required_providers. Its generated library must list
-# hashicorp/null, implied by null_resource, and omit the built-in provider
+# hashicorp/tls, implied by tls_private_key, and omit the built-in provider
 # implied by terraform_data; strict deps would otherwise fail the plan above.
 dns_library="$(find "$(bazel info output_base)/external" -maxdepth 1 -name '*tf_modules_dns')/BUILD.bazel"
-grep -q -F 'providers = ["@tf_providers//hashicorp/null"],' "${dns_library}" ||
-  fail "the dns module's library doesn't list exactly hashicorp/null, which its null_resource implies: $(cat "${dns_library}")"
+grep -q -F 'providers = ["@tf_providers//hashicorp/tls"],' "${dns_library}" ||
+  fail "the dns module's library doesn't list exactly hashicorp/tls, which its tls_private_key implies: $(cat "${dns_library}")"
 network_repo="$(find "$(bazel info output_base)/external" -maxdepth 1 -name '*tf_modules_network')"
 [[ -d "${network_repo}" ]] || fail "can't find the network module's repository: '${network_repo}'"
 [[ -L "${network_repo}/vpc/modules/subnet/outputs.tf" ]] || fail "the symlink to a file of the module was removed"

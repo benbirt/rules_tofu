@@ -3,7 +3,8 @@
 // `tofu providers lock`.
 //
 // Flags and environment:
-//   - --tofu=<path>: path to the tofu binary.
+//   - --tofu=<path>: path to the `tofu` binary, used both to read targets via
+//     `tofu show` and to run `tofu providers lock`.
 //   - --lock-dir=<dir>: workspace-relative directory of .terraform.lock.hcl,
 //     or "" for the workspace root.
 //   - --platform=<os>_<arch>: default platform passed as -platform= to
@@ -18,36 +19,66 @@
 //     bazelisk on PATH.
 //
 // Locking proceeds in order:
-//   - `bazel query` lists the .tf, .tf.json, .tofu and .tofu.json files of
-//     every tf_library, tf_deploy and tf_test in the main repository and their
-//     transitive tf_library deps. Bazel's package graph handles .bazelignore,
-//     deleted packages and nested workspaces automatically. Any .tf file
-//     outside Bazel rules, including a top-level versions.tf that no target
-//     lists, is ignored. A fetched module's examples are in no target, so
-//     they are left out.
-//   - Only `terraform { required_providers { ... } }` blocks are extracted, so
-//     resources, variables and module calls never need to evaluate out of
-//     context.
-//   - Within each directory, entries are combined by canonical provider
-//     source rather than local name. Separate root modules in one package,
-//     such as two tf_deploy targets with distinct srcs, each contribute all of
-//     their constraints. Duplicate local names within one module are caught at
-//     build time instead.
-//   - Providers excluded via --exclude-source are dropped. When that leaves
-//     nothing, pin writes an empty lock containing only tofu's header comment
-//     without running tofu, so a provider moved from the lock to a tag stops
-//     conflicting with it.
-//   - Otherwise pin combines constraints across directories by provider
-//     source and writes a scratch main.tf.json in a temporary directory with
-//     one root required_providers block.
-//   - `tofu providers lock` runs in that scratch directory with no existing
-//     lock, since it keeps versions from an existing lock and has no -upgrade
-//     flag. The resulting lock replaces
+//   - One `bazel query` (`configQuery`, `queryFlags`) fetches every rule in
+//     `deps()` of every tf_library, tf_deploy and tf_test in the main
+//     repository across any repository, plus the configuration source files
+//     among those dependencies. Output uses --output=streamed_jsonproto with
+//     --proto:output_rule_attrs=srcs,actual,tf_modules_label and
+//     --noproto:flatten_selects so every branch of a select() appears in
+//     selectorList instead of being dropped by Bazel's default flattening.
+//     --keep_going and partial-result exit code 3 are accepted because provider
+//     packages in @tf_providers may not exist until locked. Bazel's package
+//     graph handles .bazelignore, deleted packages and nested workspaces
+//     automatically. Files outside Bazel rules are ignored, and a fetched
+//     module's examples are in no target and left out.
+//   - For each _tf_library, tf_deploy_rule and _tf_test returned, pin collects
+//     the configuration source files in its srcs, following filegroup srcs and
+//     alias actual, and groups them by directory: workspace-relative in the
+//     main repository, and external/<repo>/<dir> in external repositories. Each
+//     group is one target's configuration files in one directory, matching what
+//     strict deps reads in the build. A file in two targets' srcs belongs to
+//     both groups. Query files in no such target's srcs are ignored. A select()
+//     in srcs or in an alias's actual contributes every branch because
+//     `bazel query` is unconfigured.
+//   - Because `bazel query` knows only source files, pin cannot read generated
+//     configuration in srcs. It prints a warning for each non-source target it
+//     finds there: a srcs label that is a declared output of a queried rule
+//     with a configuration extension, the declared configuration outputs of a
+//     rule listed in srcs, or a non-filegroup, non-alias rule listed in srcs
+//     that declares no outputs (warning on the rule label, since the query
+//     cannot name its files). A source file in a package Bazel could not load
+//     is not warned about here because `bazel query` reports that package
+//     itself. Providers required only by generated files are not locked.
+//   - Each group is read on its own with tofushow.Reader.ReadFiles using the
+//     --tofu binary; groups with the same directory and files are read once.
+//     Every provider OpenTofu reports counts: required_providers entries after
+//     override files and .tofu shadowing, and providers implied by a resource,
+//     data source or provider block. Implied providers have no
+//     required_providers entry and therefore carry no version constraint.
+//     Built-in providers are skipped via tfconfig.IsBuiltInProvider. If OpenTofu
+//     cannot load a group, pin fails with OpenTofu's diagnostics and leaves the
+//     lock unchanged. The error names a tf_modules library by its
+//     tf_modules_label (@tf_modules//<path>) and appends
+//     tfconfig.StandAloneHint when the group includes an override file.
+//   - Providers excluded via --exclude-source are dropped. When that leaves no
+//     providers and at least one was excluded, pin writes an empty lock
+//     containing only `tofu`'s header comment without running
+//     `tofu providers lock`, so a provider moved from the lock to a tag stops
+//     conflicting with it. When no providers were required at all, pin fails.
+//   - Otherwise pin combines constraints by canonical provider source rather
+//     than local name (issue #99), within each directory for failure summaries
+//     and across all directories for locking, and writes a scratch main.tf.json
+//     with one root required_providers block (issue #151).
+//   - `tofu providers lock` runs in that fresh scratch directory with no
+//     existing lock, since it keeps versions from an existing lock and has no
+//     -upgrade flag. The resulting lock replaces
 //     <workspace>/<lock-dir>/.terraform.lock.hcl.
 //
 // Progress and errors go to stderr. When `tofu providers lock` fails, OpenTofu
 // sees only the combined constraints, not which directory contributed each
-// one, so pin prints every directory's constraints by provider. When
+// one, so pin prints each directory's combined constraints by provider, showing
+// external repositories as external/<repo>/<dir>, unconstrained or implied
+// providers as (any), and version constraints as OpenTofu normalises them. When
 // `bazel query` fails other than with partial-result exit code 3, or when
 // `tofu providers lock` exits non-zero, pin exits with that subprocess's exit
 // code. Unrecognised or malformed flags exit 2, and other errors exit 1.
@@ -71,6 +102,7 @@ import (
 
 	"github.com/benbirt/rules_tofu/tf/private/cmd/internal/flags"
 	"github.com/benbirt/rules_tofu/tf/private/cmd/internal/tfconfig"
+	"github.com/benbirt/rules_tofu/tf/private/cmd/internal/tofushow"
 )
 
 var (
@@ -102,11 +134,11 @@ func main() {
 const emptyLock = "# This file is maintained automatically by \"tofu init\".\n" +
 	"# Manual edits may be lost in future updates.\n"
 
-// module holds one directory's merged provider requirements, sorted by source
-// (see requirements).
+// module holds the providers required in one directory, combined by source
+// (see combine).
 type module struct {
-	Dir  string // workspace-relative with "" for the workspace root, or @<repo>//<dir>
-	Reqs []tfconfig.Requirement
+	Dir  string // workspace-relative with "" for the workspace root, or external/<repo>/<dir>
+	Reqs []tofushow.Provider
 }
 
 // bazelCommand is the Bazel to query with: $BAZEL, else bazel or bazelisk
@@ -124,7 +156,11 @@ func bazelCommand() string {
 }
 
 func run(workspace, lockDir, tofu, bazel string, defaultPlatforms, excludedSources, extraArgs []string, log io.Writer) error {
-	byDir, err := queryConfigFiles(bazel, workspace, log)
+	groups, err := queryGroups(bazel, workspace, log)
+	if err != nil {
+		return err
+	}
+	byDir, excludedAny, err := requirements(tofushow.Reader{Tofu: tofu}, groups, excludedSources)
 	if err != nil {
 		return err
 	}
@@ -133,26 +169,17 @@ func run(workspace, lockDir, tofu, bazel string, defaultPlatforms, excludedSourc
 		dirs = append(dirs, dir)
 	}
 	sort.Strings(dirs)
-
 	var modules []module
-	excludedAny := false
+	var all []tofushow.Provider
 	for _, dir := range dirs {
-		reqs, err := requirements(byDir[dir])
-		if err != nil {
-			return err
-		}
-		kept := withoutSources(reqs, excludedSources)
-		if len(kept) < len(reqs) {
-			excludedAny = true
-		}
-		if len(kept) > 0 {
-			modules = append(modules, module{Dir: dir, Reqs: kept})
-		}
+		modules = append(modules, module{Dir: dir, Reqs: combine(byDir[dir])})
+		all = append(all, byDir[dir]...)
 	}
+
 	dst := filepath.Join(workspace, lockDir, ".terraform.lock.hcl")
 	if len(modules) == 0 {
 		if !excludedAny {
-			return errors.New("no tf_library, tf_deploy or tf_test in the workspace declares required_providers to lock")
+			return errors.New("no tf_library, tf_deploy or tf_test in the workspace requires a provider to lock")
 		}
 		// Every required provider is pinned by a root tag, so the lock has
 		// nothing to pin. Leaving a stale entry in place would conflict with
@@ -170,10 +197,6 @@ func run(workspace, lockDir, tofu, bazel string, defaultPlatforms, excludedSourc
 		return err
 	}
 	defer os.RemoveAll(scratch)
-	var all []tfconfig.Requirement
-	for _, m := range modules {
-		all = append(all, m.Reqs...)
-	}
 	if err := writeScratch(scratch, combine(all)); err != nil {
 		return err
 	}
@@ -199,63 +222,82 @@ func run(workspace, lockDir, tofu, bazel string, defaultPlatforms, excludedSourc
 		return err
 	}
 	n := len(modules)
-	fmt.Fprintf(log, "rules_tofu: wrote %s from the required_providers of %d director%s\n",
+	fmt.Fprintf(log, "rules_tofu: wrote %s for the providers required in %d director%s\n",
 		dst, n, map[bool]string{true: "y", false: "ies"}[n == 1])
 	return nil
 }
 
-// withoutSources drops the requirements on the given <namespace>/<name>
+// requirements asks OpenTofu which providers each group requires and returns
+// them by directory, without built-in providers or those in excludedSources.
+// excludedAny reports whether excludedSources dropped any.
+//
+// Each group is read on its own, as strict deps reads it in the build, so the
+// providers found are the ones the build asks each target to list. Targets
+// with the same files in a directory share one read.
+func requirements(reader tofushow.Reader, groups []group, excludedSources []string) (byDir map[string][]tofushow.Provider, excludedAny bool, err error) {
+	byDir = map[string][]tofushow.Provider{}
+	read := map[string][]tofushow.Provider{}
+	for _, g := range groups {
+		key := g.Dir + "\x00" + strings.Join(g.Files, "\x00")
+		providers, ok := read[key]
+		if !ok {
+			m, err := reader.ReadFiles(g.Dir, g.Files)
+			if err != nil {
+				return nil, false, fmt.Errorf("%s: %w%s", g.Label, err, tfconfig.StandAloneHint(g.Label, err, g.Files))
+			}
+			for _, p := range m.Providers {
+				if !tfconfig.IsBuiltInProvider(p.Source) {
+					providers = append(providers, p)
+				}
+			}
+			read[key] = providers
+		}
+		kept := withoutSources(providers, excludedSources)
+		if len(kept) < len(providers) {
+			excludedAny = true
+		}
+		if len(kept) > 0 {
+			byDir[g.Dir] = append(byDir[g.Dir], kept...)
+		}
+	}
+	return byDir, excludedAny, nil
+}
+
+// withoutSources drops the providers with the given <namespace>/<name>
 // sources. Sources compare as tofu does: case-insensitively, with the default
 // registry host optional.
-func withoutSources(reqs []tfconfig.Requirement, sources []string) []tfconfig.Requirement {
+func withoutSources(providers []tofushow.Provider, sources []string) []tofushow.Provider {
 	drop := map[string]bool{}
 	for _, s := range sources {
 		if normalized, err := tfconfig.NormalizeProvider(s); err == nil {
 			drop[normalized] = true
 		}
 	}
-	var kept []tfconfig.Requirement
-	for _, req := range reqs {
-		if !drop[req.Source] {
-			kept = append(kept, req)
+	var kept []tofushow.Provider
+	for _, p := range providers {
+		if !drop[p.Source] {
+			kept = append(kept, p)
 		}
 	}
 	return kept
 }
 
-// requirements returns what one directory's files require, merged by combine.
+// combine returns one Provider per source, sorted by source. Distinct
+// non-empty version constraints for a source are sorted and joined with ", ",
+// which OpenTofu reads as requiring all of them. If every entry for a source
+// has an empty Version, the combined Version is "".
 //
-// The files need not belong to one module: two tf_deploy targets in a package,
-// each with its own srcs, may require providers under the same local name with
-// the same or different sources (issue #99). Entries are therefore grouped by
-// source rather than local name. Local names matter only for _override
-// files, where an override entry replaces every earlier entry of its name.
-func requirements(files []string) ([]tfconfig.Requirement, error) {
-	declared, err := tfconfig.ReadRequirements(files)
-	if err != nil {
-		return nil, err
-	}
-	effective := tfconfig.ApplyOverrides(declared)
-	reqs := make([]tfconfig.Requirement, len(effective))
-	for i, d := range effective {
-		reqs[i] = tfconfig.Requirement{Source: d.Source, Version: d.Version}
-	}
-	return combine(reqs), nil
-}
-
-// combine returns one Requirement per provider source, sorted by source.
-// Distinct non-empty version strings for a source are sorted and joined with
-// ", ", which OpenTofu reads as requiring all of them. If every entry for a
-// source has an empty Version, the combined Version is "".
-func combine(reqs []tfconfig.Requirement) []tfconfig.Requirement {
+// Providers are combined by source, never by local name: two targets, even in
+// one directory, may give one local name to different providers (issue #99).
+func combine(providers []tofushow.Provider) []tofushow.Provider {
 	versions := map[string][]string{}
-	for _, r := range reqs {
-		if _, ok := versions[r.Source]; !ok {
-			versions[r.Source] = nil
+	for _, p := range providers {
+		if _, ok := versions[p.Source]; !ok {
+			versions[p.Source] = nil
 		}
 		// No version is no constraint: nothing to add to the others.
-		if r.Version != "" && !slices.Contains(versions[r.Source], r.Version) {
-			versions[r.Source] = append(versions[r.Source], r.Version)
+		if p.Version != "" && !slices.Contains(versions[p.Source], p.Version) {
+			versions[p.Source] = append(versions[p.Source], p.Version)
 		}
 	}
 	sources := make([]string, 0, len(versions))
@@ -263,25 +305,25 @@ func combine(reqs []tfconfig.Requirement) []tfconfig.Requirement {
 		sources = append(sources, s)
 	}
 	sort.Strings(sources)
-	combined := make([]tfconfig.Requirement, 0, len(sources))
+	combined := make([]tofushow.Provider, 0, len(sources))
 	for _, s := range sources {
 		sort.Strings(versions[s])
-		combined = append(combined, tfconfig.Requirement{Source: s, Version: strings.Join(versions[s], ", ")})
+		combined = append(combined, tofushow.Provider{Source: s, Version: strings.Join(versions[s], ", ")})
 	}
 	return combined
 }
 
-// localNames gives each requirement in a scratch module a unique local name
+// localNames gives each provider in a scratch module a unique local name
 // derived from the provider type, such as null for
 // registry.opentofu.org/hashicorp/null, numbering collisions as aws-2 and so
 // on. OpenTofu accepts only letters, digits and non-leading, non-trailing
 // dashes in local names, so underscores are invalid; the lock file itself
 // records provider sources rather than local names.
-func localNames(reqs []tfconfig.Requirement) []string {
-	names := make([]string, len(reqs))
+func localNames(providers []tofushow.Provider) []string {
+	names := make([]string, len(providers))
 	used := map[string]bool{}
-	for i, req := range reqs {
-		base := path.Base(req.Source)
+	for i, p := range providers {
+		base := path.Base(p.Source)
 		name := base
 		for n := 2; used[name]; n++ {
 			name = fmt.Sprintf("%s-%d", base, n)
@@ -309,69 +351,80 @@ func hasPlatformArg(args []string) bool {
 	return false
 }
 
-// rootRules matches every tf_library, tf_deploy and tf_test in the main
-// repository via their underlying rules _tf_library, tf_deploy_rule and
-// _tf_test.
-const rootRules = `kind("^(_tf_library|tf_deploy_rule|_tf_test) rule$", //...)`
+// tfRules are the rule classes behind tf_library, tf_deploy and tf_test.
+var tfRules = []string{"_tf_library", "tf_deploy_rule", "_tf_test"}
 
-// configQuery lists the configuration files of those rules, including those
-// reached through filegroups and library deps, in any repository.
-const configQuery = `filter("\.(tf|tofu)(\.json)?$", kind("source file", deps(` + rootRules + `)))`
+// configQuery selects every tf_library, tf_deploy and tf_test in the main
+// repository, all rules in their transitive dependencies across any
+// repository, and the configuration source files among those dependencies.
+const configQuery = `let d = deps(kind("^(_tf_library|tf_deploy_rule|_tf_test) rule$", //...)) in ` +
+	`kind(" rule$", $d) + filter("\.(tf|tofu)(\.json)?$", kind("source file", $d))`
 
 // queryPartialExitCode is Bazel's exit code for a --keep_going command that
 // produced results despite errors.
 const queryPartialExitCode = 3
 
-// queryConfigFiles asks Bazel for the configuration files of every tf_library,
-// tf_deploy and tf_test in the main repository and their transitive tf_library
-// deps. It returns absolute file paths grouped by directory:
-// workspace-relative with "" for the workspace root in the main repository,
-// and @<repo>//<dir> in external repositories.
+// group holds the configuration source files that one target lists in one
+// directory: what strict deps reads on its own in the build.
+type group struct {
+	// Label is the target, as Bazel prints it; a library generated by
+	// tf_modules goes by its tf_modules_label (@tf_modules//<path>).
+	Label string
+	// Dir is workspace-relative with "" for the workspace root in the main
+	// repository, and external/<repo>/<dir> in another, as in a work tree.
+	Dir string
+	// Files holds absolute paths, sorted.
+	Files []string
+}
+
+// queryGroups queries Bazel for the workspace's tf_library, tf_deploy and
+// tf_test targets and the tf_library targets they depend on in any repository.
+// It returns the configuration source files in each target's srcs, grouped by
+// target and directory, following filegroup and alias targets as Bazel does.
 //
-// Every file counts, in any repository. A library's configuration files are
-// all in its srcs, since no rule takes one as data (issue #140), and the
-// library lists the providers they require: Bazel loads each of those labels
-// with the library, whether or not anything calls the directory. A module
-// that tf_modules fetched lists only the directories it serves, so its
-// examples are not among them.
+// A library lists the providers its srcs require, and Bazel loads each of
+// those labels with the library, whether or not anything calls the directory.
+// A module fetched by tf_modules lists only the directories it serves, so its
+// examples are excluded.
 //
 // The query runs with --keep_going because deps() follows providers into
 // @tf_providers: an unpinned provider has no @tf_providers//<ns>/<name>
 // package yet, and an unusable lock entry or lock/tag conflict generates a
-// package that fails to load. Neither holds .tf files, and pin fixes both.
-func queryConfigFiles(bazel, workspace string, log io.Writer) (map[string][]string, error) {
-	targets, err := query(bazel, workspace, configQuery, log)
+// package that fails to load. Neither holds configuration, and pin fixes both.
+//
+// `bazel query` knows only source files. For each generated configuration file
+// in srcs, or any non-filegroup, non-alias rule in srcs that declares no
+// outputs, queryGroups prints a warning to log.
+func queryGroups(bazel, workspace string, log io.Writer) ([]group, error) {
+	out, err := query(bazel, workspace, configQuery, log)
 	if err != nil {
 		return nil, err
 	}
-	byDir := map[string][]string{}
-	for _, f := range targets {
-		dir := path.Dir(path.Join(f.Package, f.Name))
-		if dir == "." {
-			dir = ""
-		}
-		if f.Repo != "" {
-			dir = "@" + f.Repo + "//" + dir
-		}
-		byDir[dir] = append(byDir[dir], f.Path)
+	g, err := parseTargets(out)
+	if err != nil {
+		return nil, err
 	}
-	return byDir, nil
+	groups, generated := g.groups()
+	for _, label := range generated {
+		fmt.Fprintf(log, "rules_tofu: pin cannot read %s, which is not a source file; providers required only by generated files are not locked\n", label)
+	}
+	return groups, nil
 }
 
-// target is a source file from `bazel query --output=streamed_jsonproto`: its
-// label split up, and its absolute path.
-type target struct {
-	Label, Repo, Package, Name, Path string
-}
-
-// queryFlags make the query print each target as a JSON object.
+// queryFlags run `bazel query` with partial results allowed, without implicit
+// or tool dependencies, emitting one JSON object per target with only the rule
+// attributes pin reads. --noproto:flatten_selects keeps every branch of a
+// select() in selectorList: Bazel's default flattening silently drops the
+// select() part of `srcs = [...] + select(...)` and the whole of
+// `actual = select(...)` on an alias.
 var queryFlags = []string{
 	"--keep_going", "--noimplicit_deps", "--notool_deps",
-	"--output=streamed_jsonproto",
+	"--output=streamed_jsonproto", "--proto:output_rule_attrs=srcs,actual,tf_modules_label",
+	"--noproto:flatten_selects",
 }
 
 // query runs a `bazel query`, accepting partial results.
-func query(bazel, workspace, expr string, log io.Writer) ([]target, error) {
+func query(bazel, workspace, expr string, log io.Writer) ([]byte, error) {
 	cmd := exec.Command(bazel, append(append([]string{"query"}, queryFlags...), expr)...)
 	cmd.Dir = workspace
 	cmd.Stderr = log
@@ -383,7 +436,7 @@ func query(bazel, workspace, expr string, log io.Writer) ([]target, error) {
 	} else if err != nil {
 		return nil, fmt.Errorf("bazel query: %w", err)
 	}
-	return parseTargets(out)
+	return out, nil
 }
 
 // queryTarget holds the fields pin reads from a `bazel query
@@ -394,50 +447,256 @@ type queryTarget struct {
 		Name     string `json:"name"`
 		Location string `json:"location"`
 	} `json:"sourceFile"`
+	Rule *struct {
+		Name      string `json:"name"`
+		RuleClass string `json:"ruleClass"`
+		Attribute []struct {
+			Name string `json:"name"`
+			queryValue
+			SelectorList *struct {
+				Elements []struct {
+					Entries []queryValue `json:"entries"`
+				} `json:"elements"`
+			} `json:"selectorList"`
+		} `json:"attribute"`
+		RuleOutput []string `json:"ruleOutput"`
+	} `json:"rule"`
+}
+
+// queryValue holds the string or string-list value of a plain attribute or of
+// one entry in a selectorList.
+type queryValue struct {
+	StringValue     string   `json:"stringValue"`
+	StringListValue []string `json:"stringListValue"`
+}
+
+// graph holds the source files and rules returned by `bazel query`, keyed by
+// label.
+type graph struct {
+	files map[string]sourceFile
+	rules map[string]rule
+}
+
+// sourceFile is a source file's directory, in the form of group.Dir, and its
+// absolute path.
+type sourceFile struct {
+	Dir, Path string
+}
+
+// rule holds the fields pin reads from a Bazel rule: its class, the labels in
+// its srcs and actual attributes across every branch of any select(), its
+// declared outputs, and tf_modules_label if set.
+type rule struct {
+	Class   string
+	Srcs    []string
+	Actual  []string
+	Outputs []string
+	// ModulesLabel is the @tf_modules//<path> label of a library generated by
+	// tf_modules, or "".
+	ModulesLabel string
 }
 
 // location is `<path>:<line>:<column>`.
 var location = regexp.MustCompile(`^(.+):\d+:\d+$`)
 
-// parseTargets reads `bazel query --output=streamed_jsonproto` output, one
-// JSON object per target, keeping the source files. `Repo` is "" for the main
-// repository, else the repository's name as Bazel prints it.
-func parseTargets(out []byte) ([]target, error) {
-	var targets []target
+// mainLabel strips the leading @@ that Bazel prints on main-repository labels
+// in some contexts, so labels compare as strings.
+func mainLabel(label string) string {
+	if strings.HasPrefix(label, "@@//") {
+		return label[2:]
+	}
+	return label
+}
+
+// splitLabel splits a label into its repository name without leading `@`
+// ("" for the main repository), package and target name.
+func splitLabel(label string) (repo, pkg, name string, ok bool) {
+	repo, rest, ok := strings.Cut(strings.TrimLeft(label, "@"), "//")
+	if !ok {
+		return "", "", "", false
+	}
+	pkg, name, ok = strings.Cut(rest, ":")
+	return repo, pkg, name, ok
+}
+
+// parseTargets reads `bazel query --output=streamed_jsonproto
+// --noproto:flatten_selects` output, one JSON object per target, keeping the
+// source files and rules.
+func parseTargets(out []byte) (graph, error) {
+	g := graph{files: map[string]sourceFile{}, rules: map[string]rule{}}
 	dec := json.NewDecoder(bytes.NewReader(out))
 	for dec.More() {
 		var qt queryTarget
 		if err := dec.Decode(&qt); err != nil {
-			return nil, fmt.Errorf("bazel query output: %w", err)
+			return graph{}, fmt.Errorf("bazel query output: %w", err)
 		}
-		if qt.Type != "SOURCE_FILE" || qt.SourceFile == nil {
-			continue
+		switch {
+		case qt.Type == "SOURCE_FILE" && qt.SourceFile != nil:
+			repo, pkg, name, ok := splitLabel(qt.SourceFile.Name)
+			if !ok {
+				continue
+			}
+			dir := path.Dir(path.Join(pkg, name))
+			if dir == "." {
+				dir = ""
+			}
+			if repo != "" {
+				dir = path.Join("external", repo, dir)
+			}
+			file := qt.SourceFile.Location
+			if m := location.FindStringSubmatch(file); m != nil {
+				file = m[1]
+			}
+			g.files[mainLabel(qt.SourceFile.Name)] = sourceFile{Dir: dir, Path: file}
+		case qt.Type == "RULE" && qt.Rule != nil:
+			r := rule{Class: qt.Rule.RuleClass}
+			for _, o := range qt.Rule.RuleOutput {
+				r.Outputs = append(r.Outputs, mainLabel(o))
+			}
+			for _, a := range qt.Rule.Attribute {
+				// With --noproto:flatten_selects, an attribute containing a
+				// select() carries a selectorList whose elements are the plain
+				// values and select()s concatenated together; other attributes
+				// carry a plain value.
+				values := []queryValue{a.queryValue}
+				if a.SelectorList != nil {
+					for _, e := range a.SelectorList.Elements {
+						values = append(values, e.Entries...)
+					}
+				}
+				for _, v := range values {
+					switch a.Name {
+					case "srcs":
+						for _, s := range v.StringListValue {
+							r.Srcs = append(r.Srcs, mainLabel(s))
+						}
+					case "actual":
+						if v.StringValue != "" {
+							r.Actual = append(r.Actual, mainLabel(v.StringValue))
+						}
+					case "tf_modules_label":
+						r.ModulesLabel = v.StringValue
+					}
+				}
+			}
+			g.rules[mainLabel(qt.Rule.Name)] = r
 		}
-		t := target{Label: qt.SourceFile.Name, Path: qt.SourceFile.Location}
-		if m := location.FindStringSubmatch(t.Path); m != nil {
-			t.Path = m[1]
-		}
-		repo, rest, ok := strings.Cut(strings.TrimLeft(t.Label, "@"), "//")
-		if !ok {
-			continue
-		}
-		pkg, name, ok := strings.Cut(rest, ":")
-		if !ok {
-			continue
-		}
-		t.Repo, t.Package, t.Name = repo, pkg, name
-		targets = append(targets, t)
 	}
-	return targets, nil
+	return g, nil
+}
+
+// groups returns the configuration source files of every tf_library, tf_deploy
+// and tf_test in g, one group per target and directory, sorted by target label
+// and directory. generated lists the sorted labels of generated configuration
+// files in their srcs, and of any non-filegroup, non-alias rules in their srcs
+// that declare no outputs.
+func (g graph) groups() (groups []group, generated []string) {
+	labels := make([]string, 0, len(g.rules))
+	for label, r := range g.rules {
+		if slices.Contains(tfRules, r.Class) {
+			labels = append(labels, label)
+		}
+	}
+	sort.Strings(labels)
+	// A generated file is known by its label only if its rule declares it.
+	outputs := map[string]bool{}
+	for _, r := range g.rules {
+		for _, o := range r.Outputs {
+			outputs[o] = true
+		}
+	}
+	notRead := map[string]bool{}
+	for _, label := range labels {
+		files := map[string]bool{}
+		for _, src := range g.rules[label].Srcs {
+			g.collect(src, outputs, files, notRead, map[string]bool{})
+		}
+		byDir := map[string][]string{}
+		for f := range files {
+			byDir[g.files[f].Dir] = append(byDir[g.files[f].Dir], g.files[f].Path)
+		}
+		dirs := make([]string, 0, len(byDir))
+		for dir := range byDir {
+			dirs = append(dirs, dir)
+		}
+		sort.Strings(dirs)
+		name := label
+		if hub := g.rules[label].ModulesLabel; hub != "" {
+			name = hub
+		}
+		for _, dir := range dirs {
+			sort.Strings(byDir[dir])
+			groups = append(groups, group{Label: name, Dir: dir, Files: byDir[dir]})
+		}
+	}
+	for label := range notRead {
+		generated = append(generated, label)
+	}
+	sort.Strings(generated)
+	return groups, generated
+}
+
+// collect adds to files the configuration source files that label contributes
+// to a srcs attribute: the file itself, or the files of a filegroup or alias,
+// followed as Bazel follows them. Non-source targets are recorded in
+// generated: a label in outputs with a configuration extension, the declared
+// configuration outputs of a rule, or a non-filegroup, non-alias rule that
+// declares no outputs, whose files the query cannot name.
+func (g graph) collect(label string, outputs, files, generated, seen map[string]bool) {
+	if seen[label] {
+		return
+	}
+	seen[label] = true
+	if _, ok := g.files[label]; ok {
+		files[label] = true
+		return
+	}
+	r, ok := g.rules[label]
+	switch {
+	case !ok:
+		// Not a source file the query returned: a declared rule output, a file
+		// without a configuration extension, or a file in a package Bazel
+		// could not load, which the query reports itself. Only declared
+		// configuration outputs are recorded as generated.
+		if outputs[label] && isConfigLabel(label) {
+			generated[label] = true
+		}
+	case r.Class == "filegroup":
+		for _, src := range r.Srcs {
+			g.collect(src, outputs, files, generated, seen)
+		}
+	case r.Class == "alias":
+		for _, actual := range r.Actual {
+			g.collect(actual, outputs, files, generated, seen)
+		}
+	case len(r.Outputs) == 0:
+		generated[label] = true
+	default:
+		for _, o := range r.Outputs {
+			if isConfigLabel(o) {
+				generated[o] = true
+			}
+		}
+	}
+}
+
+// isConfigLabel reports whether label names a configuration file.
+func isConfigLabel(label string) bool {
+	_, _, name, ok := splitLabel(label)
+	return ok && tfconfig.IsConfigFile(name)
 }
 
 // writeScratch writes main.tf.json in scratch for `tofu providers lock`: a
 // root module containing only a required_providers block, with local names
 // from localNames.
-func writeScratch(scratch string, reqs []tfconfig.Requirement) error {
-	required := map[string]tfconfig.Requirement{}
-	for i, local := range localNames(reqs) {
-		required[local] = reqs[i]
+func writeScratch(scratch string, providers []tofushow.Provider) error {
+	required := map[string]map[string]string{}
+	for i, local := range localNames(providers) {
+		entry := map[string]string{"source": providers[i].Source}
+		if providers[i].Version != "" {
+			entry["version"] = providers[i].Version
+		}
+		required[local] = entry
 	}
 	doc := map[string]any{"terraform": map[string]any{"required_providers": required}}
 	return writeJSON(filepath.Join(scratch, "main.tf.json"), doc)
@@ -456,22 +715,18 @@ func writeJSON(path string, v any) error {
 func constraintsSummary(modules []module) string {
 	type entry struct{ dir, version string }
 	bySource := map[string][]entry{}
-	add := func(m module) {
+	for _, m := range modules {
 		dir := m.Dir
 		if dir == "" {
 			dir = "(workspace root)"
 		}
 		for _, req := range m.Reqs {
-			source := strings.ToLower(req.Source)
 			version := req.Version
 			if version == "" {
 				version = "(any)"
 			}
-			bySource[source] = append(bySource[source], entry{dir, version})
+			bySource[req.Source] = append(bySource[req.Source], entry{dir, version})
 		}
-	}
-	for _, m := range modules {
-		add(m)
 	}
 	sources := make([]string, 0, len(bySource))
 	for s := range bySource {

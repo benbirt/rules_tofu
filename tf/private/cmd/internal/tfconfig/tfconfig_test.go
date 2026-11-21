@@ -2,141 +2,16 @@ package tfconfig
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/benbirt/rules_tofu/tf/private/cmd/internal/tofushow"
 )
-
-// ReadRequirements accepts object and version-string entries in HCL and JSON,
-// normalises sources and skips configuration_aliases. Unlisted files in the
-// same directory are ignored.
-func TestReadRequirements_Forms(t *testing.T) {
-	dir := t.TempDir()
-	for name, content := range map[string]string{
-		"main.tf": `
-terraform {
-  required_version = ">= 1.6"
-  required_providers {
-    aws = {
-      source                = "hashicorp/aws"
-      version               = ">= 6.0"
-      configuration_aliases = [aws.east]
-    }
-    google = "~> 7.0" # legacy form: source implied
-    ph = { source = "PostHog/posthog" }
-  }
-}
-
-resource "null_resource" "x" {
-  triggers = { a = var.undeclared }
-}
-`,
-		"extra.tf.json": `{"terraform": {"required_providers": {"random": {"source": "hashicorp/random", "version": "3.6.0"}}}}`,
-		"unlisted.tf": `terraform {
-  required_providers {
-    null = { source = "hashicorp/null" }
-  }
-}
-`,
-	} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	declared, err := ReadRequirements([]string{
-		filepath.Join(dir, "main.tf"), filepath.Join(dir, "extra.tf.json"),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := map[string]Requirement{}
-	for _, d := range declared {
-		got[d.Name] = d.Requirement
-	}
-	want := map[string]Requirement{
-		"aws":    {Source: "registry.opentofu.org/hashicorp/aws", Version: ">= 6.0"},
-		"google": {Source: "registry.opentofu.org/hashicorp/google", Version: "~> 7.0"},
-		"ph":     {Source: "registry.opentofu.org/posthog/posthog"},
-		"random": {Source: "registry.opentofu.org/hashicorp/random", Version: "3.6.0"},
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("got %+v, want %+v", got, want)
-	}
-}
-
-// ReadRequirements returns every entry as written, primary files first, with
-// what pin needs to combine them itself when two root modules share a
-// directory (issue #99).
-func TestReadRequirements(t *testing.T) {
-	dir := t.TempDir()
-	for name, content := range map[string]string{
-		"b.tf": `terraform {
-  required_providers {
-    null   = { source = "hashicorp/null", version = ">= 3.0" }
-    random = { source = "hashicorp/random" }
-    aws    = "~> 5.0"
-  }
-}
-`,
-		"a.tf": `terraform {
-  required_providers {
-    null = { source = "hashicorp/null", version = "3.2.4" }
-  }
-}
-`,
-		"a_override.tf": `terraform {
-  required_providers {
-    null = { source = "acme/null" }
-  }
-}
-`,
-	} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	got, err := ReadRequirements([]string{
-		filepath.Join(dir, "a_override.tf"), filepath.Join(dir, "b.tf"), filepath.Join(dir, "a.tf"),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	type entry struct {
-		Name, Source, Version, File string
-		Override                    bool
-	}
-	var entries []entry
-	for _, d := range got {
-		file, _, _ := strings.Cut(filepath.Base(d.Range), ":")
-		entries = append(entries, entry{d.Name, d.Source, d.Version, file, d.Override})
-	}
-	want := []entry{
-		{"null", "registry.opentofu.org/hashicorp/null", "3.2.4", "a.tf", false},
-		{"null", "registry.opentofu.org/hashicorp/null", ">= 3.0", "b.tf", false},
-		{"random", "registry.opentofu.org/hashicorp/random", "", "b.tf", false},
-		{"aws", "registry.opentofu.org/hashicorp/aws", "~> 5.0", "b.tf", false},
-		{"null", "registry.opentofu.org/acme/null", "", "a_override.tf", true},
-	}
-	if !reflect.DeepEqual(entries, want) {
-		t.Errorf("got  %+v\nwant %+v", entries, want)
-	}
-	// The override replaces both primary entries of its name.
-	var effective []string
-	for _, d := range ApplyOverrides(got) {
-		effective = append(effective, d.Name+"="+d.Source)
-	}
-	wantEffective := []string{
-		"random=registry.opentofu.org/hashicorp/random",
-		"aws=registry.opentofu.org/hashicorp/aws",
-		"null=registry.opentofu.org/acme/null",
-	}
-	if !reflect.DeepEqual(effective, wantEffective) {
-		t.Errorf("ApplyOverrides: got %v, want %v", effective, wantEffective)
-	}
-}
 
 func writeFiles(t *testing.T, dir string, files map[string]string) {
 	t.Helper()
@@ -212,8 +87,8 @@ func TestConfigFiles_IgnoresDotfilesAndDirectories(t *testing.T) {
 	}
 }
 
-// The lists pin reads come from a `bazel query`, not from a directory, and
-// go through the same filters.
+// Effective and EffectiveTests drop dot-prefixed file names while keeping
+// files inside dot-prefixed directories.
 func TestEffective_DropsDotfiles(t *testing.T) {
 	got := Effective([]string{"a/main.tf", "a/._main.tf", "a/.hidden.tofu", ".dir/main.tf", "b/.tf"})
 	if want := []string{"a/main.tf", ".dir/main.tf"}; !reflect.DeepEqual(got, want) {
@@ -242,27 +117,6 @@ func TestHasConfig_TofuOnly(t *testing.T) {
 	writeFiles(t, dir, map[string]string{"main.tofu.json": "{}"})
 	if !HasConfig(dir) {
 		t.Error("a directory holding only main.tofu.json has no config")
-	}
-}
-
-// pin hands ReadRequirements the files Bazel lists, both halves of a shadowed
-// pair included; the .tf one must not count.
-func TestReadRequirements_TofuShadowsTf(t *testing.T) {
-	dir := t.TempDir()
-	null := func(version string) string {
-		return "terraform {\n  required_providers {\n    null = { source = \"hashicorp/null\", version = \"" + version + "\" }\n  }\n}\n"
-	}
-	writeFiles(t, dir, map[string]string{
-		"versions.tf":   null("3.1.0"),
-		"versions.tofu": null("3.2.0"),
-	})
-	got, err := ReadRequirements([]string{filepath.Join(dir, "versions.tf"), filepath.Join(dir, "versions.tofu")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := Requirement{Source: "registry.opentofu.org/hashicorp/null", Version: "3.2.0"}
-	if len(got) != 1 || got[0].Requirement != want {
-		t.Errorf("got %+v, want %+v", got, want)
 	}
 }
 
@@ -400,6 +254,26 @@ func TestIsOverride(t *testing.T) {
 	} {
 		if got := IsOverride(name); got != want {
 			t.Errorf("IsOverride(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
+func TestStandAloneHint(t *testing.T) {
+	load := fmt.Errorf("//app:app: %w", &tofushow.LoadError{Dir: "app", Diagnostics: "Error: Missing module call to override"})
+	for _, tc := range []struct {
+		name  string
+		err   error
+		files []string
+		want  bool
+	}{
+		{"override file that tofu cannot load", load, []string{"/ws/app/main.tf", "/ws/app/x_override.tf"}, true},
+		{"no override file", load, []string{"/ws/app/main.tf"}, false},
+		{"dot-prefixed override file", load, []string{"/ws/app/._override.tf"}, false},
+		{"another kind of error", errors.New("signal: killed"), []string{"/ws/app/override.tf"}, false},
+	} {
+		got := StandAloneHint("//app:app", tc.err, tc.files)
+		if tc.want != strings.Contains(got, "OpenTofu read the files of //app:app in this directory without any other target's files") {
+			t.Errorf("%s: hint = %q, want one: %v", tc.name, got, tc.want)
 		}
 	}
 }

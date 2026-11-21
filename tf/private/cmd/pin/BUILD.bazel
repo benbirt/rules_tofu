@@ -9,6 +9,7 @@ go_library(
     deps = [
         "//tf/private/cmd/internal/flags",
         "//tf/private/cmd/internal/tfconfig",
+        "//tf/private/cmd/internal/tofushow",
     ],
 )
 
@@ -23,7 +24,13 @@ go_binary(
 go_test(
     name = "pin_test",
     srcs = ["main_test.go"],
+    args = ["-tofu=$(rlocationpath //tofu)"],
+    data = ["//tofu"],
     embed = [":pin_lib"],
+    deps = [
+        "//tf/private/cmd/internal/tofushow",
+        "//tf/private/cmd/internal/tofushow/tofutest",
+    ],
 )
 
 filegroup(
