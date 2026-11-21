@@ -425,11 +425,17 @@ def _host_tofu(repository_ctx):
     return repository_ctx.path(TOFU_BINARIES[key])
 
 def _scan(repository_ctx, tree, submodules):
+    modscan = repository_ctx.path(_MODSCAN)
+
+    # `repository_ctx.path` does not watch; watch the binary so rebuilding
+    # `modscan` (changed Go sources or host Go SDK) re-scans modules.
+    repository_ctx.watch(modscan)
+
     # Every declared module, this one included: it may call its own address
     # for a submodule, and another tag may declare one of its subdirectories,
     # which then provides the calls into it.
     args = [
-        repository_ctx.path(_MODSCAN),
+        modscan,
         "--tofu={}".format(_host_tofu(repository_ctx)),
         "--self=" + repository_ctx.attr.label,
     ]
@@ -447,8 +453,6 @@ def _scan(repository_ctx, tree, submodules):
 
 def _provider_label(source, context):
     host, _, rest = source.partition("/")
-    if host == "terraform.io" and rest.startswith("builtin/"):
-        return None
     if host != "registry.opentofu.org":
         fail(("{} requires the provider `{}`, which rules_tofu can't vendor: it only vendors providers " +
               "from registry.opentofu.org").format(context, source))
@@ -490,7 +494,7 @@ def _tf_module_repo_impl(repository_ctx):
             "\n".join(["    {}  # called by {}".format(c["tag"], c["where"]) for c in scanned["undeclared"]]),
         ))
 
-    providers = [p for p in [_provider_label(p, context) for p in scanned["providers"]] if p]
+    providers = [_provider_label(p, context) for p in scanned["providers"]]
     package = attr.subdir
     _link_files(repository_ctx, tree, package)
 
@@ -589,10 +593,11 @@ tf_library(
 # Generates a module's BUILD files over symlinks to its `_tf_module_files`
 # tree. `modules` maps each declared label to `source`, so Bazel regenerates
 # this repository when a module is declared, removed or changes `source`, or
-# when this module's `subdir`, `subdirs`, `version`, `metadata.json` or
-# `@tofu_toolchains//:version` changes. Regeneration re-scans the local tree
-# without re-fetching module files; fetching a module downloads the host's
-# `tofu` binary if the build has not already fetched it.
+# when this module's `subdir`, `subdirs`, `version`, `metadata.json`,
+# `@tofu_toolchains//:version` or `@rules_tofu_host_tools//:bin/modscan`
+# changes. Regeneration re-scans the local tree without re-fetching module
+# files; fetching a module downloads the host's `tofu` binary if the build has
+# not already fetched it.
 _tf_module_repo = repository_rule(
     implementation = _tf_module_repo_impl,
     attrs = {

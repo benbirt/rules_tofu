@@ -205,3 +205,17 @@ func TestNormalizeProvider(t *testing.T) {
 		t.Error("expected an error for an invalid address")
 	}
 }
+
+func TestIsBuiltInProvider(t *testing.T) {
+	for source, want := range map[string]bool{
+		"terraform.io/builtin/terraform":       true,
+		"opentofu.org/builtin/terraform":       true,
+		"registry.opentofu.org/hashicorp/null": false,
+		"registry.opentofu.org/builtin/null":   false,
+		"not an address":                       false,
+	} {
+		if got := IsBuiltInProvider(source); got != want {
+			t.Errorf("IsBuiltInProvider(%q) = %v, want %v", source, got, want)
+		}
+	}
+}

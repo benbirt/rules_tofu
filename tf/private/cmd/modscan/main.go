@@ -42,8 +42,8 @@
 //   - dirs: the directories walked, relative to <repository dir> and sorted,
 //     with "" for its root. Their configuration files are the library's srcs.
 //   - providers: sorted canonical <host>/<namespace>/<name> addresses of every
-//     provider OpenTofu reports for the served directories (required_providers,
-//     implied providers and built-in providers), or [] when none.
+//     non-built-in provider OpenTofu reports for the served directories
+//     (required_providers and implied providers), or [] when none.
 //   - deps: sorted labels of other declared modules that calls match via
 //     tfconfig.BestMatch, as the modules manifest resolves each call, or []
 //     when none. Self-calls add no dep.
@@ -269,7 +269,10 @@ func scan(reader tofushow.Reader, repo, moduleDir string, modules []Module, self
 				return nil, err
 			}
 			for _, p := range m.Providers {
-				providers[p.Source] = true
+				// Built-in providers have no plugin to vendor.
+				if !tfconfig.IsBuiltInProvider(p.Source) {
+					providers[p.Source] = true
+				}
 			}
 			for _, c := range m.Calls {
 				where := callIn(c.Name, dir)

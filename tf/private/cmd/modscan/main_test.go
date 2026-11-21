@@ -76,7 +76,7 @@ terraform {
 // Providers come from OpenTofu for the served directories: override files
 // replace primary entries, resources and data sources without a
 // required_providers entry imply hashicorp/<prefix>, and built-in providers
-// are included for the extension to drop.
+// under both terraform.io/builtin/ and opentofu.org/builtin/ are omitted.
 func TestScan_Providers(t *testing.T) {
 	requires := func(name, source string) string {
 		return "terraform {\n  required_providers {\n    " + name + " = { source = \"" + source + "\" }\n  }\n}\n"
@@ -89,6 +89,8 @@ resource "random_id" "implied" {}
 data "http" "implied" { url = "https://example.com" }
 resource "terraform_data" "builtin" {}
 `,
+		// OpenTofu reports this one as opentofu.org/builtin/terraform.
+		"modules/renamed/main.tf": requires("tf", "opentofu.org/builtin/terraform") + "resource \"terraform_data\" \"builtin\" {\n  provider = tf\n}\n",
 	})
 	got, err := scan(tofutest.Reader(t, *tofu), repo, "", nil, "", nil, nil)
 	if err != nil {
@@ -98,7 +100,6 @@ resource "terraform_data" "builtin" {}
 		"registry.opentofu.org/acme/null",
 		"registry.opentofu.org/hashicorp/http",
 		"registry.opentofu.org/hashicorp/random",
-		"terraform.io/builtin/terraform",
 	}
 	if !reflect.DeepEqual(got.Providers, want) {
 		t.Errorf("got %v, want %v", got.Providers, want)

@@ -326,9 +326,12 @@ Then `bazel shutdown` so the new startup flags take effect.
       and takes only `source` and the module's pin.
     - `_tf_module_repo` (`repo_name`, `tf_modules_<name>`) reads
       `metadata.json` via `files` so changes to that file re-trigger it,
-      watches `_TOFU_VERSION`, runs `_check_directories` and
+      watches `_TOFU_VERSION` and `_MODSCAN`, runs `_check_directories` and
       `modscan --tofu=...`, symlinks `tree/` in (`_link_files`) and writes the
-      `BUILD` files.
+      `BUILD` files. `repository_ctx.path` does not watch, so `_scan` watches
+      `_MODSCAN` explicitly so a rebuilt `modscan` from changed Go sources or
+      another host Go SDK re-scans modules even when `extensions.bzl` and
+      attributes are unchanged.
     Keep `modules` (label to `source`), `subdir` and `subdirs` off
     `_tf_module_files`. Attributes are part of Bazel's rule key and Bazel 9's
     contents-cache key, so putting them on `_tf_module_files` would re-fetch a
@@ -363,12 +366,15 @@ Then `bazel shutdown` so the new startup flags take effect.
       even when a root registers a custom `opentofu_toolchain` (toolchains
       resolve after `BUILD` files load); hosts absent from `TOFU_BINARIES` fail
       in `_host_tofu`.
-  - Emit in generated `providers` every non-built-in provider `modscan` reports
-    from OpenTofu (both `required_providers` and implied providers);
-    `_provider_label` drops `terraform.io/builtin/*` and rejects hosts other
-    than `registry.opentofu.org`. A served directory OpenTofu cannot load fails
-    the fetch with `*tofushow.LoadError`; unserved directories (examples,
-    tests) are not read.
+  - Emit in generated `providers` every provider `modscan` reports from
+    OpenTofu (both `required_providers` and implied providers);
+    `_provider_label` rejects hosts other than `registry.opentofu.org`.
+    Classify built-in providers only in Go via `tfconfig.IsBuiltInProvider`
+    (backed by `registry-address`'s `Provider.IsBuiltIn`, as `isBuiltin` in
+    `tf/private/cmd/modules` does), never by string prefix in Starlark:
+    `opentofu.org/builtin/*` is built-in alongside `terraform.io/builtin/*`. A
+    served directory OpenTofu cannot load fails the fetch with
+    `*tofushow.LoadError`; unserved directories (examples, tests) are not read.
   - Known trap until stage 3 of issue #153: `@tf_providers//:pin` still reads
     `required_providers` via `tfconfig`, so it does not lock a provider that a
     fetched module only implies. The generated library then names

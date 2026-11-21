@@ -794,9 +794,9 @@ follows it.
   outside the duplicate-key check; pass variable files via `var_files`.
 - `.plan`, `.apply` and `.destroy` take no lock on their shared run directory;
   run one command at a time per deploy.
-- Providers must belong to `registry.opentofu.org` or built-in
-  `terraform.io/builtin/*`, even for off-registry providers pinned with
-  `tf_providers.provider`.
+- Providers must belong to `registry.opentofu.org`, or be built-in
+  (`terraform.io/builtin/*` or `opentofu.org/builtin/*`), even for off-registry
+  providers pinned with `tf_providers.provider`.
 - `tf_modules.module` does not support S3, GCS, Bitbucket, Mercurial or
   `X-Terraform-Get` module sources.
 - `tf_modules.module` requires a host platform with a pinned OpenTofu release in

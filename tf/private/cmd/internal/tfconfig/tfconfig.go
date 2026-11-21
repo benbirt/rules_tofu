@@ -285,6 +285,13 @@ func NormalizeProvider(source string) (string, error) {
 	return p.String(), nil
 }
 
+// IsBuiltInProvider reports whether source is a provider built into OpenTofu
+// (`terraform.io/builtin/*` or `opentofu.org/builtin/*`), which has no plugin.
+func IsBuiltInProvider(source string) bool {
+	p, err := regaddr.ParseProviderSource(source)
+	return err == nil && p.IsBuiltIn()
+}
+
 // LiteralString evaluates expr with no variables in scope as a string,
 // returning ("", false) if expr is null, unknown, not a string or references
 // variables. The context is empty rather than nil: with a nil one the JSON
