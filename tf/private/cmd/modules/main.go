@@ -439,7 +439,7 @@ func buildManifest(reader tofushow.Reader, workTree, root, label string, deps []
 	for _, dir := range dirs {
 		m, err := reader.ReadFiles(dir, byDir[dir])
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w%s", label, err, standAloneHint(label, err, byDir[dir]))
+			return nil, fmt.Errorf("%s: %w%s", label, err, tfconfig.StandAloneHint(label, err, byDir[dir]))
 		}
 		for _, p := range m.Providers {
 			if !listed[p.Source] && !isBuiltin(p.Source) {
@@ -754,20 +754,6 @@ func displayDir(dir string) string {
 		return "the workspace root directory"
 	}
 	return fmt.Sprintf("%q", dir)
-}
-
-// standAloneHint returns a hint to append when OpenTofu fails to load a
-// target's configuration files in one directory on their own. It returns ""
-// unless err is a *tofushow.LoadError and files includes an override file. The
-// failure may have another cause, so OpenTofu's own diagnostics are kept
-// intact.
-func standAloneHint(label string, err error, files []string) string {
-	var load *tofushow.LoadError
-	if !errors.As(err, &load) || !slices.ContainsFunc(files, func(f string) bool { return tfconfig.IsOverride(filepath.Base(f)) }) {
-		return ""
-	}
-	return fmt.Sprintf("\n\nOpenTofu read the files of %s in this directory without any other target's files. "+
-		"An override file must be in the same target as the block it overrides.", label)
 }
 
 // configFiles returns the paths under workTree of all files with a

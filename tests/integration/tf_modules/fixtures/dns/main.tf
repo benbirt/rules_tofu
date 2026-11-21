@@ -7,8 +7,12 @@ output "fqdn" {
 }
 
 # Neither resource has a required_providers entry. OpenTofu implies
-# hashicorp/null for null_resource, which the generated library must list in
-# `providers`, and the built-in provider for terraform_data, which is dropped.
-resource "null_resource" "zone" {}
+# hashicorp/tls for tls_private_key, which the generated library lists in
+# `providers` and pin must lock. OpenTofu also implies the built-in provider
+# for terraform_data, which is dropped. Nothing else in the workspace requires
+# hashicorp/tls.
+resource "tls_private_key" "zone" {
+  algorithm = "ED25519"
+}
 
 resource "terraform_data" "zone" {}

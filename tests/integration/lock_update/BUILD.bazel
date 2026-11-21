@@ -7,11 +7,11 @@ tf_library(
     providers = ["@tf_providers//hashicorp/null"],
 )
 
-# A second root module in the package, requiring the provider under the same
-# local name with a constraint of its own: pin reads the package's files
-# together, and must lock against both (issue #99). It also calls a
-# submodule of a bundle library from another Bazel module, which has a
-# constraint of its own again (issue #123).
+# A second root module in the package requiring the same local name with a
+# different constraint: OpenTofu would reject both files in one module, so
+# pin must read each target separately and lock against both (issue #99). It
+# also calls a submodule of a bundle library from another Bazel module, which
+# adds a third constraint (issue #123).
 tf_library(
     name = "floor",
     srcs = ["floor.tf"],

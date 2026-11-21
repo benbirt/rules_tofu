@@ -1,10 +1,11 @@
 // Package tfconfig handles the OpenTofu file, address and HCL work that
 // rules_tofu does without running `tofu`: configuration and test file sets,
-// test-file `run` block calls, `required_providers` blocks for `pin`, module
-// directory traversal and module source addresses.
+// test-file `run` block calls, module directory traversal, module source and
+// provider addresses, and the shared stand-alone load error hint.
 package tfconfig
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/benbirt/rules_tofu/tf/private/cmd/internal/tofushow"
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclparse"
 	regaddr "github.com/opentofu/registry-address/v2"
@@ -27,11 +29,7 @@ type Call struct {
 	Range  hcl.Range
 }
 
-var (
-	sourceSchema    = &hcl.BodySchema{Attributes: []hcl.AttributeSchema{{Name: "source"}}}
-	terraformSchema = &hcl.BodySchema{Blocks: []hcl.BlockHeaderSchema{{Type: "terraform"}}}
-	requiredSchema  = &hcl.BodySchema{Blocks: []hcl.BlockHeaderSchema{{Type: "required_providers"}}}
-)
+var sourceSchema = &hcl.BodySchema{Attributes: []hcl.AttributeSchema{{Name: "source"}}}
 
 // configExt returns name's configuration file extension, or "" if it isn't a
 // configuration file. Since OpenTofu 1.8, a `.tofu` or `.tofu.json` file
@@ -56,9 +54,7 @@ func IsConfigFile(name string) bool {
 // Effective drops the files in files that `tofu` ignores: each `.tf` or
 // `.tf.json` file shadowed by a `.tofu` or `.tofu.json` file of the same path,
 // and each whose base name starts with a dot (see ignored). The order of the
-// remaining files is kept. Both ConfigFiles and ReadRequirements filter
-// through it, since `pin` passes paths from `bazel query` where a `glob` may
-// match files such as an archive's `._main.tf`.
+// remaining files is kept.
 func Effective(files []string) []string {
 	present := map[string]bool{}
 	for _, f := range files {
@@ -106,19 +102,6 @@ func ignored(name string) bool {
 	return strings.HasPrefix(name, ".")
 }
 
-// splitOverrides separates the `_override` files of files, which tofu
-// merges over the rest, from the primary ones. Each group keeps its order.
-func splitOverrides(files []string) (primary, overrides []string) {
-	for _, f := range files {
-		if IsOverride(filepath.Base(f)) {
-			overrides = append(overrides, f)
-		} else {
-			primary = append(primary, f)
-		}
-	}
-	return primary, overrides
-}
-
 // HasConfig reports whether dir is readable and holds any configuration file.
 func HasConfig(dir string) bool {
 	files, err := ConfigFiles(dir)
@@ -141,137 +124,6 @@ func parse(parser *hclparse.Parser, file string) (*hcl.File, error) {
 		return nil, diags
 	}
 	return f, nil
-}
-
-// Requirement is a required_providers entry.
-type Requirement struct {
-	// Source is the provider's address, normalised (NormalizeProvider). An
-	// entry without one is `hashicorp/<local name>`, as tofu implies it.
-	Source  string `json:"source"`
-	Version string `json:"version,omitempty"`
-}
-
-// Declared is one required_providers entry as a file declares it.
-type Declared struct {
-	// Name is the entry's local name.
-	Name string
-	Requirement
-	// Range is where the entry is, for messages.
-	Range string
-	// Override is whether an `_override` file declares it.
-	Override bool
-}
-
-// ReadRequirements returns every required_providers entry in files, which
-// share a directory, after filtering with Effective: the primary files' in
-// file name order, then the _override files', each file's in the order
-// written. Nothing is merged and nothing rejected: files in one directory may
-// belong to several root modules, such as two tf_deploy targets in a package,
-// so two entries of one name needn't be a mistake. Within one module, tofu
-// reports duplicate primary entries.
-//
-// An entry is `{ source = ..., version = ... }` or the legacy bare version
-// string. Other keys, like configuration_aliases, are references that can't
-// be evaluated here and don't name a provider, so they're skipped.
-func ReadRequirements(files []string) ([]Declared, error) {
-	primary, overrides := splitOverrides(Effective(files))
-	sort.Strings(primary)
-	sort.Strings(overrides)
-
-	parser := hclparse.NewParser()
-	var declared []Declared
-	for pass, group := range [][]string{primary, overrides} {
-		for _, file := range group {
-			f, err := parse(parser, file)
-			if err != nil {
-				return nil, err
-			}
-			content, _, diags := f.Body.PartialContent(terraformSchema)
-			if diags.HasErrors() {
-				return nil, diags
-			}
-			for _, tf := range content.Blocks {
-				inner, _, diags := tf.Body.PartialContent(requiredSchema)
-				if diags.HasErrors() {
-					return nil, diags
-				}
-				for _, block := range inner.Blocks {
-					attrs, diags := block.Body.JustAttributes()
-					if diags.HasErrors() {
-						return nil, diags
-					}
-					// A map, so put the entries back in the order written.
-					names := make([]string, 0, len(attrs))
-					for name := range attrs {
-						names = append(names, name)
-					}
-					sort.Slice(names, func(i, j int) bool {
-						return attrs[names[i]].Range.Start.Byte < attrs[names[j]].Range.Start.Byte
-					})
-					for _, name := range names {
-						attr := attrs[name]
-						req, err := readRequirement(name, attr.Expr)
-						if err != nil {
-							return nil, fmt.Errorf("%s: %w", attr.Range, err)
-						}
-						declared = append(declared, Declared{
-							Name:        name,
-							Requirement: req,
-							Range:       attr.Range.String(),
-							Override:    pass == 1,
-						})
-					}
-				}
-			}
-		}
-	}
-	return declared, nil
-}
-
-// ApplyOverrides drops each entry in declared that a later _override entry of
-// the same local name replaces. declared must be in ReadRequirements order.
-func ApplyOverrides(declared []Declared) []Declared {
-	var effective []Declared
-	for _, d := range declared {
-		if d.Override {
-			effective = slices.DeleteFunc(effective, func(e Declared) bool { return e.Name == d.Name })
-		}
-		effective = append(effective, d)
-	}
-	return effective
-}
-
-func readRequirement(name string, expr hcl.Expression) (Requirement, error) {
-	source := "hashicorp/" + name
-	var version string
-	if pairs, diags := hcl.ExprMap(expr); diags.HasErrors() {
-		v, ok := LiteralString(expr)
-		if !ok {
-			return Requirement{}, fmt.Errorf("required_providers entry %q is neither an object nor a version string", name)
-		}
-		version = v
-	} else {
-		for _, pair := range pairs {
-			key, ok := LiteralString(pair.Key)
-			if !ok || (key != "source" && key != "version") {
-				continue
-			}
-			value, ok := LiteralString(pair.Value)
-			if !ok {
-				return Requirement{}, fmt.Errorf("`%s` of required_providers entry %q must be a literal string", key, name)
-			}
-			if key == "source" {
-				source = value
-			} else {
-				version = value
-			}
-		}
-	}
-	normalized, err := NormalizeProvider(source)
-	if err != nil {
-		return Requirement{}, fmt.Errorf("provider %q: %w", name, err)
-	}
-	return Requirement{Source: normalized, Version: version}, nil
 }
 
 // NormalizeProvider gives a provider source address in the canonical form
@@ -408,4 +260,18 @@ func IsOverride(name string) bool {
 	}
 	stem := strings.TrimSuffix(name, configExt(name))
 	return stem == "override" || strings.HasSuffix(stem, "_override")
+}
+
+// StandAloneHint returns a hint to append when OpenTofu fails to load one
+// target's configuration files in a directory on their own. It returns ""
+// unless err wraps a *tofushow.LoadError and files includes an override file.
+// Because the load failure may have another cause, callers append this hint
+// rather than replacing OpenTofu's diagnostics.
+func StandAloneHint(label string, err error, files []string) string {
+	var load *tofushow.LoadError
+	if !errors.As(err, &load) || !slices.ContainsFunc(files, func(f string) bool { return IsOverride(filepath.Base(f)) }) {
+		return ""
+	}
+	return fmt.Sprintf("\n\nOpenTofu read the files of %s in this directory without any other target's files. "+
+		"An override file must be in the same target as the block it overrides.", label)
 }

@@ -251,11 +251,15 @@ each provider, then write the lock:
 bazel run @tf_providers//:pin
 ```
 
-`pin` collects `required_providers` across the workspace's `tf_library`,
-`tf_deploy` and `tf_test` targets and their external `deps`. A fetched module's
-examples are in no target, so they are left out. It resolves the newest version
-satisfying every constraint and writes `.terraform.lock.hcl`; conflicting
-constraints fail without changing the lock.
+`pin` inspects each `tf_library`, `tf_deploy` and `tf_test` target in the
+workspace and their external `deps`, asking OpenTofu what providers the
+configuration files in each target's `srcs` require when read on their own.
+That includes implied providers, matching the set
+[Strict dependencies](#strict-dependencies) asks targets to list. A fetched
+module's examples are in no target, so they are left out. A target whose files
+OpenTofu cannot load fails `pin` as it fails `bazel build`. `pin` resolves the
+newest version satisfying every constraint and writes `.terraform.lock.hcl`;
+conflicting constraints fail without changing the lock.
 
 By default, `pin` locks the five platforms that `from_lock` resolves:
 `linux_amd64`, `linux_arm64`, `darwin_amd64`, `darwin_arm64` and
@@ -832,6 +836,10 @@ follows it.
   calls enter one, fetching fails and names the submodule. A submodule reached
   only via `file()` or an external `//<subdir>` call is omitted at fetch time
   and fails when read or called.
+- `@tf_providers//:pin` reads source files only. It skips configuration files in
+  `srcs` that a rule generates and prints a warning, so a provider required only
+  by generated files must also be required in a source file. With `select()` in
+  `srcs`, `pin` reads the files of every branch together.
 
 ## Contributing
 
