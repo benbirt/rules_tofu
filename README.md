@@ -836,15 +836,6 @@ follows it.
   calls enter one, fetching fails and names the submodule. A submodule reached
   only via `file()` or an external `//<subdir>` call is omitted at fetch time
   and fails when read or called.
-- `@tf_providers//:pin` builds generated configuration in the configuration of a
-  plain `bazel build` (ignoring flags passed to `bazel run`) and reads each
-  built file in every `select()` branch that lists it. A generator that depends
-  on a `tf_library`, `tf_deploy` or `tf_test` target fails analysis while that
-  target's providers are unlocked and requires a second `pin` run after the
-  first locks the rest. When a target reaches multiple `select()` expressions
-  with different condition sets, `pin` reads every combination of branches; a
-  combination OpenTofu cannot load fails `pin` even if no build configuration
-  selects it.
 
 ## Contributing
 
