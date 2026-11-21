@@ -116,14 +116,13 @@ On the pinned Bazel version, CI runs builds, tests and example plans with
 ## Formatting and lint
 
 No `bazel test` target checks formatting. CI's `lint` job runs
-`bazel run //tools:format.check`,
-`bazel run @buildifier_prebuilt//:buildifier -- -lint=warn -r .` and
+`bazel run //tools:format.check`, `bazel run //tools:lint` and
 `bazel run //tofu -- fmt -check -diff -recursive examples e2e/smoke`, plus
 `bazel mod tidy` to check that `MODULE.bazel` is unchanged. Run locally:
 
 ```sh
 bazel run //tools:format
-bazel run @buildifier_prebuilt//:buildifier -- -lint=warn -r .
+bazel run //tools:lint
 bazel run //tofu -- fmt -recursive examples e2e/smoke
 bazel mod tidy
 ```
@@ -134,6 +133,11 @@ and `.tfvars` files, including `tests/integration` and nested workspaces. Set
 skips `.tofu`, `.tftest.hcl` and `.tofutest.hcl` files, so the `tofu fmt` step
 is their only check. It names `examples` and `e2e/smoke` to skip
 `tests/integration`, where negative-case fixtures may be malformed on purpose.
+
+`//tools:lint` checks every Starlark file under the workspace, including nested
+workspaces and untracked files, and fails on any buildifier lint warning, such
+as missing `Args:` or `Returns:` doc-string sections. Suppress a deliberate
+warning in place with `# buildifier: disable=<warning>` and a reason.
 
 When adding a nested Bazel module under `e2e/` or `tests/integration/`:
 

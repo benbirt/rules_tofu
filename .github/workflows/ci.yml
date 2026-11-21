@@ -186,8 +186,11 @@ jobs:
       - name: Check formatting
         run: bazel run //tools:format.check
 
+      # Checks every Starlark file in the workspace for buildifier lint
+      # warnings, including e2e/smoke and tests/integration; fails on any
+      # warning.
       - name: Run buildifier (lint warnings)
-        run: bazel run @buildifier_prebuilt//:buildifier -- -lint=warn -r .
+        run: bazel run //tools:lint
 
       # rules_lint 2.9.1 passes only .tf and .tfvars files to //tofu, so this
       # step is the only check of .tofu, .tftest.hcl and .tofutest.hcl files.

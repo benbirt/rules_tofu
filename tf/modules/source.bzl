@@ -23,6 +23,12 @@ def hub_path(parsed):
 
     `<namespace>/<name>/<system>` in lower case, prefixed with the host unless
     it is the default one.
+
+    Args:
+        parsed: `modscan parse` struct for a registry source.
+
+    Returns:
+        The package path string.
     """
     path = "{}/{}/{}".format(parsed.namespace, parsed.name, parsed.system).lower()
     if parsed.host != DEFAULT_HOST:
@@ -30,7 +36,14 @@ def hub_path(parsed):
     return path
 
 def check_name(name):
-    """Return an error if `name` can't be a module's package in `@tf_modules`, else None."""
+    """Return an error if `name` can't be a module's package in `@tf_modules`, else None.
+
+    Args:
+        name: The `name` attribute of a `tf_modules.module` tag.
+
+    Returns:
+        An error string, or None.
+    """
     if not name:
         return "must be set for a git or archive source, as the module's label `@tf_modules//<name>`"
     for c in name.elems():
@@ -56,6 +69,11 @@ def registry_download_endpoint(modules_url, parsed, version):
 def modules_service_url(host, discovery):
     """The base URL of a registry's modules API, from its `/.well-known/terraform.json`.
 
+    Args:
+        host: Registry hostname.
+        discovery: Decoded JSON body of `/.well-known/terraform.json`; non-dict
+            values produce an error.
+
     Returns:
         `struct(url, error)`; `url` ends with `/`.
     """
@@ -70,6 +88,11 @@ def modules_service_url(host, discovery):
 
 def registry_location(response, context):
     """The source location in a registry's download response.
+
+    Args:
+        response: Decoded JSON body of the registry's download endpoint;
+            non-dict values produce an error.
+        context: Description of the module version, for error messages.
 
     Returns:
         `struct(location, error)`.
@@ -98,6 +121,13 @@ def ls_remote_commit(output, ref):
     An annotated tag's peeled commit entry `^{}` wins over the tag object
     itself, and tags win over branches. An empty `ref` resolves the remote's
     `HEAD`.
+
+    Args:
+        output: Standard output of `git ls-remote`.
+        ref: Tag, branch or full ref name, or `""` for `HEAD`.
+
+    Returns:
+        Commit ID string, or None if nothing matches.
     """
     found = {}
     for line in output.splitlines():
@@ -161,7 +191,14 @@ def _parse_version(version):
     return parts
 
 def check_version(version):
-    """Return an error if `version` isn't an exact `<major>.<minor>.<patch>`, else None."""
+    """Return an error if `version` isn't an exact `<major>.<minor>.<patch>`, else None.
+
+    Args:
+        version: The `version` attribute of a `tf_modules.module` tag.
+
+    Returns:
+        An error string, or None.
+    """
     parsed = _parse_version(version)
     if parsed == None or len(parsed) != 3:
         return "`{}` is not an exact version such as 1.2.3".format(version)

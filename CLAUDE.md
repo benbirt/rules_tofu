@@ -934,11 +934,13 @@ Then `bazel shutdown` so the new startup flags take effect.
 - Regenerate `--deleted_packages` in `.bazelrc` via
   `bazel run @rules_bazel_integration_test//tools:update_deleted_packages`
   whenever nested packages change; don't edit those lines by hand.
-- Run formatters through `//tools:format` and `//tools:format.check`
-  (`CONTRIBUTING.md`, "Formatting and lint"), never
-  `bazel run @buildifier_prebuilt//:buildifier -- -r .`: `bazel run` starts
-  `buildifier` in its runfiles directory rather than the workspace, so `.`
-  holds no source files and checks nothing.
+- Run formatters through `//tools:format` and `//tools:format.check`, and
+  buildifier lint through `//tools:lint` (`CONTRIBUTING.md`, "Formatting and
+  lint"), never `bazel run @buildifier_prebuilt//:buildifier -- -r .`:
+  `bazel run` starts the bare binary in its runfiles directory rather than the
+  workspace, so `.` holds no source files and checks nothing (issue #169).
+  Suppress deliberate warnings inline with `# buildifier: disable=<warning>`
+  and a reason; buildifier reads no ignore file.
 
 ## Branch / PR conventions
 

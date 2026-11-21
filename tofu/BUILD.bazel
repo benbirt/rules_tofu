@@ -1,3 +1,6 @@
+# `//tofu:tofu` is the rule's only target; keeping it under `tf/private` stops
+# downstream modules instantiating it instead of running `@rules_tofu//tofu`.
+# buildifier: disable=bzl-visibility
 load("//tf/private:tofu_binary.bzl", "tofu_binary")
 
 # Runs the `tofu` binary the build uses, for OpenTofu commands the rules have

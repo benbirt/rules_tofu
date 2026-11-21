@@ -111,10 +111,8 @@ def _locked_download(repository_ctx, registry_url, context):
     repository_ctx.delete(response_path)
 
     resolved = registry_shasum(response, context)
-    error = resolved.error or lock_vouches(resolved.sha256, attr.zh, context)
-    if not error:
-        located = registry_download_url(response, context)
-        error = located.error
+    located = registry_download_url(response, context)
+    error = resolved.error or lock_vouches(resolved.sha256, attr.zh, context) or located.error
     if error:
         fail(_lock_error(attr.lock_path, error))
     return struct(url = located.url, sha256 = resolved.sha256)

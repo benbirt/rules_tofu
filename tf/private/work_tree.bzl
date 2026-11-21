@@ -13,7 +13,6 @@ sibling plugin tree and `modules_manifest` writes `<name>.modules.json`.
 """
 
 load("//toolchain:toolchain.bzl", "TOOLCHAIN_TYPE")
-load(":providers.bzl", "TfLibraryInfo")
 
 # Only structural OpenTofu inputs are allowed in a rule's srcs. Variable values
 # come from vars on tf_deploy and var_files on tf_deploy or tf_test. Allowing
@@ -35,7 +34,12 @@ TEST_SRC_EXTS = [".tftest.hcl", ".tofutest.hcl", ".tftest.json", ".tofutest.json
 _CONFIG_EXTS = (".tf", ".tf.json", ".tofu", ".tofu.json")
 
 def check_no_test_files(ctx, files):
-    """Fail if any of `files`, a library's or deploy's srcs, is a test file."""
+    """Fail if any of `files`, a library's or deploy's srcs, is a test file.
+
+    Args:
+      ctx: rule ctx, for the label in the error.
+      files: list[File], the rule's `srcs`.
+    """
     for f in files:
         for ext in TEST_SRC_EXTS:
             if f.basename.endswith(ext):
@@ -110,6 +114,13 @@ def runfiles_path(workspace_name, f):
     Convention:
       - Main-repo files: `<workspace_name>/<short_path>`.
       - External-repo files: `<short_path>` with the leading `../` stripped.
+
+    Args:
+      workspace_name: string, the main repository's runfiles directory name.
+      f: File.
+
+    Returns:
+      string: path relative to the runfiles root.
     """
     sp = f.short_path
     if sp.startswith("../"):
@@ -152,6 +163,10 @@ def check_has_configuration(ctx, entries):
     only a `module` block in the root module's own files reaches. Only a
     deploy is checked: a library may just bundle non-root files, and a test's
     `run` blocks may load other modules.
+
+    Args:
+      ctx: rule ctx.
+      entries: list[struct(path, file)] work-tree entries (`files_entries`).
     """
     root = package_dir(ctx.label)
     for entry in entries:
@@ -175,6 +190,12 @@ def work_tree_path(f):
     main-repository package can occupy because Bazel reserves `//external`.
     HCL reaches them by `module_source`, never by a relative path, since the
     canonical names are Bazel's to choose.
+
+    Args:
+      f: File.
+
+    Returns:
+      string: path relative to the work tree root.
     """
     sp = f.short_path
     if sp.startswith("../"):
@@ -326,6 +347,13 @@ def provider_lock(ctx, providers_depset):
 
     Only providers from `tf_providers.from_lock` carry one, and a workspace
     has a single lock, so every provider that carries one carries the same.
+
+    Args:
+      ctx: rule ctx, for the label in the error.
+      providers_depset: depset[TfProviderInfo].
+
+    Returns:
+      File or None: the lock file, or None when no provider carries one.
     """
     locks = {}
     for prov in providers_depset.to_list():
@@ -361,7 +389,19 @@ def plugin_tree_root(ctx):
 MODULES_BIN = "//tf/private/cmd/modules:modules"
 
 def library_module(label, module_source, module_version, dirs):
-    """`TfLibraryInfo.module` for a library with these attributes, or None."""
+    """`TfLibraryInfo.module` for a library with these attributes, or None.
+
+    Args:
+      label: Label of the `tf_library`.
+      module_source: string, the library's `module_source` attribute.
+      module_version: string, the library's `module_version` attribute.
+      dirs: list[string], work-tree directories of the library's files
+          (`own_dirs`).
+
+    Returns:
+      struct(label, source, version, dir, dirs) or None: None when
+      `module_source` is empty.
+    """
     if not module_source:
         if module_version:
             fail("`{}` sets module_version without module_source".format(label))
