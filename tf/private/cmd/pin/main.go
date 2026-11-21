@@ -507,6 +507,11 @@ type buildEvent struct {
 	ID struct {
 		TargetCompleted *struct {
 			Label string `json:"label"`
+			// Aspect is non-empty when the event reports an aspect applied to
+			// the target (for example from `build --aspects` in .bazelrc);
+			// parseBuildEvents ignores such events so an aspect's completion
+			// never replaces or stands in for its target's.
+			Aspect string `json:"aspect"`
 		} `json:"targetCompleted"`
 		NamedSet *struct {
 			ID string `json:"id"`
@@ -537,11 +542,12 @@ type buildEvent struct {
 
 // parseBuildEvents decodes the Build Event Protocol JSON stream written by
 // `bazel build --build_event_json_file`. For each target that completed
-// successfully, it expands nested namedSetOfFiles entries in the "default"
-// output group and returns the configuration files keyed by normalised target
-// label (see mainLabel). Each sourceFile's Dir is its directory under the
-// output directory (matching group.Dir), and its Path is its absolute path
-// under workspaceInfo.localExecRoot.
+// successfully (ignoring aspect completions where targetCompleted.aspect is
+// set), it expands nested namedSetOfFiles entries in the "default" output
+// group and returns the configuration files keyed by normalised target label
+// (see mainLabel). Each sourceFile's Dir is its directory under the output
+// directory (matching group.Dir), and its Path is its absolute path under
+// workspaceInfo.localExecRoot.
 func parseBuildEvents(data []byte) (map[string][]sourceFile, error) {
 	var execRoot string
 	sets := map[string][]sourceFile{}
@@ -572,7 +578,7 @@ func parseBuildEvents(data []byte) (map[string][]sourceFile, error) {
 			for _, s := range e.NamedSetOfFiles.FileSets {
 				nested[id] = append(nested[id], s.ID)
 			}
-		case e.ID.TargetCompleted != nil && e.Completed != nil && e.Completed.Success:
+		case e.ID.TargetCompleted != nil && e.ID.TargetCompleted.Aspect == "" && e.Completed != nil && e.Completed.Success:
 			label := mainLabel(e.ID.TargetCompleted.Label)
 			defaults[label] = []string{}
 			for _, g := range e.Completed.OutputGroup {
@@ -1025,25 +1031,39 @@ func toBuild(sels []selection) []string {
 
 // groups turns sels into per-directory groups, ordered as sels and then by
 // directory. built maps each built label to the configuration files it
-// produced; labels absent from built contribute nothing. For a given target,
-// duplicate groups with the same directory and file set are dropped.
+// produced; labels absent from built contribute nothing. Within each directory,
+// files are deduplicated by base name (keeping source paths before built
+// outputs). For a given target, duplicate groups with the same directory and
+// file set are dropped.
 func (g graph) groups(sels []selection, built map[string][]sourceFile) []group {
 	var groups []group
 	seen := map[string]bool{}
 	for _, s := range sels {
-		byDir := map[string][]string{}
+		// byDir keys each directory's files by base name, adding source paths
+		// before built outputs. A rule with undeclared outputs can forward a
+		// source file the target also lists, producing two paths to the same
+		// file; two distinct files cannot share a directory and base name in a
+		// build, and ReadFiles stages files by base name so a duplicate would
+		// fail.
+		byDir := map[string]map[string]string{}
+		add := func(f sourceFile) {
+			if byDir[f.Dir] == nil {
+				byDir[f.Dir] = map[string]string{}
+			}
+			if _, ok := byDir[f.Dir][filepath.Base(f.Path)]; !ok {
+				byDir[f.Dir][filepath.Base(f.Path)] = f.Path
+			}
+		}
 		for _, label := range s.Sources {
-			f := g.files[label]
-			byDir[f.Dir] = append(byDir[f.Dir], f.Path)
+			add(g.files[label])
 		}
 		for _, label := range s.Built {
 			for _, f := range built[label] {
-				byDir[f.Dir] = append(byDir[f.Dir], f.Path)
+				add(f)
 			}
 		}
 		for _, dir := range slices.Sorted(maps.Keys(byDir)) {
-			files := slices.Sorted(slices.Values(byDir[dir]))
-			files = slices.Compact(files)
+			files := slices.Sorted(maps.Values(byDir[dir]))
 			id := s.Label + "\x00" + dir + "\x00" + strings.Join(files, "\x00")
 			if seen[id] {
 				continue

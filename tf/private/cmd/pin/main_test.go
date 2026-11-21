@@ -281,10 +281,12 @@ func TestGroups(t *testing.T) {
 	if got, want := toBuild(sels), []string{"//lib:gen.tf", "//lib:rendered", "//lib:written"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("toBuild = %q, want %q", got, want)
 	}
-	// //lib:written did not build.
+	// //lib:written did not build. //lib:rendered also forwards main.tofu at
+	// its execroot path alongside //lib:lib's source path; the source path is
+	// kept once.
 	built := map[string][]sourceFile{
 		"//lib:gen.tf":   {{Dir: "lib", Path: "/out/lib/gen.tf"}},
-		"//lib:rendered": {{Dir: "lib/rendered", Path: "/out/lib/rendered/main.tf"}},
+		"//lib:rendered": {{Dir: "lib/rendered", Path: "/out/lib/rendered/main.tf"}, {Dir: "lib", Path: "/exec/lib/main.tofu"}},
 	}
 	want := []group{
 		{Label: "//lib:lib", Dir: "lib", Files: []string{"/out/lib/gen.tf", "/ws/lib/main.tofu"}},
@@ -963,8 +965,8 @@ const buildEvents = `{"id":{"pattern":{"pattern":["//gen:gen.tf.json","//gen:und
 `
 
 // parseBuildEvents extracts configuration files from default outputs across
-// nested file sets, skips non-configuration files and failed targets, and
-// rejects malformed JSON.
+// nested file sets, skips non-configuration files, aspect completions and
+// failed targets, and rejects malformed JSON.
 func TestParseBuildEvents(t *testing.T) {
 	got, err := parseBuildEvents([]byte(strings.ReplaceAll(buildEvents, "@EXECROOT@", "/exec")))
 	if err != nil {
@@ -979,6 +981,34 @@ func TestParseBuildEvents(t *testing.T) {
 	}
 	if _, err := parseBuildEvents([]byte("not JSON\n")); err == nil {
 		t.Error("expected an error for events that aren't JSON")
+	}
+
+	// Aspect completions neither overwrite their target's outputs (@@//:gen.tf)
+	// nor stand in for a missing target completion (//:checked); a target with
+	// success=false is omitted; a file at the main repository's root gets
+	// Dir ""; and labels are normalised with mainLabel.
+	got, err = parseBuildEvents([]byte(`{"id":{"workspace":{}},"workspaceInfo":{"localExecRoot":"/exec"}}
+{"id":{"namedSet":{"id":"0"}},"namedSetOfFiles":{"files":[{"name":"gen.tf","pathPrefix":["bazel-out","k8-fastbuild","bin"]}]}}
+{"id":{"namedSet":{"id":"1"}},"namedSetOfFiles":{"files":[{"name":"external/ext+/pkg/gen.tf","pathPrefix":["bazel-out","k8-fastbuild","bin"]}]}}
+{"id":{"targetCompleted":{"label":"@@//:gen.tf"}},"completed":{"success":true,"outputGroup":[{"name":"default","fileSets":[{"id":"0"}]}]}}
+{"id":{"targetCompleted":{"label":"@@//:gen.tf","aspect":"//:lint.bzl%lint"}},"completed":{"success":true,"outputGroup":[{"name":"report"}]}}
+{"id":{"targetCompleted":{"label":"@@ext+//pkg:gen.tf"}},"completed":{"success":true,"outputGroup":[{"name":"default","fileSets":[{"id":"1"}]}]}}
+{"id":{"targetCompleted":{"label":"//:broken"}},"completed":{"success":false}}
+{"id":{"targetCompleted":{"label":"//:checked","aspect":"//:lint.bzl%lint"}},"completed":{"success":true}}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = map[string][]sourceFile{
+		"//:gen.tf":          {{Dir: "", Path: "/exec/bazel-out/k8-fastbuild/bin/gen.tf"}},
+		"@@ext+//pkg:gen.tf": {{Dir: "external/ext+/pkg", Path: "/exec/bazel-out/k8-fastbuild/bin/external/ext+/pkg/gen.tf"}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("parseBuildEvents = %+v, want %+v", got, want)
+	}
+
+	if _, err := parseBuildEvents([]byte(`{"id":{"targetCompleted":{"label":"//:gen.tf"}},"completed":{"success":true}}`)); err == nil || !strings.Contains(err.Error(), "no execution root") {
+		t.Errorf("expected an error for events without the execution root, got %v", err)
 	}
 }
 
