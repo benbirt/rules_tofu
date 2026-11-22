@@ -163,9 +163,9 @@ run it between schedules, trigger it via `workflow_dispatch` from the Actions
 tab. Existing pins are kept indefinitely so workspaces pinning an older release
 with `tofu.version` keep working.
 
-The workflow authenticates with the `VERSIONS_PR_TOKEN` repository secret, a
-fine-grained token scoped to this repository with read and write access to
-Contents and Pull requests. If `VERSIONS_PR_TOKEN` is unset, it falls back to
+The workflow authenticates with the `AUTOMATION_TOKEN` repository secret, a
+fine-grained token with read and write access to Contents and Pull requests,
+also used by the Bazel updates workflow. If `AUTOMATION_TOKEN` is unset, it falls back to
 `GITHUB_TOKEN`: the pull request still opens when "Allow GitHub Actions to
 create and approve pull requests" is enabled in repository settings, but GitHub
 does not trigger CI on pushes or pull requests made with `GITHUB_TOKEN`, so CI
