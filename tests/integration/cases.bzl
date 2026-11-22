@@ -30,3 +30,18 @@ def case_line(case_name, command, target, pattern):
         if "$" in field:
             fail("case field {} may not contain `$`, which a test's `env` would expand as a Make variable".format(repr(field)))
     return "|".join([case_name, command, target, pattern])
+
+def check_workspaces(commands, workspaces):
+    """Fail if a case names a sub-workspace absent from `workspaces`.
+
+    Tests are generated per entry of `workspaces`, so such a case would never run.
+
+    Args:
+        commands: (command, cases) pairs, each case a
+            (name, workspace, target, fragment) tuple.
+        workspaces: the sub-workspaces that get a test target.
+    """
+    for (_, cases) in commands:
+        for (case_name, workspace, _, _) in cases:
+            if workspace not in workspaces:
+                fail("case {} names the sub-workspace {}, which is not in _WORKSPACE_FILES".format(case_name, repr(workspace)))

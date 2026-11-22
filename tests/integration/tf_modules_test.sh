@@ -58,14 +58,17 @@
 #   4. MODULE.bazel.lock records the git commit and registry module metadata.
 #   5. Moving v1.0.0 to a new commit and running `bazel clean --expunge` still
 #      plans the old commit's content and passes with --lockfile_mode=error.
-#   6. Declaring a module by a //<subdir> (peering_link) that is a symlink
+#   6. Building @tf_modules//caller, a fetched module that calls an undeclared
+#      one, fails during fetch naming the tf_modules.module tag to add and the
+#      caller (`module "missing" in "caller"`).
+#   7. Declaring a module by a //<subdir> (peering_link) that is a symlink
 #      fails during fetch naming the directory the link points to.
-#   7. Declaring a module by a //<subdir> (vendor/shared) inside a git
+#   8. Declaring a module by a //<subdir> (vendor/shared) inside a git
 #      submodule fails during fetch naming the submodule.
-#   8. Editing vpc/peering/main.tf in place to drop hashicorp/time and
+#   9. Editing vpc/peering/main.tf in place to drop hashicorp/time and
 #      updating commit on the network module's tag regenerates
 #      vpc/BUILD.bazel without that provider.
-#   9. Building //invalid_caller, which calls a fetched module that does not
+#  10. Building //invalid_caller, which calls a fetched module that does not
 #      validate, fails in TofuValidate @tf_modules//invalid with remediation
 #      advice and without validating //invalid_caller (issue #143).
 
@@ -257,7 +260,21 @@ bazel clean --expunge >&2
 plan "app-v1 10.0.0.0/24"
 bazel build --lockfile_mode=error //app >&2 || fail "the build with --lockfile_mode=error failed"
 
-echo "--- 6. a module directory that is a symlink ---" >&2
+echo "--- 6. an undeclared module ---" >&2
+cat >>MODULE.bazel <<EOF
+tf_modules.module(
+    name = "caller",
+    source = "git::file://${FIXTURES}/network.git//caller?ref=v1.0.0",
+)
+EOF
+if out="$(bazel build @tf_modules//caller 2>&1)"; then
+  fail "@tf_modules//caller built, but it calls a module MODULE.bazel doesn't declare"
+fi
+echo "${out}" >&2
+grep -q -F 'tf_modules.module(source = "acme/missing/null", version = "...")  # called by module "missing" in "caller"' <<<"${out}" ||
+  fail "the failure doesn't name the tag to add"
+
+echo "--- 7. a module directory that is a symlink ---" >&2
 cat >>MODULE.bazel <<EOF
 tf_modules.module(
     name = "peering_link",
@@ -271,7 +288,7 @@ echo "${out}" >&2
 grep -q -F '`peering_link` is a symlink in the fetched files, to vpc/peering' <<<"${out}" ||
   fail "the failure doesn't name the directory the link leads to"
 
-echo "--- 7. a module directory in a git submodule ---" >&2
+echo "--- 8. a module directory in a git submodule ---" >&2
 git_ ls-tree HEAD vendor/shared | grep -q '^160000 commit' || fail "the fixture's git submodule didn't survive to the tagged commit"
 cat >>MODULE.bazel <<EOF
 tf_modules.module(
@@ -289,7 +306,7 @@ grep -q -F '"/vendor/shared" is in the git submodule "vendor/shared" of the repo
 # An in-place edit changes neither git_submodules nor directory_symlinks.
 # _tf_module_repo has no pin attributes, so it regenerates vpc/BUILD.bazel
 # only because metadata.json records the pin.
-echo "--- 8. regenerating a library on a new pin ---" >&2
+echo "--- 9. regenerating a library on a new pin ---" >&2
 library="${network_repo}/vpc/BUILD.bazel"
 grep -q -F '"@tf_providers//hashicorp/time"' "${library}" ||
   fail "vpc/BUILD.bazel doesn't list hashicorp/time before the commit update"
@@ -312,7 +329,7 @@ if grep -q -F 'hashicorp/time' "${library}"; then
   fail "vpc/BUILD.bazel still lists hashicorp/time after re-fetching at a new commit"
 fi
 
-echo "--- 9. a fetched module that does not validate ---" >&2
+echo "--- 10. a fetched module that does not validate ---" >&2
 cat >>MODULE.bazel <<EOF
 tf_modules.module(
     name = "invalid",

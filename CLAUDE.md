@@ -388,7 +388,7 @@ Then `bazel shutdown` so the new startup flags take effect.
   - Generate `:_rules_tofu_module` aliased at `@tf_modules//<path>`, and keep
     per-module repositories private.
   - Keep two repositories per module (issue #157; `tf_modules_test.sh`, step
-    8):
+    9):
     - `_tf_module_files` (`files_repo_name`, `tf_module_files_<name>`) fetches
       and tidies `tree/`, writes `metadata.json` and an empty `BUILD.bazel`,
       and takes only `source` and the module's pin.
@@ -444,7 +444,7 @@ Then `bazel shutdown` so the new startup flags take effect.
     served directory OpenTofu cannot load fails the fetch with
     `*tofushow.LoadError`; unserved directories (examples, tests) are not read.
   - Keep `pin` in `metadata.json` even though nothing reads it
-    (`tf_modules_test.sh`, step 8). `_tf_module_repo` has no pin attributes
+    (`tf_modules_test.sh`, step 9). `_tf_module_repo` has no pin attributes
     and Bazel does not track the files `modscan` reads. Without `pin`, a new
     commit or archive that edits only existing files leaves `metadata.json`
     unchanged and the library's `BUILD` files stale.
@@ -496,7 +496,7 @@ Then `bazel shutdown` so the new startup flags take effect.
     `is_dir` alone. `is_dir` is true on directory symlinks, where ancestor
     links loop and fail `glob` (issue #61).
   - Fail the fetch in `modscan` when a module calls an undeclared address,
-    naming the tag to add.
+    naming the tag to add (`tf_modules_test.sh`, step 6).
 - Don't fetch git submodules (`README.md`, "Known gaps"): they can't be tested
   offline and pull from commit-chosen URLs. `_tf_module_files` lists gitlinks
   and `modscan --git-submodule` rejects modules inside or calling into one,
@@ -686,7 +686,7 @@ Then `bazel shutdown` so the new startup flags take effect.
     `tf_modules_label` (`display_label`) for `TofuValidate` and `TofuModules`
     progress messages, `--label` and `pin` so failures report
     `@tf_modules//<path>` instead of `:_rules_tofu_module` (`tf_modules_test`
-    step 9).
+    step 10).
 - Keep `tf_deploy`'s `DefaultInfo.files` to its stamps (`TfDeployInfo.stamps`;
   issue #156; `run_directory_test` step 4). Including `work_tree_files` there
   made remote-cached builds download whole provider packages (~170 MB) for

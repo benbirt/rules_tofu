@@ -28,7 +28,7 @@ load(
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load("@running_bazel//:version.bzl", "RUNNING_BAZEL_VERSION")
 load("//toolchain:versions.bzl", "KNOWN_VERSIONS")
-load(":cases.bzl", "case_line")
+load(":cases.bzl", "case_line", "check_workspaces")
 load(":versions.bzl", "tested_versions")
 load(":versions_test.bzl", "versions_test_suite")
 
@@ -133,6 +133,8 @@ _COMMANDS = [
     ("build", _CASES),
     ("run", _RUN_CASES),
 ]
+
+check_workspaces(_COMMANDS, _WORKSPACE_FILES)
 
 # One test per sub-workspace, running all of its cases against one nested
 # Bazel server. `bazel test :<workspace>_test --test_env=ONLY_CASES=<name>,<name>`
