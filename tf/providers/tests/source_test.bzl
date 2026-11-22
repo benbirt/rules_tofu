@@ -9,14 +9,12 @@ load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")
 load(
     "//tf/providers:source.bzl",
     "DEFAULT_PLATFORMS",
-    "check_platforms",
     "check_tag",
     "check_url_template",
     "download_location",
     "ignored_tag_error",
     "missing_platform_error",
     "parse_source",
-    "registry_download_url",
     "registry_shasum",
     "repo_name",
 )
@@ -113,30 +111,7 @@ def _url_template_rejects_unknown_placeholders_test_impl(ctx):
 
 _url_template_rejects_unknown_placeholders_test = unittest.make(_url_template_rejects_unknown_placeholders_test_impl)
 
-_ZIP = "https://github.com/posthog/terraform-provider-posthog/releases/download/v1.0.24/terraform-provider-posthog_1.0.24_linux_amd64.zip"
 _SHA = "4afb3cb829dee5e97f98b51ebdb761b8cc4daf6d0a7f541f9f5a89e0ab86251d"
-
-def _registry_response_test_impl(ctx):
-    env = unittest.begin(ctx)
-
-    resolved = registry_download_url({"download_url": _ZIP, "shasum": _SHA}, "posthog/posthog@1.0.24 on linux_amd64")
-
-    asserts.equals(env, None, resolved.error)
-    asserts.equals(env, _ZIP, resolved.url)
-    return unittest.end(env)
-
-_registry_response_test = unittest.make(_registry_response_test_impl)
-
-def _registry_response_without_url_test_impl(ctx):
-    env = unittest.begin(ctx)
-
-    resolved = registry_download_url({"errors": ["Not Found"]}, "posthog/posthog@9.9.9 on linux_amd64")
-
-    asserts.equals(env, None, resolved.url)
-    asserts.true(env, "no download_url" in resolved.error)
-    return unittest.end(env)
-
-_registry_response_without_url_test = unittest.make(_registry_response_without_url_test_impl)
 
 def _registry_shasum_test_impl(ctx):
     env = unittest.begin(ctx)
@@ -147,27 +122,6 @@ def _registry_shasum_test_impl(ctx):
     return unittest.end(env)
 
 _registry_shasum_test = unittest.make(_registry_shasum_test_impl)
-
-def _platforms_test_impl(ctx):
-    env = unittest.begin(ctx)
-
-    # PLATFORMS in //toolchain:versions.bzl is shared by tofu and providers.
-    asserts.equals(
-        env,
-        ["linux_amd64", "linux_arm64", "darwin_amd64", "darwin_arm64", "windows_amd64"],
-        DEFAULT_PLATFORMS,
-    )
-    asserts.equals(env, None, check_platforms([]))
-    asserts.equals(env, None, check_platforms(DEFAULT_PLATFORMS))
-
-    # 32-bit platforms are no longer supported and fail like any unknown key.
-    error = check_platforms(["linux_amd64", "windows_386", "linux_386"])
-    asserts.true(env, "unsupported platforms `linux_386`, `windows_386` in `sha256`;" in error, error)
-    asserts.true(env, error.endswith("supported platforms are `linux_amd64`, `linux_arm64`, `darwin_amd64`, `darwin_arm64`, `windows_amd64`"), error)
-    asserts.true(env, "unsupported platform `plan9_amd64` in" in check_platforms(["plan9_amd64"]))
-    return unittest.end(env)
-
-_platforms_test = unittest.make(_platforms_test_impl)
 
 def _missing_platform_test_impl(ctx):
     env = unittest.begin(ctx)
@@ -202,6 +156,7 @@ def _check_tag_test_impl(ctx):
     asserts.true(env, check_tag({}, _TEMPLATE).startswith("missing `sha256`"))
     asserts.true(env, "unknown placeholder `{platform}`" in check_tag({"linux_amd64": _SHA}, "https://x/{platform}"))
     asserts.true(env, "unsupported platform `linux_386`" in check_tag({"linux_386": _SHA}, _TEMPLATE))
+    asserts.true(env, "unsupported platforms `linux_386`, `windows_386` in" in check_tag({"linux_amd64": _SHA, "windows_386": _SHA, "linux_386": _SHA}, _TEMPLATE))
     asserts.true(env, "`sha256[\"linux_amd64\"]` must be" in check_tag({"linux_amd64": "sha256:" + _SHA}, _TEMPLATE))
     return unittest.end(env)
 
@@ -228,15 +183,12 @@ def source_test_suite(name):
     """
     unittest.suite(
         name,
-        _platforms_test,
         _missing_platform_test,
         _parse_source_lowercases_test,
         _parse_source_rejects_malformed_test,
         _registry_for_locked_test,
         _url_template_wins_test,
         _url_template_rejects_unknown_placeholders_test,
-        _registry_response_test,
-        _registry_response_without_url_test,
         _registry_shasum_test,
         _check_tag_test,
         _ignored_tag_test,
