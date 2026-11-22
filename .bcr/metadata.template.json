@@ -1,13 +1,13 @@
 {
-    "homepage": "https://github.com/benbirt/rules_tofu",
-    "maintainers": [
-        {
-            "github": "benbirt",
-            "github_user_id": 1123120,
-            "email": "benjamin.birt@gmail.com"
-        }
-    ],
-    "repository": ["github:benbirt/rules_tofu"],
-    "versions": [],
-    "yanked_versions": {}
+  "homepage": "https://github.com/benbirt/rules_tofu",
+  "maintainers": [
+    {
+      "github": "benbirt",
+      "github_user_id": 1123120,
+      "email": "benjamin.birt@gmail.com"
+    }
+  ],
+  "repository": ["github:benbirt/rules_tofu"],
+  "versions": [],
+  "yanked_versions": {}
 }

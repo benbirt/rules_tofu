@@ -94,13 +94,13 @@ Full rule and module-extension reference is in the
 A reusable bundle of configuration files with no variable values and no `.plan`,
 `.apply` or `.destroy` targets.
 
-| Attribute | Purpose |
-|-----------|---------|
-| `srcs` | `.tf`, `.tf.json`, `.tofu`, `.tofu.json`, `.tftpl` and `.hcl` files. `.tofu` and `.tofu.json` shadow `.tf` and `.tf.json` of the same name; see [`examples/tofu_files`](examples/tofu_files). |
-| `deps` | `tf_library` targets whose files, providers and `module_source` mappings are passed on to dependants. Other libraries called by `srcs` must be listed here directly. See [Strict dependencies](#strict-dependencies). |
-| `data` | Files placed in the work tree for `file()` and `templatefile()`. Configuration files belong in `srcs`. |
-| `providers` | Providers required by `srcs`, as `@tf_providers//<namespace>/<name>`. See [Strict dependencies](#strict-dependencies). |
-| `module_source` | Address by which HCL `module` blocks call this library when it lives in another Bazel repository. See [Modules](#modules). |
+| Attribute        | Purpose                                                                                                                                                                                                                               |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `srcs`           | `.tf`, `.tf.json`, `.tofu`, `.tofu.json`, `.tftpl` and `.hcl` files. `.tofu` and `.tofu.json` shadow `.tf` and `.tf.json` of the same name; see [`examples/tofu_files`](examples/tofu_files).                                         |
+| `deps`           | `tf_library` targets whose files, providers and `module_source` mappings are passed on to dependants. Other libraries called by `srcs` must be listed here directly. See [Strict dependencies](#strict-dependencies).                 |
+| `data`           | Files placed in the work tree for `file()` and `templatefile()`. Configuration files belong in `srcs`.                                                                                                                                |
+| `providers`      | Providers required by `srcs`, as `@tf_providers//<namespace>/<name>`. See [Strict dependencies](#strict-dependencies).                                                                                                                |
+| `module_source`  | Address by which HCL `module` blocks call this library when it lives in another Bazel repository. See [Modules](#modules).                                                                                                            |
 | `module_version` | Version checked against callers' `version` constraints on a registry `module_source`. Defaults to the version of the Bazel module that holds the library when `module_source` is set; setting it without `module_source` is an error. |
 
 ### `tf_deploy`
@@ -111,40 +111,40 @@ or in a same-package `tf_library`. Libraries in other packages sit at their own
 paths in the work tree and are reached only through `module` blocks; without a
 configuration file in the deploy's package, `bazel build` fails.
 
-| Attribute | Purpose |
-|-----------|---------|
-| `srcs` | Deploy-local configuration files, typically `backend` and `provider` blocks, with the same allowed extensions as `tf_library.srcs`. |
-| `deps` | `tf_library` targets included in the work tree. |
-| `vars` | String dictionary of variable values passed as `-var=<name>=<value>`. See [Variables and data files](#variables-and-data-files). |
-| `var_files` | `.tfvars` or `.tfvars.json` files passed via `-var-file`, including generated outputs. |
-| `data` | Files placed in the work tree for `file()` and `templatefile()`. |
-| `providers` | Providers required by `srcs`, as `@tf_providers//<namespace>/<name>`. Providers from `deps` are also installed. See [Strict dependencies](#strict-dependencies). |
-| `allow_ephemeral_state` | Permit `apply` and `destroy` when state lives under `bazel-bin`. Defaults to `False`; see [State and backends](#state-and-backends). |
+| Attribute               | Purpose                                                                                                                                                          |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `srcs`                  | Deploy-local configuration files, typically `backend` and `provider` blocks, with the same allowed extensions as `tf_library.srcs`.                              |
+| `deps`                  | `tf_library` targets included in the work tree.                                                                                                                  |
+| `vars`                  | String dictionary of variable values passed as `-var=<name>=<value>`. See [Variables and data files](#variables-and-data-files).                                 |
+| `var_files`             | `.tfvars` or `.tfvars.json` files passed via `-var-file`, including generated outputs.                                                                           |
+| `data`                  | Files placed in the work tree for `file()` and `templatefile()`.                                                                                                 |
+| `providers`             | Providers required by `srcs`, as `@tf_providers//<namespace>/<name>`. Providers from `deps` are also installed. See [Strict dependencies](#strict-dependencies). |
+| `allow_ephemeral_state` | Permit `apply` and `destroy` when state lives under `bazel-bin`. Defaults to `False`; see [State and backends](#state-and-backends).                             |
 
 ### `tf_test`
 
 Runs `tofu test` over a module's test files as a Bazel test. See
 [Tests](#tests).
 
-| Attribute | Purpose |
-|-----------|---------|
-| `srcs` | `.tftest.hcl`, `.tofutest.hcl`, `.tftest.json` and `.tofutest.json` files in one directory at or below `module`'s package. `.tofutest.*` shadows `.tftest.*`. |
-| `module` | The `tf_library` or `tf_deploy` under test. |
-| `deps` | Helper `tf_library` targets loaded by `run { module { ... } }` blocks. |
-| `providers` | Providers needed beyond those of `module` and `deps`. |
-| `var_files` | `.tfvars` or `.tfvars.json` files passed via `-var-file`. |
-| `data` | Files placed in the work tree. |
-| `allow_network` | Allow network access during tests instead of blocking it in the sandbox. Defaults to `False`. |
+| Attribute       | Purpose                                                                                                                                                       |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `srcs`          | `.tftest.hcl`, `.tofutest.hcl`, `.tftest.json` and `.tofutest.json` files in one directory at or below `module`'s package. `.tofutest.*` shadows `.tftest.*`. |
+| `module`        | The `tf_library` or `tf_deploy` under test.                                                                                                                   |
+| `deps`          | Helper `tf_library` targets loaded by `run { module { ... } }` blocks.                                                                                        |
+| `providers`     | Providers needed beyond those of `module` and `deps`.                                                                                                         |
+| `var_files`     | `.tfvars` or `.tfvars.json` files passed via `-var-file`.                                                                                                     |
+| `data`          | Files placed in the work tree.                                                                                                                                |
+| `allow_network` | Allow network access during tests instead of blocking it in the sandbox. Defaults to `False`.                                                                 |
 
 ### Generated targets
 
-| Target | Rule | Command | Behaviour |
-|--------|------|---------|-----------|
-| `:name` | `tf_library`, `tf_deploy` | `bazel build` | Materialises the work tree and runs `tofu init -backend=false && tofu validate`. |
-| `:name` | `tf_test` | `bazel test` | Runs `tofu test` offline; `bazel build` validates the module and test files. |
-| `:name.plan` | `tf_deploy` | `bazel run` | Runs `tofu plan`, saving the plan file to `<state-dir>/tfplan`. |
-| `:name.apply` | `tf_deploy` | `bazel run` | Runs a fresh `tofu apply` without reading `tfplan`. Prompts unless `-- -auto-approve` is passed. |
-| `:name.destroy` | `tf_deploy` | `bazel run` | Runs `tofu destroy`. Prompts unless `-- -auto-approve` is passed. |
+| Target          | Rule                      | Command       | Behaviour                                                                                        |
+| --------------- | ------------------------- | ------------- | ------------------------------------------------------------------------------------------------ |
+| `:name`         | `tf_library`, `tf_deploy` | `bazel build` | Materialises the work tree and runs `tofu init -backend=false && tofu validate`.                 |
+| `:name`         | `tf_test`                 | `bazel test`  | Runs `tofu test` offline; `bazel build` validates the module and test files.                     |
+| `:name.plan`    | `tf_deploy`               | `bazel run`   | Runs `tofu plan`, saving the plan file to `<state-dir>/tfplan`.                                  |
+| `:name.apply`   | `tf_deploy`               | `bazel run`   | Runs a fresh `tofu apply` without reading `tfplan`. Prompts unless `-- -auto-approve` is passed. |
+| `:name.destroy` | `tf_deploy`               | `bazel run`   | Runs `tofu destroy`. Prompts unless `-- -auto-approve` is passed.                                |
 
 Each deploy launcher, such as `bazel-bin/<pkg>/<name>.apply.sh`, can also be run
 directly from any working directory. It locates its runfiles and state directory
@@ -484,7 +484,11 @@ with its `terraform` manager so HCL constraints update in the same PR:
     }
   ],
   "packageRules": [
-    { "matchDatasources": ["terraform-module"], "groupName": "OpenTofu modules", "registryUrls": ["https://registry.opentofu.org"] }
+    {
+      "matchDatasources": ["terraform-module"],
+      "groupName": "OpenTofu modules",
+      "registryUrls": ["https://registry.opentofu.org"]
+    }
   ]
 }
 ```

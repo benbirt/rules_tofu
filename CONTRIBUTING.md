@@ -21,23 +21,23 @@ bazel test //...
 
 ## Repository layout
 
-| Path | Purpose |
-|------|---------|
-| `tf/` | Public rules (`tf_library`, `tf_deploy`, `tf_test`) |
-| `tf/providers/` | `tf_providers` module extension |
-| `tf/modules/` | `tf_modules` module extension |
-| `tf/private/` | Rule implementations and work-tree materialisation |
-| `tf/private/cmd/{runner,dupcheck,pin,lockjson,modscan,modules}/` | Go binaries: build-time validation and runtime `tofu` wrapper, duplicate-variable check, `@tf_providers//:pin`, lock reader, module scanner and module manifest writer |
-| `tf/private/cmd/internal/{flags,tfconfig,tofushow}/` | Shared Go packages: repeatable CLI flags; file-set, module-source, provider-address and test-file helpers; and `tofu show -json -module` inspection (with `tofushow/tofutest` for Go tests) |
-| `toolchain/` | OpenTofu binary download and toolchain registration |
-| `tofu/` | `@rules_tofu//tofu`, the toolchain's runnable `tofu` (rule in `tf/private/tofu_binary.bzl`) |
-| `docs/` | `starlark_doc_extract` target per public `.bzl` file, shipped as the BCR `docs_url` archive |
-| `tools/` | Maintainer tools (excluded from releases): `update_versions` pins OpenTofu releases; `format` formats the repository; `lint` lints every Starlark file |
-| `tests/integration/` | Bazel-in-Bazel integration tests ([`tests/integration/README.md`](tests/integration/README.md)) |
-| `tests/tofu/` | Tests for `//tofu` used as another target's tool |
-| `examples/` | Usage examples |
-| `e2e/smoke/` | Standalone consumer module; BCR presubmit test module |
-| `.bcr/` | Bazel Central Registry metadata, source and presubmit templates |
+| Path                                                             | Purpose                                                                                                                                                                                     |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tf/`                                                            | Public rules (`tf_library`, `tf_deploy`, `tf_test`)                                                                                                                                         |
+| `tf/providers/`                                                  | `tf_providers` module extension                                                                                                                                                             |
+| `tf/modules/`                                                    | `tf_modules` module extension                                                                                                                                                               |
+| `tf/private/`                                                    | Rule implementations and work-tree materialisation                                                                                                                                          |
+| `tf/private/cmd/{runner,dupcheck,pin,lockjson,modscan,modules}/` | Go binaries: build-time validation and runtime `tofu` wrapper, duplicate-variable check, `@tf_providers//:pin`, lock reader, module scanner and module manifest writer                      |
+| `tf/private/cmd/internal/{flags,tfconfig,tofushow}/`             | Shared Go packages: repeatable CLI flags; file-set, module-source, provider-address and test-file helpers; and `tofu show -json -module` inspection (with `tofushow/tofutest` for Go tests) |
+| `toolchain/`                                                     | OpenTofu binary download and toolchain registration                                                                                                                                         |
+| `tofu/`                                                          | `@rules_tofu//tofu`, the toolchain's runnable `tofu` (rule in `tf/private/tofu_binary.bzl`)                                                                                                 |
+| `docs/`                                                          | `starlark_doc_extract` target per public `.bzl` file, shipped as the BCR `docs_url` archive                                                                                                 |
+| `tools/`                                                         | Maintainer tools (excluded from releases): `update_versions` pins OpenTofu releases; `format` formats the repository; `lint` lints every Starlark file                                      |
+| `tests/integration/`                                             | Bazel-in-Bazel integration tests ([`tests/integration/README.md`](tests/integration/README.md))                                                                                             |
+| `tests/tofu/`                                                    | Tests for `//tofu` used as another target's tool                                                                                                                                            |
+| `examples/`                                                      | Usage examples                                                                                                                                                                              |
+| `e2e/smoke/`                                                     | Standalone consumer module; BCR presubmit test module                                                                                                                                       |
+| `.bcr/`                                                          | Bazel Central Registry metadata, source and presubmit templates                                                                                                                             |
 
 ## Hard invariants
 
