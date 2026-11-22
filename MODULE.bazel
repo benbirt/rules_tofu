@@ -120,8 +120,14 @@ bazel_dep(name = "bazel_skylib", version = "1.9.2", dev_dependency = True)
 # Bazel-in-Bazel integration tests under //tests/integration.
 bazel_dep(name = "rules_bazel_integration_test", version = "0.37.1", dev_dependency = True)
 bazel_dep(name = "rules_shell", version = "0.6.1", dev_dependency = True)
-bazel_dep(name = "buildifier_prebuilt", version = "8.5.1.2", dev_dependency = True)
-bazel_dep(name = "aspect_rules_lint", version = "2.9.1", dev_dependency = True)
+
+# Formatting and Starlark lint (//tools:format, :format.check and :lint).
+bazel_dep(name = "bazel_style", version = "0.0.0", dev_dependency = True)
+git_override(
+    module_name = "bazel_style",
+    commit = "f7127ad68627f170db74a38743ef8e742b3a8828",
+    remote = "https://github.com/benbirt/bazel-style.git",
+)
 
 # The Bazel those tests run inside themselves is the version of the Bazel
 # running them: the pinned one, or USE_BAZEL_VERSION's. The .bzl file is not

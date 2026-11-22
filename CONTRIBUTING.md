@@ -21,23 +21,23 @@ bazel test //...
 
 ## Repository layout
 
-| Path | Purpose |
-|------|---------|
-| `tf/` | Public rules (`tf_library`, `tf_deploy`, `tf_test`) |
-| `tf/providers/` | `tf_providers` module extension |
-| `tf/modules/` | `tf_modules` module extension |
-| `tf/private/` | Rule implementations and work-tree materialisation |
-| `tf/private/cmd/{runner,dupcheck,pin,lockjson,modscan,modules}/` | Go binaries: build-time validation and runtime `tofu` wrapper, duplicate-variable check, `@tf_providers//:pin`, lock reader, module scanner and module manifest writer |
-| `tf/private/cmd/internal/{flags,tfconfig,tofushow}/` | Shared Go packages: repeatable CLI flags; file-set, module-source, provider-address and test-file helpers; and `tofu show -json -module` inspection (with `tofushow/tofutest` for Go tests) |
-| `toolchain/` | OpenTofu binary download and toolchain registration |
-| `tofu/` | `@rules_tofu//tofu`, the toolchain's runnable `tofu` (rule in `tf/private/tofu_binary.bzl`) |
-| `docs/` | `starlark_doc_extract` target per public `.bzl` file, shipped as the BCR `docs_url` archive |
-| `tools/` | Maintainer tools (excluded from releases): `update_versions` pins OpenTofu releases; `format` formats the repository; `lint` lints every Starlark file |
-| `tests/integration/` | Bazel-in-Bazel integration tests ([`tests/integration/README.md`](tests/integration/README.md)) |
-| `tests/tofu/` | Tests for `//tofu` used as another target's tool |
-| `examples/` | Usage examples |
-| `e2e/smoke/` | Standalone consumer module; BCR presubmit test module |
-| `.bcr/` | Bazel Central Registry metadata, source and presubmit templates |
+| Path                                                             | Purpose                                                                                                                                                                                     |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tf/`                                                            | Public rules (`tf_library`, `tf_deploy`, `tf_test`)                                                                                                                                         |
+| `tf/providers/`                                                  | `tf_providers` module extension                                                                                                                                                             |
+| `tf/modules/`                                                    | `tf_modules` module extension                                                                                                                                                               |
+| `tf/private/`                                                    | Rule implementations and work-tree materialisation                                                                                                                                          |
+| `tf/private/cmd/{runner,dupcheck,pin,lockjson,modscan,modules}/` | Go binaries: build-time validation and runtime `tofu` wrapper, duplicate-variable check, `@tf_providers//:pin`, lock reader, module scanner and module manifest writer                      |
+| `tf/private/cmd/internal/{flags,tfconfig,tofushow}/`             | Shared Go packages: repeatable CLI flags; file-set, module-source, provider-address and test-file helpers; and `tofu show -json -module` inspection (with `tofushow/tofutest` for Go tests) |
+| `toolchain/`                                                     | OpenTofu binary download and toolchain registration                                                                                                                                         |
+| `tofu/`                                                          | `@rules_tofu//tofu`, the toolchain's runnable `tofu` (rule in `tf/private/tofu_binary.bzl`)                                                                                                 |
+| `docs/`                                                          | `starlark_doc_extract` target per public `.bzl` file, shipped as the BCR `docs_url` archive                                                                                                 |
+| `tools/`                                                         | Maintainer tools (excluded from releases): `update_versions` pins OpenTofu releases; `format` formats the repository; `lint` lints every Starlark file                                      |
+| `tests/integration/`                                             | Bazel-in-Bazel integration tests ([`tests/integration/README.md`](tests/integration/README.md))                                                                                             |
+| `tests/tofu/`                                                    | Tests for `//tofu` used as another target's tool                                                                                                                                            |
+| `examples/`                                                      | Usage examples                                                                                                                                                                              |
+| `e2e/smoke/`                                                     | Standalone consumer module; BCR presubmit test module                                                                                                                                       |
+| `.bcr/`                                                          | Bazel Central Registry metadata, source and presubmit templates                                                                                                                             |
 
 ## Hard invariants
 
@@ -127,12 +127,34 @@ bazel run //tofu -- fmt -recursive examples e2e/smoke
 bazel mod tidy
 ```
 
-`//tools:format` uses `rules_lint` to format git-tracked Go, Starlark, `.tf`
-and `.tfvars` files, including `tests/integration` and nested workspaces. Set
-`rules-lint-ignored` in `.gitattributes` to exclude a file. `rules_lint` 2.9.1
-skips `.tofu`, `.tftest.hcl` and `.tofutest.hcl` files, so the `tofu fmt` step
-is their only check. It names `examples` and `e2e/smoke` to skip
-`tests/integration`, where negative-case fixtures may be malformed on purpose.
+`//tools:format`, `//tools:format.check` and `//tools:lint` come from the
+[`bazel_style`](https://github.com/benbirt/bazel-style) dev dependency
+(`style()` in [`tools/BUILD.bazel`](tools/BUILD.bazel)). `//tools:format`
+formats git-tracked files across the repository, including `tests/integration`
+and nested workspaces:
+
+- Go: `gofmt`, from the host Go SDK
+- JSON and Markdown: Prettier at line width 120; Markdown paragraphs are
+  never rewrapped
+- Shell: `shfmt`, two-space indentation, indented `case` branches
+- Starlark: `buildifier`
+- YAML: `yamlfmt`, keeping single blank lines
+- HTML: `djlint`
+- Python: `ruff`
+- `.tf` and `.tfvars`: `tofu fmt` via this repository's `//tofu`, overriding
+  `bazel_style`'s default `terraform fmt` in `tools/BUILD.bazel`
+
+The other formatters and their settings live in `bazel_style`, shared across
+Ben's repositories; `//tofu` is passed as a `style()` override and runs with
+`rules_lint`'s flags. This repository has no formatter configuration files
+(`.editorconfig`, `.prettierrc.json` or `.yamlfmt`), and adding them here has
+no effect. Edit `bazel_style` to change a setting.
+
+Set `rules-lint-ignored` in [`.gitattributes`](.gitattributes) to exclude a file
+from `//tools:format`. `rules_lint` 2.9.1 inside `bazel_style` skips `.tofu`,
+`.tftest.hcl` and `.tofutest.hcl` files, so the `tofu fmt` step is their only
+check. It names `examples` and `e2e/smoke` to skip `tests/integration`, where
+negative-case fixtures may be malformed on purpose.
 
 `//tools:lint` checks every Starlark file under the workspace, including nested
 workspaces and untracked files, and fails on any formatting diff or buildifier

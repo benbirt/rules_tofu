@@ -400,13 +400,13 @@ Then `bazel shutdown` so the new startup flags take effect.
       `_MODSCAN` explicitly so a rebuilt `modscan` from changed Go sources or
       another host Go SDK re-scans modules even when `extensions.bzl` and
       attributes are unchanged.
-    Keep `modules` (label to `source`), `subdir` and `subdirs` off
-    `_tf_module_files`. Attributes are part of Bazel's rule key and Bazel 9's
-    contents-cache key, so putting them on `_tf_module_files` would re-fetch a
-    module when its `subdirs` changed or when another module was declared,
-    removed or changed `source`. Regenerating `_tf_module_repo` re-scans local
-    files without re-fetching module files (fetching a module downloads only
-    the host's `tofu` binary if the build has not already fetched it).
+      Keep `modules` (label to `source`), `subdir` and `subdirs` off
+      `_tf_module_files`. Attributes are part of Bazel's rule key and Bazel 9's
+      contents-cache key, so putting them on `_tf_module_files` would re-fetch a
+      module when its `subdirs` changed or when another module was declared,
+      removed or changed `source`. Regenerating `_tf_module_repo` re-scans local
+      files without re-fetching module files (fetching a module downloads only
+      the host's `tofu` binary if the build has not already fetched it).
   - Obtain `tofu` for `modscan` in `_host_tofu` via `TOFU_BINARIES` loaded from
     `@tofu_toolchains//:binaries.bzl` and
     `host_platform_key(repository_ctx.os.name, repository_ctx.os.arch)`
@@ -978,11 +978,12 @@ Then `bazel shutdown` so the new startup flags take effect.
   whenever nested packages change; don't edit those lines by hand.
 - Run formatters through `//tools:format` and `//tools:format.check`, and
   buildifier lint through `//tools:lint` (`CONTRIBUTING.md`, "Formatting and
-  lint"), never `bazel run @buildifier_prebuilt//:buildifier -- -r .`:
-  `bazel run` starts the bare binary in its runfiles directory rather than the
-  workspace, so `.` holds no source files and checks nothing (issue #169).
-  Suppress deliberate warnings inline with `# buildifier: disable=<warning>`
-  and a reason; buildifier reads no ignore file.
+  lint"). Suppress deliberate warnings inline with
+  `# buildifier: disable=<warning>` and a reason; buildifier reads no ignore
+  file.
+- Formatter settings live in `bazel_style` (`CONTRIBUTING.md`, "Formatting and
+  lint"). Do not add formatter configuration files (`.editorconfig`,
+  `.prettierrc.json`, `.yamlfmt`) here; they do not change the settings.
 
 ## Branch / PR conventions
 

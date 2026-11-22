@@ -22,7 +22,7 @@ PREFIX="rules_tofu-${TAG:1}"
 ARCHIVE="rules_tofu-$TAG.tar.gz"
 
 git archive --format=tar --prefix="${PREFIX}/" "${TAG}" \
-    -- . ':(exclude)examples' ':(exclude)tests' ':(exclude)tools' ':(exclude)toolchain/tests' ':(exclude)tf/providers/tests' ':(exclude)tf/modules/tests' ':(exclude)docs' | gzip > "$ARCHIVE"
+  -- . ':(exclude)examples' ':(exclude)tests' ':(exclude)tools' ':(exclude)toolchain/tests' ':(exclude)tf/providers/tests' ':(exclude)tf/modules/tests' ':(exclude)docs' | gzip >"$ARCHIVE"
 
 # API docs for registry.bazel.build, which renders every .binaryproto in the
 # archive named by `docs_url` in .bcr/source.template.json (see
@@ -33,9 +33,9 @@ DOCS_ARCHIVE="${ARCHIVE%.tar.gz}.docs.tar.gz"
 bazel build //docs:all
 bazel_bin="$(bazel info bazel-bin)"
 (cd "$bazel_bin" && find docs -name '*.binaryproto' -print0 | sort -z |
-    tar --create --gzip --null --files-from=- --file=-) > "$DOCS_ARCHIVE"
+  tar --create --gzip --null --files-from=- --file=-) >"$DOCS_ARCHIVE"
 
-cat << EOF
+cat <<EOF
 ## Using Bzlmod
 
 Add to your \`MODULE.bazel\`:
