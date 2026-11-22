@@ -978,11 +978,12 @@ Then `bazel shutdown` so the new startup flags take effect.
   whenever nested packages change; don't edit those lines by hand.
 - Run formatters through `//tools:format` and `//tools:format.check`, and
   buildifier lint through `//tools:lint` (`CONTRIBUTING.md`, "Formatting and
-  lint"), never `bazel run @buildifier_prebuilt//:buildifier -- -r .`:
-  `bazel run` starts the bare binary in its runfiles directory rather than the
-  workspace, so `.` holds no source files and checks nothing (issue #169).
-  Suppress deliberate warnings inline with `# buildifier: disable=<warning>`
-  and a reason; buildifier reads no ignore file.
+  lint"). Suppress deliberate warnings inline with
+  `# buildifier: disable=<warning>` and a reason; buildifier reads no ignore
+  file.
+- Formatter settings live in `bazel_style` (`CONTRIBUTING.md`, "Formatting and
+  lint"). Do not add formatter configuration files (`.editorconfig`,
+  `.prettierrc.json`, `.yamlfmt`) here; they do not change the settings.
 
 ## Branch / PR conventions
 

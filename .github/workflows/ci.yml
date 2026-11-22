@@ -180,15 +180,14 @@ jobs:
             - MODULE.bazel.lock
             - toolchain/versions.bzl
 
-      # Runs gofmt, buildifier and //tofu via rules_lint across every
-      # git-tracked Go, Starlark, .tf and .tfvars file, including e2e/smoke
-      # and tests/integration.
+      # Checks every git-tracked file bazel_style formats, including e2e/smoke
+      # and tests/integration, except paths marked rules-lint-ignored.
       - name: Check formatting
         run: bazel run //tools:format.check
 
       # Checks every Starlark file in the workspace, including e2e/smoke and
       # tests/integration; fails on any buildifier warning or formatting diff.
-      - name: Run buildifier (lint warnings)
+      - name: Lint Starlark
         run: bazel run //tools:lint
 
       # rules_lint 2.9.1 passes only .tf and .tfvars files to //tofu, so this

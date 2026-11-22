@@ -1,0 +1,2 @@
+# Skipped by //tools:format: malformed on purpose; Prettier would fail on it.
+tests/integration/broken_workspace/cases/malformed_var_file/bad.tfvars.json rules-lint-ignored
