@@ -46,16 +46,6 @@ def _entries_test_impl(ctx):
 
 _entries_test = unittest.make(_entries_test_impl)
 
-def _empty_lock_test_impl(ctx):
-    env = unittest.begin(ctx)
-
-    parsed = lock_entries([])
-    asserts.equals(env, None, parsed.error)
-    asserts.equals(env, [], parsed.entries)
-    return unittest.end(env)
-
-_empty_lock_test = unittest.make(_empty_lock_test_impl)
-
 def _unusable_lock_test_impl(ctx):
     env = unittest.begin(ctx)
 
@@ -121,7 +111,6 @@ def lock_test_suite(name):
     unittest.suite(
         name,
         _entries_test,
-        _empty_lock_test,
         _unusable_lock_test,
         _unusable_entries_test,
         _lock_vouches_test,

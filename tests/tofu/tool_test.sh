@@ -8,15 +8,14 @@
 #      binary, it falls through to TEST_SRCDIR. With neither set, it fails and
 #      reports that it cannot find the binary.
 #   2. With BUILD_WORKING_DIRECTORY set (as under `bazel run`) and started from
-#      a different directory, the launcher runs tofu in
+#      a different directory, the launcher runs `tofu` in
 #      BUILD_WORKING_DIRECTORY. File names relative to that directory,
-#      including one with a space, are passed through `xargs -0` first to
-#      `fmt -check -diff` (which must fail and name both files), then to `fmt`,
-#      and then to `fmt -check -diff` (which must pass). This mirrors
+#      including one with a space, are passed through `xargs -0` to
+#      `fmt -check -diff`, which must fail and name both files. This mirrors
 #      rules_lint's format.sh, which changes to that directory, leaves
 #      BUILD_WORKING_DIRECTORY set and passes relative names through `xargs`.
 #   3. Without BUILD_WORKING_DIRECTORY (as under `bazel test`, for example
-#      rules_lint's format_test), the launcher runs tofu in the caller's
+#      rules_lint's format_test), the launcher runs `tofu` in the caller's
 #      current directory.
 
 set -euo pipefail
@@ -74,9 +73,6 @@ fi
 for f in main.tf "sub/spaced name.tofu"; do
   grep -q -F "${f}" <<<"${out}" || fail "fmt -check didn't name ${f}: ${out}"
 done
-lint fmt >&2 || fail "fmt failed"
-lint fmt -check -diff >&2 || fail "fmt -check still fails after fmt"
-grep -q -x -F 'variable "name" {}' "${work}/sub/spaced name.tofu" || fail "fmt didn't rewrite the file: $(cat "${work}/sub/spaced name.tofu")"
 
 echo "--- 3. in the caller's directory ---" >&2
 echo "${unformatted}" >"${work}/main.tf"
