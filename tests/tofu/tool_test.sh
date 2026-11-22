@@ -71,8 +71,9 @@ if out="$(lint fmt -check -diff 2>&1)"; then
   fail "fmt -check passed on unformatted files: ${out}"
 fi
 for f in main.tf "sub/spaced name.tofu"; do
-  grep -q -F "${f}" <<<"${out}" || fail "fmt -check didn't name ${f}: ${out}"
+  grep -q -x -F "${f}" <<<"${out}" || fail "fmt -check didn't name ${f}: ${out}"
 done
+grep -q -x -F '+variable "name" {}' <<<"${out}" || fail "fmt -check -diff didn't diff the files: ${out}"
 
 echo "--- 3. in the caller's directory ---" >&2
 echo "${unformatted}" >"${work}/main.tf"

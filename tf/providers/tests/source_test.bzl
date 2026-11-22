@@ -156,6 +156,7 @@ def _check_tag_test_impl(ctx):
     asserts.true(env, check_tag({}, _TEMPLATE).startswith("missing `sha256`"))
     asserts.true(env, "unknown placeholder `{platform}`" in check_tag({"linux_amd64": _SHA}, "https://x/{platform}"))
     asserts.true(env, "unsupported platform `linux_386`" in check_tag({"linux_386": _SHA}, _TEMPLATE))
+    asserts.true(env, "unsupported platforms `linux_386`, `windows_386` in" in check_tag({"linux_amd64": _SHA, "windows_386": _SHA, "linux_386": _SHA}, _TEMPLATE))
     asserts.true(env, "`sha256[\"linux_amd64\"]` must be" in check_tag({"linux_amd64": "sha256:" + _SHA}, _TEMPLATE))
     return unittest.end(env)
 
