@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Driver for the negative //tests/integration:*_test targets (and
-# custom_toolchain_test). The bazel_integration_test rule sets BIT_BAZEL_BINARY
-# and BIT_WORKSPACE_DIR; the test's env sets:
+# Driver for the //tests/integration:<workspace>_test targets
+# (broken_workspace_test, custom_toolchain_test, lock_dependency_test). The
+# bazel_integration_test rule sets BIT_BAZEL_BINARY and BIT_WORKSPACE_DIR; the
+# test's env sets:
 #   CASES      - one case per line, name|command|target|fragment: the nested
 #                Bazel command (build or run), the target inside the
 #                sub-workspace, and a substring expected in its stderr

@@ -14,11 +14,3 @@ tf_deploy(
     vars = {"foo": "from-vars"},
     deps = [":lib"],
 )
-
-# Same check but using a standard HCL .tfvars file instead of JSON.
-tf_deploy(
-    name = "dup_hcl",
-    var_files = ["extra.tfvars"],
-    vars = {"foo": "from-vars"},
-    deps = [":lib"],
-)

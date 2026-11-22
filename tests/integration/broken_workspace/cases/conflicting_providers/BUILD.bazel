@@ -1,7 +1,7 @@
 load("@rules_tofu//tf:defs.bzl", "tf_library")
 
-# Instantiates `tf_provider` directly for cases `tf_providers` never declares:
-# one provider at two versions, or two execution platforms on one target.
+# Instantiates `tf_provider` directly to put two execution platforms on one
+# target without a real cross-platform build.
 # buildifier: disable=bzl-visibility
 load("@rules_tofu//tf/private:provider.bzl", "tf_provider")
 
@@ -9,8 +9,6 @@ load("@rules_tofu//tf/private:provider.bzl", "tf_provider")
 # generated in provider download repositories. File contents are unused because
 # analysis fails before any action runs.
 
-# Two tf_provider targets with the same address at different versions must
-# fail the aggregate provider check when :lib depends on both.
 tf_provider(
     name = "prov1",
     address = "registry.opentofu.org/hashicorp/aws",
@@ -19,46 +17,9 @@ tf_provider(
     version = "5.70.0",
 )
 
-tf_provider(
-    name = "prov2",
-    address = "registry.opentofu.org/hashicorp/aws",
-    files = ["package/terraform-provider-aws"],
-    platform = "linux_amd64",
-    version = "5.80.0",
-)
-
-tf_library(
-    name = "lib",
-    srcs = ["main.tf"],
-    providers = [
-        ":prov1",
-        ":prov2",
-    ],
-)
-
-# Same provider and version for two execution platforms, as happens when a
-# target and one of its deps resolve different execution platforms. One plugin
-# tree serves a single `tofu` binary, so :platforms fails naming both.
-tf_provider(
-    name = "prov1_arm64",
-    address = "registry.opentofu.org/hashicorp/aws",
-    files = ["package/terraform-provider-aws"],
-    platform = "linux_arm64",
-    version = "5.70.0",
-)
-
-tf_library(
-    name = "platforms",
-    srcs = ["main.tf"],
-    providers = [
-        ":prov1",
-        ":prov1_arm64",
-    ],
-)
-
-# Distinct provider addresses for two execution platforms also fail, naming
-# both addresses: the platform check spans the whole plugin tree, not each
-# address separately.
+# Distinct provider addresses for two execution platforms fail naming both
+# addresses: one plugin tree serves a single `tofu` binary, so the platform
+# check spans the whole plugin tree rather than each address separately.
 tf_provider(
     name = "random_arm64",
     address = "registry.opentofu.org/hashicorp/random",

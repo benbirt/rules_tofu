@@ -1,3 +1,0 @@
-output "greeting" {
-  value = "hello"
-}

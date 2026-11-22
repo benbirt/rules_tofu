@@ -11,10 +11,6 @@ e2e/smoke/bazel-bin
 e2e/smoke/bazel-out
 e2e/smoke/bazel-smoke
 e2e/smoke/bazel-testlogs
-tests/integration/broken_module/bazel-bin
-tests/integration/broken_module/bazel-out
-tests/integration/broken_module/bazel-broken_module
-tests/integration/broken_module/bazel-testlogs
 tests/integration/broken_workspace/bazel-bin
 tests/integration/broken_workspace/bazel-out
 tests/integration/broken_workspace/bazel-broken_workspace

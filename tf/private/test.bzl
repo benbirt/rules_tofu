@@ -7,8 +7,7 @@ load(
     ":work_tree.bzl",
     "MODULES_BIN",
     "TEST_SRC_EXTS",
-    _check_no_auto_tfvars = "check_no_auto_tfvars",
-    _check_no_config_in_data = "check_no_config_in_data",
+    _check_srcs_and_data = "check_srcs_and_data",
     _files_entries = "files_entries",
     _materialize = "materialize",
     _materialize_plugin_tree = "materialize_plugin_tree",
@@ -102,8 +101,7 @@ def _tf_test_impl(ctx):
     # Assemble the work tree from the module under test, including a deploy's
     # var_files, together with the test files, their data and var_files, and
     # the helper libraries' files.
-    _check_no_auto_tfvars(ctx, ctx.files.data)
-    _check_no_config_in_data(ctx, ctx.files.data, srcs_take_configuration = False)
+    _check_srcs_and_data(ctx, srcs_are_tests = True)
     direct = _files_entries(ctx.files.srcs + ctx.files.data + ctx.files.var_files)
     files = depset(
         direct = direct,

@@ -60,7 +60,6 @@ def _duplicate_root_tags_fail_test_impl(ctx):
     asserts.equals(env, None, resolved.version)
     asserts.true(
         env,
-        # The fragment //tests/integration asserts on in the nested build.
         "declares tofu.version more than once" in resolved.error,
         "expected the duplicate-root-tag wording, got: {}".format(resolved.error),
     )

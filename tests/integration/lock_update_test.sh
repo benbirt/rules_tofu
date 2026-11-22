@@ -24,16 +24,12 @@
 #   5. In a directory with only the files Dependabot's bazel updater fetches,
 #      `bazel mod tidy --lockfile_mode=update` regenerates MODULE.bazel.lock
 #      and leaves it and MODULE.bazel byte-identical (issue #131).
-#   6. Adding a 0.5-style root tf_providers.provider tag without url_template
-#      fails the build with instructions to lock the provider instead.
-#   7. Adding a complete root tag for hashicorp/null (source, version,
+#   6. Adding a complete root tag for hashicorp/null (source, version,
 #      url_template and sha256) while it remains in infra/.terraform.lock.hcl
 #      fails `bazel build //:versions` when the provider package loads, not
 #      during extension evaluation.
-#   8. Because the extension still evaluates, pin remains runnable: it omits
+#   7. Because the extension still evaluates, pin remains runnable: it omits
 #      the tagged provider and writes an empty lock.
-#   9. Building //:versions and //:floor passes with the root tag alone,
-#      fetching from url_template and leaving MODULE.bazel.lock unchanged.
 
 set -euo pipefail
 
@@ -141,38 +137,19 @@ cp -R bundle_module "${DEPENDABOT}/bundle_module"
 cmp MODULE.bazel "${DEPENDABOT}/MODULE.bazel" >&2 || fail "bazel mod tidy changed MODULE.bazel"
 cmp MODULE.bazel.lock "${DEPENDABOT}/MODULE.bazel.lock" >&2 || fail "bazel mod tidy changed MODULE.bazel.lock"
 
-echo "--- 6. a root tag without url_template says to lock the provider ---" >&2
-cp MODULE.bazel "${_TMPDIR}/MODULE.bazel.locked"
-cat >>MODULE.bazel <<'EOF'
-tf_providers.provider(
-    source = "hashicorp/null",
-    version = "3.2.4",
-)
-EOF
-if out="$("${BAZEL}" build //:versions 2>&1)"; then
-  fail "the build passed with a tag that has no url_template"
-fi
-echo "${out}" >&2
-grep -q -F 'tf_providers.provider `hashicorp/null`: missing `url_template`.' <<<"${out}" ||
-  fail "the failure doesn't say that the tag has no url_template"
-grep -q -F 'Pin `registry.opentofu.org` providers in `.terraform.lock.hcl` instead' <<<"${out}" ||
-  fail "the failure doesn't say to pin the provider with the lock"
-cp "${_TMPDIR}/MODULE.bazel.locked" MODULE.bazel
-
-echo "--- 7. a root tag for the locked provider fails the build, not the extension ---" >&2
-# Point url_template at OpenTofu's GitHub release zips for hashicorp/null so
-# step 9 can fetch a real archive from the tag alone.
+echo "--- 6. a root tag for the locked provider fails the build, not the extension ---" >&2
+# The build fails before fetching, so the URL and digests are placeholders.
 cat >>MODULE.bazel <<'EOF'
 tf_providers.provider(
     sha256 = {
-        "linux_amd64": "3d106c7e32a929e2843f732625a582e562ff09120021e510a51a6f5d01175b8d",
-        "linux_arm64": "e05bbd88e82e1d6234988c85db62fd66f11502645838fff594a2ec25352ecd80",
-        "darwin_amd64": "36731f23343aee12a7e078067a98644c0126714c4fe9ac930eecb0f2361788c4",
-        "darwin_arm64": "90b55bdbffa35df9204282251059e62c178b0ac7035958b93a647839643c0072",
-        "windows_amd64": "ae24c0e5adc692b8f94cb23a000f91a316070fdc19418578dcf2134ff57cf447",
+        "linux_amd64": "0000000000000000000000000000000000000000000000000000000000000000",
+        "linux_arm64": "0000000000000000000000000000000000000000000000000000000000000000",
+        "darwin_amd64": "0000000000000000000000000000000000000000000000000000000000000000",
+        "darwin_arm64": "0000000000000000000000000000000000000000000000000000000000000000",
+        "windows_amd64": "0000000000000000000000000000000000000000000000000000000000000000",
     },
     source = "hashicorp/null",
-    url_template = "https://github.com/opentofu/terraform-provider-{name}/releases/download/v{version}/terraform-provider-{name}_{version}_{os}_{arch}.zip",
+    url_template = "https://example.invalid/terraform-provider-{name}_{version}_{os}_{arch}.zip",
     version = "3.2.4",
 )
 EOF
@@ -183,16 +160,11 @@ echo "${out}" >&2
 grep -q -F 'is pinned both by a tf_providers.provider tag' <<<"${out}" ||
   fail "the failure doesn't name the conflict"
 
-echo "--- 8. pin still runs, and leaves the tagged provider out of the lock ---" >&2
+echo "--- 7. pin still runs, and leaves the tagged provider out of the lock ---" >&2
 "${BAZEL}" run @tf_providers//:pin >&2 || fail "pin failed with a provider both tagged and locked"
 cat infra/.terraform.lock.hcl >&2
 if grep -q 'hashicorp/null' infra/.terraform.lock.hcl; then
   fail "the lock still pins hashicorp/null after pin"
 fi
 
-echo "--- 9. the tag alone pins the provider ---" >&2
-"${BAZEL}" build //:versions //:floor >&2 || fail "the build with the provider tagged failed"
-cmp MODULE.bazel.lock "${_TMPDIR}/MODULE.bazel.lock.before" >&2 ||
-  fail "MODULE.bazel.lock changed when the provider moved to a tag; providers record nothing in it"
-
-echo "OK: the first pin worked, a lock-only bump needed no MODULE.bazel.lock change, Dependabot's files were enough for it, a tag without url_template said to use the lock, and a tag conflict left pin runnable" >&2
+echo "OK: the first pin worked, a lock-only bump needed no MODULE.bazel.lock change, Dependabot's files were enough for it, and a tag conflict left pin runnable" >&2

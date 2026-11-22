@@ -33,7 +33,22 @@ TEST_SRC_EXTS = [".tftest.hcl", ".tofutest.hcl", ".tftest.json", ".tofutest.json
 # What tofu reads as a module's configuration (tfconfig.IsConfigFile).
 _CONFIG_EXTS = (".tf", ".tf.json", ".tofu", ".tofu.json")
 
-def check_no_test_files(ctx, files):
+def check_srcs_and_data(ctx, srcs_are_tests = False):
+    """Fail if the rule's `srcs` or `data` hold files of the wrong kind.
+
+    `tf_library`, `tf_deploy` and `tf_test` each call this once so the `data`
+    checks apply uniformly and non-test rules reject test files in `srcs`.
+
+    Args:
+      ctx: rule ctx with `srcs` and `data` attributes.
+      srcs_are_tests: True for a `tf_test`, whose `srcs` are test files.
+    """
+    if not srcs_are_tests:
+        _check_no_test_files(ctx, ctx.files.srcs)
+    _check_no_auto_tfvars(ctx, ctx.files.data)
+    _check_no_config_in_data(ctx, ctx.files.data, srcs_take_configuration = not srcs_are_tests)
+
+def _check_no_test_files(ctx, files):
     """Fail if any of `files`, a library's or deploy's srcs, is a test file.
 
     Args:
@@ -56,7 +71,7 @@ def _loaded_by_itself(basename):
         basename.endswith(".auto.tfvars.json")
     )
 
-def check_no_auto_tfvars(ctx, files):
+def _check_no_auto_tfvars(ctx, files):
     """Fail if any of `files`, a rule's data, is a variables file `tofu` loads by itself.
 
     OpenTofu automatically reads `terraform.tfvars[.json]` and
@@ -82,7 +97,7 @@ def check_no_auto_tfvars(ctx, files):
                 f.short_path,
             ))
 
-def check_no_config_in_data(ctx, files, srcs_take_configuration = True):
+def _check_no_config_in_data(ctx, files, srcs_take_configuration = True):
     """Fail if any of `files`, a rule's data, is a configuration file.
 
     `data` holds what `file()` and `templatefile()` read. A configuration
@@ -273,11 +288,12 @@ def materialize_plugin_tree(ctx, providers_depset):
     file from the unpacked zip so the directory matches the lock's `h1:` hash
     and `tofu init` locates the binary.
 
-    Each `TfProviderInfo` carries one platform's package, selected for the
-    execution platform of the target listing it, while one plugin tree serves
-    a single `tofu` binary. Fails if any two entries disagree on `platform`,
-    even for different addresses, or if two entries for the same `address`
-    disagree on `version`.
+    Through public rules only `@tf_providers` creates `TfProviderInfo`, one
+    target per address, so duplicate addresses are deduplicated without
+    checking `version`. Each `TfProviderInfo` carries one platform's package,
+    selected for the execution platform of the target listing it, while one
+    plugin tree serves a single `tofu` binary. Fails if any two entries
+    disagree on `platform`, even for different addresses.
 
     Args:
       ctx: rule ctx.
@@ -309,21 +325,9 @@ def materialize_plugin_tree(ctx, providers_depset):
                     addr_b = prov.address,
                 ),
             )
-        prior = seen.get(prov.address)
-        if prior != None:
-            if prior.version != prov.version:
-                fail(
-                    ("`{label}` has conflicting versions for provider `{addr}`: `{a}` and `{b}`. " +
-                     "Use one provider target across `providers` and dependencies, or make them " +
-                     "supply the same version.").format(
-                        label = ctx.label,
-                        addr = prov.address,
-                        a = prior.version,
-                        b = prov.version,
-                    ),
-                )
+        if prov.address in seen:
             continue
-        seen[prov.address] = prov
+        seen[prov.address] = True
 
         parts = prov.address.split("/")
         if len(parts) != 3:

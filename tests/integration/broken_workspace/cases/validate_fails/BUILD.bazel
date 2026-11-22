@@ -1,15 +1,8 @@
-load("@rules_tofu//tf:defs.bzl", "tf_deploy", "tf_library")
+load("@rules_tofu//tf:defs.bzl", "tf_deploy")
 
-# main.tf references `var.does_not_exist`, which `tofu validate` rejects
-# with "Reference to undeclared input variable". The build-time
-# validate action inside tf_library propagates that failure.
-tf_library(
-    name = "bad",
-    srcs = ["main.tf"],
-)
-
-# Same broken root module on a deploy: building or running a launcher fails in
-# bad_deploy's validation and never starts the runner (issue #143).
+# main.tf references `var.does_not_exist`, which `tofu validate` rejects.
+# A launcher's default outputs include its deploy's stamps, so building
+# :bad_deploy.plan fails in bad_deploy's validation (issue #143).
 tf_deploy(
     name = "bad_deploy",
     srcs = ["main.tf"],

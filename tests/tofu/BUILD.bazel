@@ -2,7 +2,7 @@
 
 `bazel run @rules_tofu//tofu` needs a nested Bazel and is covered by
 `//tests/integration:module_dependency_*_test` and
-`//tests/integration:custom_toolchain_run_test`.
+`//tests/integration:custom_toolchain_test`.
 """
 
 load("@rules_shell//shell:sh_test.bzl", "sh_test")

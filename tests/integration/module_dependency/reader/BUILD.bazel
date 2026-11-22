@@ -20,7 +20,7 @@ tf_library(
 
 # Checks provider reporting via `tofu show -json -module` (issue #153):
 # canonical addresses, resource- and data-source-implied providers, aliased
-# provider blocks reported once, and built-in terraform skipped. Step 9 of
+# provider blocks reported once, and built-in terraform skipped. Step 8 of
 # module_dependency_test.sh builds :providers and checks the strict-deps error.
 # Keep `manual` (so `bazel build //...` in step 1 skips it) and omit
 # `providers`.

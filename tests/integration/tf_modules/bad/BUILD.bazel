@@ -1,9 +1,0 @@
-load("@rules_tofu//tf:defs.bzl", "tf_library")
-
-# tf_modules_test.sh declares `caller`, which calls a module MODULE.bazel
-# doesn't declare, so fetching it fails.
-tf_library(
-    name = "bad",
-    srcs = ["main.tf"],
-    deps = ["@tf_modules//caller"],
-)
