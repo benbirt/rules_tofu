@@ -1,21 +1,15 @@
-load("@rules_tofu//tf:defs.bzl", "tf_deploy", "tf_library", "tf_test")
+load("@rules_tofu//tf:defs.bzl", "tf_deploy", "tf_library")
 
 # OpenTofu loads `terraform.tfvars[.json]` and `*.auto.tfvars[.json]` from a
 # root module's directory by itself, so one that arrived as `data` would set
-# variables where nothing checks it against `vars` and `var_files`. Every
-# rule refuses them in `data`, by name, in any directory. One target per
-# rule and name, so each fails for its own file.
+# variables where nothing checks it against `vars` and `var_files`. All three
+# rules call `check_srcs_and_data`, which refuses them in `data`, by name, in
+# any directory.
 
 tf_library(
     name = "library_tfvars",
     srcs = ["main.tf"],
     data = ["terraform.tfvars"],
-)
-
-tf_library(
-    name = "library_auto_tfvars",
-    srcs = ["main.tf"],
-    data = ["extra.auto.tfvars"],
 )
 
 # In a subdirectory, which would be a root module's only if something made
@@ -24,16 +18,4 @@ tf_deploy(
     name = "deploy_auto_tfvars_json",
     srcs = ["main.tf"],
     data = ["env/prod.auto.tfvars.json"],
-)
-
-tf_library(
-    name = "lib",
-    srcs = ["main.tf"],
-)
-
-tf_test(
-    name = "test_tfvars_json",
-    srcs = ["main.tftest.hcl"],
-    data = ["terraform.tfvars.json"],
-    module = ":lib",
 )

@@ -5,15 +5,8 @@ load("@rules_tofu//tf:defs.bzl", "tf_deploy", "tf_library", "tf_test")
 # the dependency's TofuValidate or TofuModules action without checking this
 # target.
 
-# Calls ./dep, which fails validation.
-tf_library(
-    name = "dependant",
-    srcs = ["main.tf"],
-    deps = ["//cases/dependency_invalid/dep"],
-)
-
-# Same call from a deploy; bazel run on :deploy.plan fails in the build before
-# starting the runner.
+# Calls ./dep, which fails validation; bazel run on :deploy.plan fails in the
+# build before starting the runner.
 tf_deploy(
     name = "deploy",
     srcs = ["main.tf"],

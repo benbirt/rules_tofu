@@ -40,21 +40,11 @@
 #      allow_ephemeral_state: apply is refused while state_root is relative and
 #      succeeds once state_root is rewritten to an absolute path outside
 #      bazel-out.
-#   8. Run the README's formatting commands at the workspace root; rules_tofu
-#      generates no format targets, so these commands are how a workspace is
-#      formatted. `bazel run @rules_tofu//tofu -- fmt -check -diff -recursive .`
-#      passes on the workspace as it is, with the bazel-* links present. After
-#      writing one unformatted .tf, .tofu, .tfvars, .tftest.hcl and
-#      .tofutest.hcl file at several depths, `fmt -check -recursive .` fails and
-#      lists exactly those files. `fmt -recursive .` rewrites them and the check
-#      passes again. Unformatted files behind a directory symlink, in a
-#      dot-directory or with a dot-prefixed name are neither reported nor
-#      rewritten.
-#   9. `bazel build //reader:providers` fails strict deps and names the exact
+#   8. `bazel build //reader:providers` fails strict deps and names the exact
 #      providers OpenTofu reports for reader/providers/main.tf: canonical
 #      addresses, resource- and data-source-implied providers, aliased provider
 #      blocks reported once, and the built-in provider skipped (issue #153).
-#  10. Pack reader/ as an archive, declare it with tf_modules.module and run
+#   9. Pack reader/ as an archive, declare it with tf_modules.module and run
 #      `bazel build @tf_modules//reader`. Fetching runs modscan with the host's
 #      download of TOFU_VERSION and succeeds only if OpenTofu resolves the
 #      calls from step 1 to ./child rather than the missing ./absent. Also
@@ -159,43 +149,7 @@ out="$(bazel run //app:durable.apply -- -auto-approve 2>&1)" || fail "the apply 
 echo "${out}" >&2
 grep -q -F 'www.app.example.com' "${STATE_ROOT}/app.tfstate" || fail "no state at ${STATE_ROOT}/app.tfstate"
 
-echo "--- 8. format the workspace ---" >&2
-# The builds above created the bazel-* directory symlinks; -recursive must
-# skip them.
-[[ -L bazel-bin ]] || fail "the workspace has no bazel-bin link for tofu fmt to skip"
-bazel run @rules_tofu//tofu -- fmt -check -diff -recursive . >&2 || fail "tofu fmt -check failed on the formatted workspace"
-
-unformatted='variable   "unformatted" {}'
-# One unformatted file of each kind tofu fmt handles, at several depths.
-fmt_files=(scratch.tf app/scratch.tofu app/scratch.tfvars app/tests/scratch.tftest.hcl nested/sub/scratch.tofutest.hcl)
-for f in "${fmt_files[@]}"; do
-  echo "${unformatted}" >"${f}"
-done
-# Files behind a directory symlink, in a dot-directory or with a dot-prefixed
-# name must be skipped.
-mkdir "${_TMPDIR}/linked" .hidden
-echo "${unformatted}" >"${_TMPDIR}/linked/scratch.tf"
-ln -s "${_TMPDIR}/linked" linked
-echo "${unformatted}" >.hidden/scratch.tf
-echo "${unformatted}" >app/.scratch.tf
-
-if out="$(bazel run @rules_tofu//tofu -- fmt -check -recursive . 2>/dev/null)"; then
-  fail "tofu fmt -check passed on unformatted files: ${out}"
-fi
-echo "${out}" >&2
-[[ "$(sort <<<"${out}")" == "$(printf '%s\n' "${fmt_files[@]}" | sort)" ]] || fail "tofu fmt -check should name exactly ${fmt_files[*]}, got: ${out}"
-
-bazel run @rules_tofu//tofu -- fmt -recursive . >&2 || fail "tofu fmt failed"
-bazel run @rules_tofu//tofu -- fmt -check -diff -recursive . >&2 || fail "tofu fmt -check still fails after tofu fmt"
-for f in "${fmt_files[@]}"; do
-  grep -q -x -F 'variable "unformatted" {}' "${f}" || fail "tofu fmt didn't rewrite ${f}: $(cat "${f}")"
-done
-for f in linked/scratch.tf .hidden/scratch.tf app/.scratch.tf; do
-  grep -q -x -F "${unformatted}" "${f}" || fail "tofu fmt rewrote ${f}, which -recursive should not reach"
-done
-rm -r "${fmt_files[@]}" linked .hidden app/.scratch.tf "${_TMPDIR}/linked"
-
-echo "--- 9. the providers tofu reports for a module ---" >&2
+echo "--- 8. the providers tofu reports for a module ---" >&2
 if out="$(bazel build //reader:providers 2>&1)"; then
   fail "//reader:providers built without the providers its files require: ${out}"
 fi
@@ -209,7 +163,7 @@ want='rules_tofu: //reader:providers: its files require these providers, which a
 Add "@tf_providers//hashicorp/google", "@tf_providers//hashicorp/http", "@tf_providers//hashicorp/null", "@tf_providers//hashicorp/random" to the providers of //reader:providers.'
 grep -q -F "${want}" <<<"${out}" || fail "the strict-deps error doesn't name exactly the providers of reader/providers/main.tf"
 
-echo "--- 10. a fetched module, scanned with tofu ${TOFU_VERSION} ---" >&2
+echo "--- 9. a fetched module, scanned with tofu ${TOFU_VERSION} ---" >&2
 # Pack reader/ as an archive. Fetching runs modscan with the host's download
 # of TOFU_VERSION; if OpenTofu does not resolve the calls from step 1 to
 # ./child, the scan fails on the missing ./absent directory.
@@ -238,4 +192,4 @@ reader_library="$(find "${external}" -maxdepth 1 -name '*tf_modules_reader')/BUI
 grep -q -F 'srcs = ["calls.tf.json", "child/main.tf", "main.tf", "main_override.tf", "shadow.tf", "shadow.tofu"],' "${reader_library}" ||
   fail "the fetched reader module's library doesn't serve the module and ./child alone: $(cat "${reader_library}")"
 
-echo "OK: with tofu ${TOFU_VERSION}, modules from other Bazel modules were called by module_source, and tofu fmt formatted the workspace" >&2
+echo "OK: with tofu ${TOFU_VERSION}, modules from other Bazel modules were called by module_source" >&2

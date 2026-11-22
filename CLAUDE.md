@@ -122,7 +122,8 @@ Then `bazel shutdown` so the new startup flags take effect.
   `_cached_registry` in `tf_modules`), treating any bad fact as a cache miss to
   re-resolve and never calling `fail()` (issue #96). `MODULE.bazel.lock` is a
   checked-in file that can outlive the code that wrote it or be mis-merged.
-  `valid_fact` rejects a well-formed fact stored under a key of the other kind.
+  `valid_fact` rejects a well-formed fact stored under a key of the other kind
+  (`_checks_test` in `//tf/modules/tests`).
   `_cached_registry` also rejects a registry fact whose `location` fails to
   parse or doesn't match its `commit` or `sha256` pin.
 - End download repository rules (`_tofu_download`, `_tf_provider_download`,
@@ -145,8 +146,8 @@ Then `bazel shutdown` so the new startup flags take effect.
   Bazel enforces `mandatory` on every module's tags, so a dependency's 0.5 tag
   without them would fail to load before the root module could ignore it.
   Validate root tags in `check_tag` instead; a root tag without `url_template`
-  fails with instructions to move the provider to the lock (`lock_update_test`
-  step 6).
+  fails with instructions to move the provider to the lock (`_check_tag_test`
+  in `//tf/providers/tests`).
 - Keep `lock_file` on `tf_providers.from_lock` named `lock_file` and
   `mandatory = True` with no default, and tell users in docs and `tf_pin` to
   write it as a string literal (issue #131; `lock_update_test` step 5).
@@ -292,7 +293,8 @@ Then `bazel shutdown` so the new startup flags take effect.
   every platform in `PLATFORMS` because lock hashes carry no platform names; an
   unpublished platform fails when fetched. A tagged provider declares the keys
   of `sha256`; other platforms fail analysis via `no_match_error`
-  (`missing_platform_error`, `missing_platform`).
+  (`missing_platform_error`, `_missing_platform_test` in
+  `//tf/providers/tests`).
 - Keep those per-platform repositories private: omit them
   from direct deps, keep their files private, and expose `:provider` only to
   the hub. Only `@tf_providers//<ns>/<name>` is public; don't reintroduce
@@ -351,7 +353,7 @@ Then `bazel shutdown` so the new startup flags take effect.
     `//tf/private/cmd/internal/tofushow:tofushow_test` (`TestReadFiles_Facts`,
     `TestReadFiles_LocalNames`, `TestParse`), and per-version coverage in
     `module_dependency_<version>_test` (`//reader`, `//reader:providers` in
-    step 9, and fetched `@tf_modules//reader` in step 10 of
+    step 8, and fetched `@tf_modules//reader` in step 9 of
     `tests/integration/module_dependency_test.sh`).
 - Parse module `source` strings only with `tfconfig.ParseSource` in Go
   (`modscan parse`), matching OpenTofu's `addrs.ParseModuleSource` via
@@ -385,8 +387,8 @@ Then `bazel shutdown` so the new startup flags take effect.
 - In `tf_modules` (`tf/modules/extensions.bzl`; `README.md`, "Modules"):
   - Generate `:_rules_tofu_module` aliased at `@tf_modules//<path>`, and keep
     per-module repositories private.
-  - Keep two repositories per module (issue #157; `tf_modules_test.sh`, steps
-    9 and 10):
+  - Keep two repositories per module (issue #157; `tf_modules_test.sh`, step
+    8):
     - `_tf_module_files` (`files_repo_name`, `tf_module_files_<name>`) fetches
       and tidies `tree/`, writes `metadata.json` and an empty `BUILD.bazel`,
       and takes only `source` and the module's pin.
@@ -442,7 +444,7 @@ Then `bazel shutdown` so the new startup flags take effect.
     served directory OpenTofu cannot load fails the fetch with
     `*tofushow.LoadError`; unserved directories (examples, tests) are not read.
   - Keep `pin` in `metadata.json` even though nothing reads it
-    (`tf_modules_test.sh`, step 10). `_tf_module_repo` has no pin attributes
+    (`tf_modules_test.sh`, step 8). `_tf_module_repo` has no pin attributes
     and Bazel does not track the files `modscan` reads. Without `pin`, a new
     commit or archive that edits only existing files leaves `metadata.json`
     unchanged and the library's `BUILD` files stale.
@@ -473,7 +475,7 @@ Then `bazel shutdown` so the new startup flags take effect.
     configuration and providers (issue #76).
   - List dot-prefixed files with a configuration extension as `data` by name
     (`_dot_files`). tofu ignores them, `glob` cannot tell them from
-    configuration, and `check_no_config_in_data` lets them through.
+    configuration, and `_check_no_config_in_data` lets them through.
   - Keep the `_rules_tofu_` prefix on both target names so they never collide
     with upstream files named `files` or `module` (issue #61).
 - Reach submodules via `//<subdir>` rather than separate hub targets: listing
@@ -506,11 +508,12 @@ Then `bazel shutdown` so the new startup flags take effect.
 - Don't check walked modules' providers in the manifest action, and don't parse
   `tofu`'s error output to suggest a label (issue #144):
   - Every configuration file is in some target's `srcs`
-    (`check_no_config_in_data`, issue #140) and checked in dependency order
-    (issue #143). Strict deps below (issues #135 and #153) checks every
-    provider OpenTofu reports for `srcs`, whether in `required_providers`
-    (`missing_provider`) or implied by a resource, data source or `provider`
-    block (`implied_provider`), naming the directory and
+    (`_check_no_config_in_data` via `check_srcs_and_data`, issue #140) and
+    checked in dependency order (issue #143). Strict deps below (issues #135
+    and #153) checks every provider OpenTofu reports for `srcs`, whether in
+    `required_providers` (`strict_deps_provider`) or implied by a resource,
+    data source or `provider` block (`TestBuildManifest_StrictDeps`,
+    `module_dependency_test.sh` step 8), naming the directory and
     `@tf_providers//<ns>/<name>`.
   - A provider can still be missing at `tofu init` in `TofuValidate`, for
     example in an empty-root `tf_test` whose `run` block loads a module that
@@ -531,8 +534,7 @@ Then `bazel shutdown` so the new startup flags take effect.
     package, whole work-tree directory or HCL source range, and do not inherit
     direct declarations across targets.
   - Require each target's files in a directory to stand alone with no
-    exceptions (issue #153; `strict_deps_override` in
-    `tests/integration/BUILD.bazel`, `TestBuildManifest_StrictDeps`):
+    exceptions (issue #153; `TestBuildManifest_StrictDeps`):
     - An override file (`tfconfig.IsOverride`) must be in the same target as
       the block it overrides (`tfconfig.StandAloneHint`, shared by
       `TofuModules` and `pin`, appends a hint only on `*tofushow.LoadError`
@@ -657,11 +659,11 @@ Then `bazel shutdown` so the new startup flags take effect.
   `tf_deploy` adds only `.plan`, `.apply` and `.destroy`. CI's `lint` job runs
   `//tools:format.check` across tracked `.tf` and `.tfvars` files, plus
   `tofu fmt -check` on `examples` and `e2e/smoke` for the file kinds
-  `rules_lint` skips. `module_dependency_<version>_test` runs the README's
-  formatting commands.
+  `rules_lint` skips.
 - Check targets in dependency order (`README.md`, "How it works";
-  `CONTRIBUTING.md`, invariant 2; issue #143; `dependency_invalid*`,
-  `test_*_invalid` and `launcher_*` cases):
+  `CONTRIBUTING.md`, invariant 2; issue #143; `dependency_invalid_bundle`,
+  `dependency_invalid_manifest`, `test_module_invalid`, `test_helper_invalid`,
+  `launcher_build_invalid` and `launcher_run_dependency_invalid`):
   - Carry check outputs in `TfLibraryInfo.validate_stamp`,
     `TfLibraryInfo.modules_manifest` and `TfDeployInfo.stamps`, and pass direct
     dependencies' outputs to `tf_init_validate` (`required_stamps`) and
@@ -684,7 +686,7 @@ Then `bazel shutdown` so the new startup flags take effect.
     `tf_modules_label` (`display_label`) for `TofuValidate` and `TofuModules`
     progress messages, `--label` and `pin` so failures report
     `@tf_modules//<path>` instead of `:_rules_tofu_module` (`tf_modules_test`
-    step 11).
+    step 9).
 - Keep `tf_deploy`'s `DefaultInfo.files` to its stamps (`TfDeployInfo.stamps`;
   issue #156; `run_directory_test` step 4). Including `work_tree_files` there
   made remote-cached builds download whole provider packages (~170 MB) for
@@ -707,30 +709,33 @@ Then `bazel shutdown` so the new startup flags take effect.
     `moduleDir`, and `modscan` relies on `*fs.PathError` for a missing called
     directory to report git-submodule errors.
 - Reject an empty root in `tf_deploy` at analysis (`check_has_configuration`;
-  `deploy_deps_only`, `deploy_subdirectory_only`), because `tofu` validates an
-  empty directory and then refuses to plan it.
+  `deploy_deps_only`), because `tofu` validates an empty directory and then
+  refuses to plan it.
 - Keep `tfconfig.HasConfig`, `hasConfig` in the runner and
   `check_has_configuration` aligned on what counts as configuration: regular
   non-dot files with the four config extensions. `hasConfig` duplicates
   `tfconfig.HasConfig` so `runner` links no HCL parser.
   `tfconfig.Effective` and `EffectiveTests` drop dotfiles for all callers; in
   `pin`, OpenTofu ignores dot-prefixed files among the staged ones.
-- Reject `TEST_SRC_EXTS` in `tf_library` and `tf_deploy` `srcs`
-  (`check_no_test_files`; `test_file_in_srcs`). `ALLOWED_SRC_EXTS` admits
-  `.hcl`, and `tofu` would otherwise load library test files in dependants.
-  `tf_modules` excludes test files from `data` too (`_TEST_GLOBS`), because
-  validating a fetched module at its root makes `tofu` read tests in its root
-  and `tests/` directories, whose `run` blocks may load excluded examples.
-- Reject configuration files in every rule's `data` (`check_no_config_in_data`;
-  `config_in_data`; issue #140). `data` is not code: only `srcs` are checked
-  against `providers` and `deps`. Don't go back to
-  checking `data` only when a directory is loaded.
-- Reject auto-loaded variable files (`terraform.tfvars[.json]`,
-  `*.auto.tfvars[.json]`) in every rule's `data` (`check_no_auto_tfvars`;
-  `auto_tfvars_in_data`). Any library directory is a root when validated or
-  tested by `tf_test`, where auto-loaded files bypass duplicate-key checks
-  (issue #93). Keep `_EXCLUDED` in `tf_modules`, which strips those files from
-  upstream modules, in step.
+- Route `srcs` and `data` checks through `check_srcs_and_data` in
+  `tf/private/work_tree.bzl` so every rule (`tf_library`, `tf_deploy`,
+  `tf_test`) runs them uniformly:
+  - Reject `TEST_SRC_EXTS` in `tf_library` and `tf_deploy` `srcs`
+    (`_check_no_test_files`; `test_file_in_srcs`). `ALLOWED_SRC_EXTS` admits
+    `.hcl`, and `tofu` would otherwise load library test files in dependants.
+    `tf_modules` excludes test files from `data` too (`_TEST_GLOBS`), because
+    validating a fetched module at its root makes `tofu` read tests in its root
+    and `tests/` directories, whose `run` blocks may load excluded examples.
+  - Reject configuration files in every rule's `data`
+    (`_check_no_config_in_data`; `config_in_data`, `config_in_test_data`; issue
+    #140). `data` is not code: only `srcs` are checked against `providers` and
+    `deps`. Don't go back to checking `data` only when a directory is loaded.
+  - Reject auto-loaded variable files (`terraform.tfvars[.json]`,
+    `*.auto.tfvars[.json]`) in every rule's `data` (`_check_no_auto_tfvars`;
+    `tfvars_in_library_data`, `auto_tfvars_json_in_deploy_data`). Any library
+    directory is a root when validated or tested by `tf_test`, where auto-loaded
+    files bypass duplicate-key checks (issue #93). Keep `_EXCLUDED` in
+    `tf_modules`, which strips those files from upstream modules, in step.
 - Pass `vars` as `-var` and `var_files` as `-var-file` (issue #150;
   `README.md`, "Variables and data files"; `variableArgs`, `var_flags`;
   `run_directory_test` step 5):
@@ -847,7 +852,7 @@ Then `bazel shutdown` so the new startup flags take effect.
   cross-compilation. `TfProviderInfo` carries `platform`, and
   `materialize_plugin_tree` fails if any two providers in a plugin tree have
   different platforms, even at distinct addresses
-  (`conflicting_provider_platforms`, `conflicting_provider_platforms_distinct`):
+  (`conflicting_provider_platforms_distinct`):
   a target and its `deps` resolve execution platforms independently, while one
   plugin tree serves a single `tofu` binary. Don't re-add `platform_key` to
   `opentofu_toolchain` or `TofuInfo` (issue #146).
@@ -867,17 +872,17 @@ Then `bazel shutdown` so the new startup flags take effect.
   - Count state as durable only with a remote backend, a `cloud` block, or a
     `backend "local"` whose `path` and `workspace_dir` are both absolute paths
     outside `--output-root` (`bazel-out`), resolving symlinks and allowing a
-    missing tail (`localBackendEphemeral`). Null or empty local attributes use
-    OpenTofu's relative defaults and are ephemeral, as is having no `backend`
-    or `cloud` block.
+    missing tail (`localBackendEphemeral`, `TestRunner_LocalBackend_Gate`).
+    Null or empty local attributes use OpenTofu's relative defaults and are
+    ephemeral, as is having no `backend` or `cloud` block.
   - Read the backend from the `.terraform/terraform.tfstate` record written by
     `tofu init` in the run directory (`recordedBackend`; issue #149), never by
     parsing configuration in the runner. Missing or empty `backend` metadata
     means no `backend` or `cloud` block; a `cloud` block has type `"cloud"`.
     Reading the record uses OpenTofu's own result after merging `_override`
     files and evaluating variables. Because the format is internal to OpenTofu,
-    `module_dependency_<version>_test` covers it across `tested_versions` (see
-    `-get=false` under "Modules" above).
+    `module_dependency_<version>_test` covers it across `tested_versions`
+    (steps 6 and 7; see `-get=false` under "Modules" above).
   - Run the check in the Go runner (`checkStateDurable`) after `tofu init` and
     before `tofu apply` or `tofu destroy`, refuse when the record cannot be
     parsed, leave `plan` ungated, and don't weaken the refusal to a warning.

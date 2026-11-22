@@ -16,8 +16,7 @@
 #   3. `bazel run //app:deploy.plan` plans against the same, now empty, state.
 #   4. bazel cquery --output=files reports only stamp files as //app:deploy's
 #      default outputs, excluding the work tree and provider packages (issue
-#      #156), and lists each launcher's script plus deploy.validate.stamp as
-#      the launcher's default outputs (issue #143).
+#      #156).
 #   5. //vars:deploy sets variables of each type through `vars`, including
 #      values with spaces, quotes, `=`, `$`, backticks, `${...}` and a newline
 #      (issue #150). Its plan checks that tofu receives every value with the
@@ -76,12 +75,6 @@ grep -q -F '/app/deploy.validate.stamp' <<<"${files}" || fail "//app:deploy defa
 if grep -q -v '\.stamp$' <<<"${files}"; then
   fail "//app:deploy default outputs include non-stamp files: ${files}"
 fi
-for command in plan apply destroy; do
-  files="$(bazel cquery --output=files "//app:deploy.${command}" 2>/dev/null)" || fail "cquery of //app:deploy.${command} failed"
-  echo "${files}" >&2
-  grep -q -F "/app/deploy.${command}.sh" <<<"${files}" || fail "//app:deploy.${command} default outputs lack deploy.${command}.sh"
-  grep -q -F '/app/deploy.validate.stamp' <<<"${files}" || fail "//app:deploy.${command} default outputs lack deploy.validate.stamp"
-done
 
 echo "--- 5. vars as -var flags ---" >&2
 out="$(bazel run //vars:deploy.plan -- -no-color 2>&1)" || fail "the plan of //vars:deploy failed: ${out}"

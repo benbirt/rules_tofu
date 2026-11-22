@@ -1,6 +1,6 @@
 load("@rules_tofu//tf:defs.bzl", "tf_library")
 
-# tf_modules_test.sh (step 11) declares @tf_modules//invalid, which fails
+# tf_modules_test.sh (step 9) declares @tf_modules//invalid, which fails
 # validation before this library is checked.
 tf_library(
     name = "invalid_caller",

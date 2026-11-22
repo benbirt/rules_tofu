@@ -7,9 +7,7 @@ load(
     ":work_tree.bzl",
     "ALLOWED_SRC_EXTS",
     "MODULES_BIN",
-    _check_no_auto_tfvars = "check_no_auto_tfvars",
-    _check_no_config_in_data = "check_no_config_in_data",
-    _check_no_test_files = "check_no_test_files",
+    _check_srcs_and_data = "check_srcs_and_data",
     _files_entries = "files_entries",
     _library_module = "library_module",
     _materialize = "materialize",
@@ -24,9 +22,7 @@ load(
 )
 
 def _tf_library_impl(ctx):
-    _check_no_test_files(ctx, ctx.files.srcs)
-    _check_no_auto_tfvars(ctx, ctx.files.data)
-    _check_no_config_in_data(ctx, ctx.files.data)
+    _check_srcs_and_data(ctx)
     direct = _files_entries(ctx.files.srcs + ctx.files.data)
     transitive = [
         d[TfLibraryInfo].transitive_files

@@ -36,26 +36,7 @@ register_toolchains("@tofu_toolchains//:all")
 tf_providers = use_extension("@rules_tofu//tf/providers:extensions.bzl", "tf_providers")
 
 # Workspace lock: pins hashicorp/null 3.2.4 for stale_lock, and
-# hashicorp/random (~6 MB per platform) so missing_provider fails because the
-# library omits providers = [...] rather than because the provider is unpinned.
+# hashicorp/random (~6 MB per platform) for cases whose dependencies need a
+# pinned provider (strict_deps_provider, empty_root_test_provider).
 tf_providers.from_lock(lock_file = "//lock:.terraform.lock.hcl")
-
-# Per-platform provider repos are private to `@tf_providers` and omitted from
-# direct deps. Import one explicitly so provider_repo_private can assert that
-# its `:provider` target is not visible outside the hub.
-use_repo(tf_providers, "tf_providers_hashicorp_random_linux_amd64")
-
-# Off-registry provider tagged only for windows_amd64, which no test host runs
-# on, so missing_platform fails `select()` in the hub without fetching the repo
-# or checking the placeholder digest.
-tf_providers.provider(
-    sha256 = {
-        "windows_amd64": "0000000000000000000000000000000000000000000000000000000000000000",
-    },
-    source = "acme/windows-only",
-    url_template = "https://example.invalid/terraform-provider-{name}_{version}_{os}_{arch}.zip",
-    version = "1.0.0",
-)
-
-# Every provider, tagged or locked, is named through the hub.
 use_repo(tf_providers, "tf_providers")
