@@ -1,0 +1,28 @@
+name: Bazel updates
+
+# Makes the updates that Dependabot cannot (Bazel, the Bazel modules, Node and
+# commit-pinned modules), each in its own pull request. The logic is in
+# benbirt/workflows; AUTOMATION_TOKEN opens the pull requests so that CI runs.
+
+on:
+  schedule:
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bazel-updates:
+    uses: benbirt/workflows/.github/workflows/bazel-updates.yml@de69053071842637255bbe8c0a6fa5eca77bf4da # v1.1.0
+    with:
+      # The non-dev deps are floors for every downstream module: under
+      # Bazel's minimal version selection, bumping them here would force the
+      # same versions on users. Raise them only when rules_tofu needs to.
+      skip_modules: platforms rules_go gazelle
+      # CI requires the nested workspaces' copies to match the root file.
+      bazelversion_files: .bazelversion e2e/*/.bazelversion tests/integration/*/.bazelversion
+      # A library: the pull requests wait for a person to merge them.
+      auto_merge: false
+    secrets:
+      AUTOMATION_TOKEN: ${{ secrets.AUTOMATION_TOKEN }}
