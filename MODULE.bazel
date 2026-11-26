@@ -125,7 +125,7 @@ bazel_dep(name = "rules_shell", version = "0.6.1", dev_dependency = True)
 bazel_dep(name = "bazel_style", version = "0.0.0", dev_dependency = True)
 git_override(
     module_name = "bazel_style",
-    commit = "f7127ad68627f170db74a38743ef8e742b3a8828",
+    commit = "bc60126ccfc3e45b9ef984771b8a34457aea0dbd",
     remote = "https://github.com/benbirt/bazel-style.git",
 )
 
